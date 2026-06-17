@@ -3,10 +3,12 @@ pub mod storage;
 pub mod commands;
 pub mod network;
 
-use tauri::Manager;
+use tauri::{Manager, Context};
 
-// 移除 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // 手动构建 Context，不依赖 OUT_DIR
+    let context = Context::default();
+    
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
@@ -50,6 +52,6 @@ pub fn run() {
 
             Ok(())
         })
-        .run(tauri::generate_context!())
+        .run(context)
         .expect("error while running tauri application");
 }
