@@ -4,7 +4,7 @@ use crate::network::http::{parse_request_config, execute_request};
 use serde_json::Value;
 use serde::Serialize;
 use tauri::{State, Emitter};
-use crate::commands::AppState;
+use crate::commands::AppState;   // 改为 commands::AppState
 use crate::storage::db;
 
 #[derive(Serialize, Clone)]
