@@ -35,4 +35,4 @@ dirs-next = "2"
 url = "2"
 
 [build-dependencies]
-tauri-build = "2.6.3"   # ← 改为可用版本
+tauri-build = "2.6.3"
