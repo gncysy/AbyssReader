@@ -1,0 +1,154 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  * {
+    @apply box-border;
+  }
+
+  body {
+    @apply bg-parchment text-ink font-body antialiased;
+    font-size: 15px;
+    letter-spacing: 0.01em;
+  }
+
+  .dark body {
+    @apply bg-ink text-parchment;
+  }
+
+  h1, h2, h3, h4 {
+    @apply font-display font-semibold tracking-tight;
+  }
+
+  ::-webkit-scrollbar {
+    @apply w-1.5 h-1.5;
+  }
+
+  ::-webkit-scrollbar-track {
+    @apply bg-transparent;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    @apply bg-parchment-muted rounded-full;
+  }
+
+  .dark ::-webkit-scrollbar-thumb {
+    @apply bg-ink-border;
+  }
+
+  ::-webkit-scrollbar-thumb:hover {
+    @apply bg-amber;
+  }
+}
+
+@layer components {
+  .surface {
+    @apply bg-white border border-ink-border/15 rounded-md;
+  }
+  .dark .surface {
+    @apply bg-ink-surface border-ink-border;
+  }
+
+  .surface-raised {
+    @apply bg-white border border-ink-border/10 shadow-sm rounded-md;
+  }
+  .dark .surface-raised {
+    @apply bg-ink-light border-ink-border shadow-none;
+  }
+
+  .surface-inset {
+    @apply bg-parchment/30 border border-ink-border/10 rounded-md;
+  }
+  .dark .surface-inset {
+    @apply bg-ink border-ink-border/50;
+  }
+
+  .btn-primary {
+    @apply bg-amber/10 text-amber border border-amber px-5 py-2 text-sm font-medium tracking-wide transition-all duration-200;
+    font-family: theme('fontFamily.body');
+    letter-spacing: 0.03em;
+  }
+  .btn-primary:hover {
+    @apply bg-amber text-ink;
+  }
+  .btn-primary:active {
+    @apply scale-[0.97];
+  }
+  .btn-primary:disabled {
+    @apply opacity-40 cursor-not-allowed;
+  }
+
+  .btn-secondary {
+    @apply bg-transparent text-parchment-dim border border-dashed border-parchment-muted px-4 py-2 text-sm font-medium transition-all duration-200;
+    font-family: theme('fontFamily.body');
+    letter-spacing: 0.02em;
+  }
+  .dark .btn-secondary {
+    @apply text-parchment-dim border-ink-border;
+  }
+  .btn-secondary:hover {
+    @apply border-amber text-amber;
+  }
+  .btn-secondary:active {
+    @apply scale-[0.97];
+  }
+  .btn-secondary:disabled {
+    @apply opacity-30 cursor-not-allowed;
+  }
+
+  .btn-danger {
+    @apply bg-transparent text-rust border border-rust/40 px-3 py-1 text-sm transition-all duration-200;
+  }
+  .btn-danger:hover {
+    @apply bg-rust text-parchment;
+  }
+
+  .input-underline {
+    @apply w-full bg-transparent border-0 border-b-2 border-parchment-muted/30 px-2 py-3 text-lg outline-none transition-all duration-300;
+    font-family: theme('fontFamily.body');
+  }
+  .dark .input-underline {
+    @apply border-ink-border text-parchment;
+  }
+  .input-underline::placeholder {
+    @apply text-parchment-muted/50;
+  }
+  .input-underline:focus {
+    @apply border-amber;
+  }
+
+  .select-styled {
+    @apply bg-transparent border border-parchment-muted/30 px-3 py-2 text-sm outline-none transition-colors cursor-pointer;
+    font-family: theme('fontFamily.body');
+    border-radius: 2px;
+  }
+  .dark .select-styled {
+    @apply border-ink-border text-parchment;
+  }
+  .select-styled:focus {
+    @apply border-amber;
+  }
+}
+
+@layer utilities {
+  .drop-cap::first-letter {
+    float: left;
+    font-size: 3.5em;
+    line-height: 0.8;
+    padding-right: 0.15em;
+    padding-top: 0.05em;
+    font-family: theme('fontFamily.display');
+    @apply text-amber;
+  }
+
+  .glow-amber {
+    box-shadow: 0 0 20px rgba(212, 160, 23, 0.12), 0 0 1px rgba(212, 160, 23, 0.3);
+  }
+
+  .underline-amber {
+    text-decoration: none;
+    background-image: linear-gradient(transparent 60%, rgba(212, 160, 23, 0.3) 60%);
+    background-size: 100% 100%;
+  }
+}
