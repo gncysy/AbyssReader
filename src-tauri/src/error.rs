@@ -22,6 +22,9 @@ pub enum AbyssError {
 
     #[error("书籍未找到: {0}")]
     BookNotFound(String),
+
+    #[error("配置错误: {0}")]
+    ConfigError(String),
 }
 
 impl From<reqwest::Error> for AbyssError {
