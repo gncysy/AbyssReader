@@ -1,6 +1,7 @@
 pub mod bookshelf;
 pub mod source;
 pub mod fetch_url;
+pub mod book;          // 新增
 
 use tokio::sync::Mutex;
 use crate::storage::BookSource;
@@ -20,3 +21,4 @@ pub use source::{
     get_explore_categories,
 };
 pub use fetch_url::fetch_url;
+pub use book::{add_local_txt_content, read_local_file};  // 新增
