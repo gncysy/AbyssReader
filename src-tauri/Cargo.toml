@@ -31,7 +31,7 @@ parking_lot = "0.12"
 tauri-plugin-dialog = "2"
 tauri-plugin-fs = "2"
 dirs-next = "2"
-url = "2"          # ← 新增，用于 URL 解析
+url = "2"
 
 [build-dependencies]
-tauri-build = "2"
+tauri-build = "2.11.2"   # ← 改为与 tauri 相同版本
