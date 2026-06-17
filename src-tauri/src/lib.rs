@@ -3,12 +3,9 @@ pub mod storage;
 pub mod commands;
 pub mod network;
 
-use tauri::{Manager, Context};  // ← 注意这里引入了 Context
+use tauri::Manager;
 
 pub fn run() {
-    // 使用 Context::default() 替代 generate_context! 宏
-    let context = Context::default();
-    
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
@@ -52,6 +49,6 @@ pub fn run() {
 
             Ok(())
         })
-        .run(context)  // ← 这里传入 context 变量
+        .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
