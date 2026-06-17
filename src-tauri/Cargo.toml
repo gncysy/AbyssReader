@@ -1,0 +1,36 @@
+[package]
+name = "abyss-reader"
+version = "0.1.0"
+description = "Desktop novel reader compatible with Legado book sources"
+edition = "2021"
+
+[lib]
+name = "abyss_reader"
+crate-type = ["cdylib", "rlib"]
+path = "src/lib.rs"
+
+[[bin]]
+name = "abyss-reader"
+path = "src/main.rs"
+
+[dependencies]
+tauri = { version = "2.11.2", features = ["tray-icon"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["full"] }
+reqwest = { version = "0.12", features = ["json", "cookies", "gzip", "brotli", "rustls-tls", "blocking"] }
+rusqlite = { version = "0.32", features = ["bundled", "chrono"] }
+r2d2 = "0.8"
+r2d2_sqlite = "0.25"
+encoding_rs = "0.8"
+chrono = { version = "0.4", features = ["serde"] }
+anyhow = "1"
+thiserror = "2"
+once_cell = "1"
+parking_lot = "0.12"
+tauri-plugin-dialog = "2"
+tauri-plugin-fs = "2"
+dirs-next = "2"
+
+[build-dependencies]
+tauri-build = "2"
