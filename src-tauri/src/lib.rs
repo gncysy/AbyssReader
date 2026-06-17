@@ -15,6 +15,8 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::fetch_url::fetch_url,
+            commands::book::add_local_txt_content,
+            commands::book::read_local_file,
             commands::bookshelf::get_bookshelf,
             commands::bookshelf::add_to_bookshelf,
             commands::bookshelf::remove_from_bookshelf,
