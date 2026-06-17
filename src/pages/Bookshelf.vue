@@ -50,8 +50,15 @@
 
     <!-- 阅读器 -->
     <div v-if="currentBook" class="fixed inset-0 bg-ink/95 z-50 flex flex-col" @click.self="closeReader">
-      <Reader :chapters="chapters" :current-chapter-index="chapterIndex" :content="content"
-        @close="closeReader" @prev="prevChapter" @next="nextChapter" @progress="saveProgress" />
+      <Reader
+        :chapters="chapters"
+        :current-chapter-index="chapterIndex"
+        :content="content"
+        @close="closeReader"
+        @prev="prevChapter"
+        @next="nextChapter"
+        @progress="saveProgress"
+      />
     </div>
   </div>
 </template>
@@ -85,6 +92,7 @@ const chapterIndex = ref(0)
 const content = ref('')
 const txtInput = ref<HTMLInputElement | null>(null)
 const sources = ref<BookSource[]>([])
+const isPreloading = ref(false)
 
 const filteredBooks = computed(() => {
   let result = [...books.value]
@@ -151,12 +159,21 @@ async function openBook(book: Book) {
     const tocUrl = book.tocUrl || book.bookUrl
     const toc = await RuleEngine.getToc(source, tocUrl)
     chapters.value = toc
+
     const progress = await getReadingProgress(book.id!)
+    let startIndex = 0
     if (progress) {
       const idx = toc.findIndex((c: any) => c.id === progress.chapterId)
-      if (idx !== -1) chapterIndex.value = idx
+      if (idx !== -1) startIndex = idx
     }
+    chapterIndex.value = startIndex
+
     await loadChapterContent()
+
+    isPreloading.value = true
+    RuleEngine.preloadChapters(source, toc, startIndex)
+      .catch(err => console.warn('预加载失败:', err))
+      .finally(() => { isPreloading.value = false })
   } catch (err) {
     console.error(err)
     alert('加载失败')
@@ -186,6 +203,11 @@ async function loadChapterContent() {
       chapters.value[chapterIndex.value].title || '',
       0
     )
+  }
+
+  if (currentSource.value && chapters.value.length > 0) {
+    RuleEngine.preloadChapters(currentSource.value, chapters.value, chapterIndex.value)
+      .catch(err => console.warn('预加载失败:', err))
   }
 }
 
