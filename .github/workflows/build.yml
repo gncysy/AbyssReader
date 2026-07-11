@@ -1,0 +1,219 @@
+name: Build BookReader
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_type:
+        description: 'Release 类型'
+        required: true
+        default: 'prerelease'
+        type: choice
+        options:
+          - prerelease
+          - release
+      version:
+        description: '版本号（如 v1.0.0）'
+        required: false
+        type: string
+        default: ''
+      build_windows:
+        description: '构建 Windows'
+        required: false
+        default: true
+        type: boolean
+      build_macos:
+        description: '构建 macOS'
+        required: false
+        default: true
+        type: boolean
+      build_linux:
+        description: '构建 Linux'
+        required: false
+        default: true
+        type: boolean
+
+jobs:
+  type-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install dependencies
+        run: npm install --legacy-peer-deps
+      - name: Type check
+        run: npm run type-check
+
+  build-windows:
+    needs: type-check
+    if: github.event.inputs.build_windows == 'true'
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install dependencies
+        run: npm install --legacy-peer-deps
+      - name: Get version
+        id: version
+        shell: pwsh
+        run: |
+          $version = node -p "require('./package.json').version"
+          echo "VERSION=$version" >> $env:GITHUB_OUTPUT
+      - name: Build app
+        run: npm run electron:build
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Upload Windows artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: abyss-reader-windows-${{ steps.version.outputs.VERSION }}
+          path: |
+            release/*.exe
+            release/*.blockmap
+          retention-days: 7
+
+  build-macos:
+    needs: type-check
+    if: github.event.inputs.build_macos == 'true'
+    runs-on: macos-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install dependencies
+        run: npm install --legacy-peer-deps
+      - name: Get version
+        id: version
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
+      - name: Build app
+        run: npm run electron:build
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CSC_IDENTITY_AUTO_DISCOVERY: false
+      - name: Upload macOS artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: abyss-reader-macos-${{ steps.version.outputs.VERSION }}
+          path: |
+            release/*.dmg
+            release/*.zip
+          retention-days: 7
+
+  build-linux:
+    needs: type-check
+    if: github.event.inputs.build_linux == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install dependencies
+        run: npm install --legacy-peer-deps
+      - name: Install Linux build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libgbm-dev \
+            libasound2-dev \
+            libx11-dev \
+            libx11-xcb-dev \
+            libxcb-dri3-0 \
+            libxcb-glx0 \
+            libxcb-icccm4 \
+            libxcb-image0 \
+            libxcb-keysyms1 \
+            libxcb-randr0 \
+            libxcb-render-util0 \
+            libxcb-shape0 \
+            libxcb-shm0 \
+            libxcb-sync1 \
+            libxcb-xfixes0 \
+            libxcb-xinerama0 \
+            libxcb-xkb1 \
+            libxkbcommon-x11-0 \
+            libgtk-3-0 \
+            libnotify-dev \
+            libnss3 \
+            libxss1
+      - name: Get version
+        id: version
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
+      - name: Build app
+        run: npm run electron:build
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Upload Linux artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: abyss-reader-linux-${{ steps.version.outputs.VERSION }}
+          path: |
+            release/*.AppImage
+            release/*.deb
+            release/*.rpm
+          retention-days: 7
+
+  create-release:
+    needs: [build-windows, build-macos, build-linux]
+    if: |
+      (github.event.inputs.build_windows == 'true' && needs.build-windows.result == 'success') ||
+      (github.event.inputs.build_macos == 'true' && needs.build-macos.result == 'success') ||
+      (github.event.inputs.build_linux == 'true' && needs.build-linux.result == 'success')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Get version
+        id: version
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: ./artifacts
+      - name: List artifacts
+        run: |
+          ls -la ./artifacts
+          find ./artifacts -type f
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ github.event.inputs.version || format('v{0}', steps.version.outputs.VERSION) }}
+          name: ${{ github.event.inputs.version || format('v{0}', steps.version.outputs.VERSION) }}
+          draft: false
+          prerelease: ${{ github.event.inputs.release_type == 'prerelease' }}
+          generate_release_notes: true
+          files: |
+            ./artifacts/**/*.exe
+            ./artifacts/**/*.dmg
+            ./artifacts/**/*.AppImage
+            ./artifacts/**/*.deb
+            ./artifacts/**/*.rpm
+            ./artifacts/**/*.zip
+            ./artifacts/**/*.blockmap
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

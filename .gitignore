@@ -1,0 +1,82 @@
+# ========== Node.js ==========
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# package-lock.json 必须提交，不要忽略！
+yarn.lock
+pnpm-lock.yaml
+
+# ========== 构建产物 ==========
+dist/
+dist-ssr/
+release/
+*.local
+.vite/
+
+# ========== Electron ==========
+out/
+*.exe
+*.msi
+*.dmg
+*.deb
+*.rpm
+*.AppImage
+*.dSYM
+*.dll
+*.so
+
+# ========== 系统文件 ==========
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*.tmp
+*.log
+
+# ========== IDE ==========
+.vscode/
+.idea/
+*.iml
+.vs/
+*.code-workspace
+
+# ========== 环境变量 ==========
+.env
+.env.local
+.env.*.local
+
+# ========== 测试 ==========
+coverage/
+.nyc_output/
+*.test.js
+*.spec.js
+
+# ========== 用户数据（重要！） ==========
+# 不提交用户的书源、书架数据
+data/
+sources/
+local_books/
+*.db
+*.sqlite
+*.sqlite3
+.abyss_reader/
+
+# ========== 临时文件 ==========
+tmp/
+temp/
+*.cache
+.cache/
+
+# ========== 日志 ==========
+logs/
+*.log
+crash.log
+
+# ========== 备份文件（新增） ==========
+*.bak
+*.backup
+*.old
+*.orig

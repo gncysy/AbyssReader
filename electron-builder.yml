@@ -1,0 +1,70 @@
+appId: com.gncysy.abyss-reader
+productName: 墨阅
+copyright: Copyright © 2026 gncysy
+directories:
+  output: release
+files:
+  - dist/**/*
+  - package.json
+asar: true
+
+afterPack: scripts/afterPack.js
+
+win:
+  target:
+    - nsis
+  icon: resources/icons/icon.ico
+  publisherName: gncysy
+  legalTrademarks: 墨阅
+  artifactName: abyss-reader-windows-${version}.${ext}
+
+mac:
+  target:
+    - dmg
+    - zip
+  icon: resources/icons/icon.icns
+  category: public.app-category.utilities
+  entitlements: resources/entitlements.mac.plist
+  entitlementsInherit: resources/entitlements.mac.plist
+  hardenedRuntime: true
+  gatekeeperAssess: false
+  artifactName: abyss-reader-macos-${version}.${ext}
+
+linux:
+  target:
+    - AppImage
+    - deb
+  icon: resources/icons/512x512.png
+  category: Utility
+  maintainer: gncysy
+  description: 墨阅 - 基于 Electron 和 Vue 的现代化电子书阅读器
+  desktop:
+    Name: 墨阅
+    Comment: 电子书阅读器
+    Type: Application
+  artifactName: abyss-reader-linux-${version}.${ext}
+
+dmg:
+  window:
+    width: 540
+    height: 380
+  icon: resources/icons/icon.icns
+  iconSize: 128
+  backgroundColor: '#0d0d0d'
+  contents:
+    - x: 100
+      y: 100
+    - x: 400
+      y: 100
+      type: link
+      path: /Applications
+
+extraResources:
+  - from: resources/
+    to: resources/
+    filter:
+      - '**/*'
+
+publish:
+  provider: github
+  releaseType: draft
