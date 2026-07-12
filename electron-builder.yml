@@ -16,7 +16,7 @@ win:
   icon: resources/icons/icon.ico
   publisherName: gncysy
   legalTrademarks: 墨阅
-  artifactName: abyss-reader-windows-${version}.${ext}
+  artifactName: abyss-reader-windows-${version}-setup.${ext}
 
 mac:
   target:
@@ -39,7 +39,7 @@ linux:
   maintainer: gncysy
   description: 墨阅 - 基于 Electron 和 Vue 的现代化电子书阅读器
   desktop:
-    Name: 墨阅
+    Name: AbyssReader
     Comment: 电子书阅读器
     Type: Application
   artifactName: abyss-reader-linux-${version}.${ext}
