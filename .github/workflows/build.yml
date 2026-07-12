@@ -1,4 +1,4 @@
-name: Build BookReader
+name: AbyssReader Build & Release
 
 on:
   workflow_dispatch:
@@ -40,7 +40,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '22'
+          node-version: '20'
       - name: Install dependencies
         run: npm install --legacy-peer-deps
       - name: Type check
@@ -57,7 +57,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '22'
+          node-version: '20'
       - name: Install dependencies
         run: npm install --legacy-peer-deps
       - name: Get version
@@ -70,6 +70,7 @@ jobs:
         run: npm run electron:build
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ELECTRON_MIRROR: https://npmmirror.com/mirrors/electron/
       - name: Upload Windows artifact
         uses: actions/upload-artifact@v4
         with:
@@ -90,7 +91,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '22'
+          node-version: '20'
       - name: Install dependencies
         run: npm install --legacy-peer-deps
       - name: Get version
@@ -103,6 +104,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           CSC_IDENTITY_AUTO_DISCOVERY: false
+          ELECTRON_MIRROR: https://npmmirror.com/mirrors/electron/
       - name: Upload macOS artifact
         uses: actions/upload-artifact@v4
         with:
@@ -123,7 +125,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '22'
+          node-version: '20'
       - name: Install dependencies
         run: npm install --legacy-peer-deps
       - name: Install Linux build dependencies
@@ -161,6 +163,7 @@ jobs:
         run: npm run electron:build
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ELECTRON_MIRROR: https://npmmirror.com/mirrors/electron/
       - name: Upload Linux artifact
         uses: actions/upload-artifact@v4
         with:
@@ -185,7 +188,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '22'
+          node-version: '20'
       - name: Get version
         id: version
         run: |
