@@ -1,10 +1,53 @@
 const { contextBridge, ipcRenderer } = require('electron')
 
-// 白名单通道
+// 白名单通道（用于 invoke 和 on）
 const validChannels = [
+  // 存储通道
+  'store-get',
+  'store-set',
+  'store-delete',
+  'store-get-all',
+  // 窗口控制
+  'minimize-window',
+  'maximize-window',
+  'close-window',
+  // 网络和文件
+  'fetch',
+  'read-file',
+  'write-file',
+  'show-open-dialog',
+  'get-app-path',
+  // JS 执行
+  'execute-js',
+  // 验证码
+  'open-verification',
+  'close-verification',
+  // 书源管理
+  'add-book-source',
+  'import-sources-from-url',
+  'test-source',
+  'test-all-sources',
+  'delete-failed-sources',
+  'get-explore-categories',
+  // TXT 导入
+  'import-txt',
+  'get-local-book-chapters',
+  'get-local-chapter-content',
+  // 引擎 API
+  'engine-search',
+  'engine-batch-search',
+  'engine-batch-search-stream',
+  'engine-get-toc',
+  'engine-get-content',
+  'engine-get-book-info',
+  'parse-rule',
+  'engine-parse-explore-categories',
+  'engine-explore',
+  // 事件监听
   'verification-complete',
   'verification-cancel',
-  'search-progress', 'update-title-bar-overlay', 'engine-batch-search-stream',
+  'search-progress',
+  'update-title-bar-overlay',
   'store-changed',
   'source-test-result',
   'source-test-progress',
@@ -14,8 +57,9 @@ const validChannels = [
 
 // 安全暴露 API
 contextBridge.exposeInMainWorld('electronAPI', {
-  // ===== 通用 invoke（用于流式搜索等） =====
+  // ===== 通用 invoke =====
   invoke: (channel, ...args) => {
+    console.log('[Preload] invoke 调用:', channel)
     if (!validChannels.includes(channel)) {
       console.warn(`[Preload] 拒绝调用未授权的通道: ${channel}`)
       return Promise.reject(new Error(`Channel ${channel} not allowed`))
@@ -36,7 +80,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   toggleMaximizeWindow: () => ipcRenderer.invoke('maximize-window'),
   closeWindow: () => ipcRenderer.invoke('close-window'),
 
-  // ===== 网络请求（仅 HTTP/HTTPS） =====
+  // ===== 网络请求 =====
   fetch: (url, options) => {
     try {
       const parsed = new URL(url)
@@ -55,7 +99,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   showOpenDialog: (options) => ipcRenderer.invoke('show-open-dialog', options),
   getAppPath: () => ipcRenderer.invoke('get-app-path'),
 
-  // ===== JS 执行（安全沙箱） =====
+  // ===== JS 执行 =====
   executeJs: (code, context, timeout) => ipcRenderer.invoke('execute-js', code, context, timeout),
 
   // ===== 验证码窗口 =====
@@ -82,7 +126,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   engineGetContent: (source, chapterUrl) => ipcRenderer.invoke('engine-get-content', source, chapterUrl),
   engineGetBookInfo: (source, bookUrl) => ipcRenderer.invoke('engine-get-book-info', source, bookUrl),
 
-  // ===== 事件监听（白名单） =====
+  // ===== 事件监听 =====
   on: (channel, callback) => {
     if (!validChannels.includes(channel)) {
       console.warn(`[Preload] 拒绝监听未授权的通道: ${channel}`)
@@ -102,11 +146,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   },
 })
 
-// 暴露只读环境信息（安全）
+// 暴露只读环境信息
 contextBridge.exposeInMainWorld('electron', {
   versions: process.versions,
   platform: process.platform,
   isDev: process.env.NODE_ENV === 'development',
 })
-
-

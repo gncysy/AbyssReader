@@ -139,10 +139,25 @@ export async function search(
 
     const books: Book[] = []
     for (const item of listResult) {
-      const book = parseBookItem(item, source, rule)
+      const book = parseBookItem(item, source, rule, keyword)
       if (book) {
         books.push(book)
       }
+    }
+
+    // ===== checkKeyWord 验证 =====
+    if (rule.checkKeyWord && books.length > 0) {
+      const checkKeyWord = String(rule.checkKeyWord)
+      const filtered = books.filter(book => 
+        book.name.includes(checkKeyWord) || 
+        book.author.includes(checkKeyWord) ||
+        (book.intro && book.intro.includes(checkKeyWord))
+      )
+      if (filtered.length > 0) {
+        return filtered
+      }
+      // 如果过滤后为空，但原结果不为空，返回原结果（避免误杀）
+      return books
     }
 
     return books
@@ -156,7 +171,7 @@ export async function search(
   }
 }
 
-function parseBookItem(item: any, source: BookSource, rule: any): Book | null {
+function parseBookItem(item: any, source: BookSource, rule: any, keyword?: string): Book | null {
   try {
     const context = { source, baseUrl: source.url }
 

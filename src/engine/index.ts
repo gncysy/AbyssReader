@@ -3,8 +3,11 @@
 // ============================================
 
 // ===== 规则解析器 =====
-export { parseRule, executeRule, parseAndExecute, parseFallbackRule } from './rule-parser/index.js'
+export { parseRule, executeRule, parseAndExecute, parseFallbackRule, splitRule } from './rule-parser/index.js'
 export type { ParsedRule, RuleContext } from './rule-parser/index.js'
+
+// ===== 变量系统 =====
+export { variableStore, parsePutRule, parseGetRule, parseInlineJs, processVariables, executeInitRule } from './rule-parser/variable.js'
 
 // ===== 上下文管理 =====
 export { ContextStore, getGlobalStore, resetGlobalStore } from './context/store.js'
@@ -37,6 +40,10 @@ export { getToc } from './toc.js'
 // ===== 正文 =====
 export { getContent, preloadChapters, getCacheStats, cleanExpiredCache } from './content.js'
 
+// ===== 发现 =====
+export { explore, parseExploreCategories } from './explore.js'
+export type { ExploreOptions } from './explore.js'
+
 // ===== 工具函数 =====
 export * from './utils/index.js'
 
@@ -48,9 +55,10 @@ import { search, batchSearch } from './search.js'
 import { getBookInfo } from './book-info.js'
 import { getToc } from './toc.js'
 import { getContent, preloadChapters } from './content.js'
+import { explore } from './explore.js'
 import { getGlobalStore } from './context/store.js'
 import { parseAndExecute } from './rule-parser/index.js'
-import type { Book, BookSource, Chapter } from '@shared/types'
+import type { Book, BookSource, Chapter } from '../shared/types.js'
 
 export class RuleEngine {
   private static instance: RuleEngine
@@ -88,6 +96,10 @@ export class RuleEngine {
 
   async preloadChapters(source: BookSource, chapters: Chapter[], currentIndex: number): Promise<void> {
     return preloadChapters(source, chapters, currentIndex)
+  }
+
+  async explore(source: BookSource, exploreUrl: string, page: number = 1): Promise<Book[]> {
+    return explore(source, exploreUrl, { page })
   }
 
   clearCache(): void {

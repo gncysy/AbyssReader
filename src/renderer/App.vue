@@ -48,9 +48,9 @@
               <main class="app-main">
                 <div class="main-glow"></div>
                 <router-view v-slot="{ Component }">
-                  <transition name="page" mode="out-in">
+                  <keep-alive :include="keepAlivePages">
                     <component :is="Component" />
-                  </transition>
+                  </keep-alive>
                 </router-view>
               </main>
             </div>
@@ -81,6 +81,9 @@ const router = useRouter()
 const readingStore = useReadingStore()
 const currentRoute = computed(() => route.name)
 
+// Keep-alive 页面列表
+const keepAlivePages = ['bookshelf', 'search', 'sourcemanager']
+
 // ===== 从 Pinia 获取主题 =====
 const currentTheme = computed({
   get: () => readingStore.theme,
@@ -103,7 +106,6 @@ function applyThemeToDOM(theme: string) {
 function setTheme(theme: string) {
   readingStore.setTheme(theme)
   applyThemeToDOM(theme)
-  // 通知主进程更新标题栏颜色
   window.electronAPI?.invoke?.('update-title-bar-overlay', theme).catch(() => {})
 }
 
@@ -188,7 +190,6 @@ watch(currentTheme, (val) => {
 </script>
 
 <style scoped>
-/* 样式保持不变 */
 * {
   box-sizing: border-box;
   margin: 0;
@@ -381,7 +382,3 @@ watch(currentTheme, (val) => {
 .app-main::-webkit-scrollbar-thumb { background: var(--border-color); border-radius: 4px; }
 .app-main::-webkit-scrollbar-thumb:hover { background: var(--text-muted); }
 </style>
-
-
-
-

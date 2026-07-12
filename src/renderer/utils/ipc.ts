@@ -5,18 +5,17 @@ export function ipcInvoke<T = any>(channel: string, ...args: any[]): Promise<T> 
     return Promise.reject(new Error("electronAPI not available"));
   }
 
-  // 1. 直接调用
+  // 直接使用 invoke 方法
+  if (api.invoke && typeof api.invoke === "function") {
+    return api.invoke(channel, ...args);
+  }
+
+  // 降级：直接调用
   if (typeof api[channel] === "function") {
     return api[channel](...args);
   }
 
-  // 2. 横杠转驼峰：import-txt → importTxt
-  const camelCase = channel.replace(/-([a-z])/g, (_, letter) => letter.toUpperCase());
-  if (camelCase !== channel && typeof api[camelCase] === "function") {
-    return api[camelCase](...args);
-  }
-
-  // 3. 横杠转点号：store-get → store.get
+  // 横杠转点号：store-get → store.get
   const dotPath = channel.replace(/-/g, ".");
   if (dotPath !== channel) {
     const parts = dotPath.split(".");
@@ -34,7 +33,7 @@ export function ipcInvoke<T = any>(channel: string, ...args: any[]): Promise<T> 
     }
   }
 
-  // 4. 点号转横杠：store.get → store-get
+  // 点号转横杠：store.get → store-get
   const dashPath = channel.replace(/\./g, "-");
   if (dashPath !== channel && typeof api[dashPath] === "function") {
     return api[dashPath](...args);

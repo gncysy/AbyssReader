@@ -152,4 +152,3 @@ export async function getBookInfo(source: BookSource, bookUrl: string): Promise<
     throw new Error(`获取书籍详情失败 (${source.name}): ${error.message}`)
   }
 }
-

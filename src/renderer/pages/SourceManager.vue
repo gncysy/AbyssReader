@@ -28,6 +28,15 @@
 
     <input ref="fileInput" type="file" accept=".json" class="hidden" @change="onFileSelected" />
 
+    <!-- 导入进度条 -->
+    <div v-if="importing" class="import-progress">
+      <div class="progress-bar">
+        <div class="progress-fill" :style="{ width: importProgress + '%' }"></div>
+      </div>
+      <span class="progress-text">{{ importProgress }}%</span>
+      <span class="progress-label">{{ importLabel }}</span>
+    </div>
+
     <div v-if="filteredSources.length > 0" class="source-list">
       <div class="list-header">
         <span>名称</span>
@@ -89,9 +98,13 @@ const jsonInput = ref('')
 const urlInput = ref('')
 const fileInput = ref<HTMLInputElement | null>(null)
 
+// 导入进度状态
+const importing = ref(false)
+const importProgress = ref(0)
+const importLabel = ref('准备导入...')
+
 let unlistenTest: (() => void) | null = null
 
-// 搜索筛选
 const filteredSources = computed(() => {
   if (!searchText.value.trim()) return sources.value
   const keyword = searchText.value.trim().toLowerCase()
@@ -240,15 +253,34 @@ async function onFileSelected(event: Event) {
   const input = event.target as HTMLInputElement
   const file = input.files?.[0]
   if (!file) return
+
+  importing.value = true
+  importProgress.value = 10
+  importLabel.value = '读取文件...'
+
   try {
     const text = await file.text()
+    importProgress.value = 30
+    importLabel.value = '解析书源...'
+
     await sourceApi.add(text)
+    importProgress.value = 70
+    importLabel.value = '保存书源...'
+
     await loadSources()
+    importProgress.value = 100
+    importLabel.value = '导入完成！'
     message.success('导入成功')
   } catch (err: any) {
     message.error('导入失败: ' + err.message)
+    importLabel.value = '导入失败'
   } finally {
     input.value = ''
+    setTimeout(() => {
+      importing.value = false
+      importProgress.value = 0
+      importLabel.value = '准备导入...'
+    }, 800)
   }
 }
 
@@ -257,14 +289,31 @@ async function importJson() {
     message.warning('请粘贴书源 JSON')
     return
   }
+
+  importing.value = true
+  importProgress.value = 10
+  importLabel.value = '解析书源...'
+
   try {
     await sourceApi.add(jsonInput.value)
+    importProgress.value = 70
+    importLabel.value = '保存书源...'
+
     jsonInput.value = ''
     showJsonModal.value = false
     await loadSources()
+    importProgress.value = 100
+    importLabel.value = '导入完成！'
     message.success('导入成功')
   } catch (err: any) {
     message.error('导入失败: ' + err.message)
+    importLabel.value = '导入失败'
+  } finally {
+    setTimeout(() => {
+      importing.value = false
+      importProgress.value = 0
+      importLabel.value = '准备导入...'
+    }, 800)
   }
 }
 
@@ -273,14 +322,32 @@ async function importFromUrl() {
     message.warning('请输入 URL')
     return
   }
+
+  importing.value = true
+  importProgress.value = 10
+  importLabel.value = '下载书源...'
+
   try {
+    importProgress.value = 30
     await sourceApi.importFromUrl(urlInput.value)
+    importProgress.value = 70
+    importLabel.value = '保存书源...'
+
     urlInput.value = ''
     showUrlModal.value = false
     await loadSources()
+    importProgress.value = 100
+    importLabel.value = '导入完成！'
     message.success('导入成功')
   } catch (err: any) {
     message.error('导入失败: ' + err.message)
+    importLabel.value = '导入失败'
+  } finally {
+    setTimeout(() => {
+      importing.value = false
+      importProgress.value = 0
+      importLabel.value = '准备导入...'
+    }, 800)
   }
 }
 
@@ -325,6 +392,41 @@ onUnmounted(() => {
 }
 .input-search:focus { border-color: var(--brand); }
 .input-search::placeholder { color: var(--text-muted); }
+
+.import-progress {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 16px;
+  background: var(--bg-card);
+  border-radius: 8px;
+  margin-bottom: 16px;
+  border: 1px solid var(--border-color);
+}
+.progress-bar {
+  flex: 1;
+  height: 6px;
+  background: var(--bg-hover);
+  border-radius: 4px;
+  overflow: hidden;
+}
+.progress-fill {
+  height: 100%;
+  background: var(--brand);
+  border-radius: 4px;
+  transition: width 0.3s ease;
+}
+.progress-text {
+  font-size: 13px;
+  color: var(--text-secondary);
+  min-width: 40px;
+  text-align: right;
+}
+.progress-label {
+  font-size: 13px;
+  color: var(--text-muted);
+  min-width: 80px;
+}
 
 .source-list {
   background: var(--bg-card);

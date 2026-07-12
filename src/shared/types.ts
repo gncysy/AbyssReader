@@ -28,17 +28,79 @@ export interface BookWithProgress extends Book {
   current_chapter_title?: string
 }
 
+// ===== 书源规则类型 =====
+
+export interface SearchRule {
+  bookList?: string | null
+  name?: string | null
+  author?: string | null
+  bookUrl?: string | null
+  coverUrl?: string | null
+  intro?: string | null
+  kind?: string | null
+  lastChapter?: string | null
+  wordCount?: string | null
+  checkKeyWord?: string | null
+  replaceRegex?: string | null
+}
+
+export interface BookInfoRule {
+  init?: string | null
+  name?: string | null
+  author?: string | null
+  coverUrl?: string | null
+  intro?: string | null
+  kind?: string | null
+  lastChapter?: string | null
+  tocUrl?: string | null
+  wordCount?: string | null
+}
+
+export interface TocRule {
+  chapterList?: string | null
+  chapterName?: string | null
+  chapterUrl?: string | null
+  isVip?: string | null
+  isPay?: string | null
+  isVolume?: string | null
+  updateTime?: string | null
+  nextTocUrl?: string | null
+}
+
+export interface ContentRule {
+  content?: string | null
+  nextContentUrl?: string | null
+  replaceRegex?: string | null
+  imageStyle?: string | null
+  webView?: boolean | string | null
+  sourceRegex?: string | null
+  webJs?: string | null
+}
+
+export interface ExploreRule {
+  bookList?: string | null
+  name?: string | null
+  author?: string | null
+  bookUrl?: string | null
+  coverUrl?: string | null
+  intro?: string | null
+  kind?: string | null
+  lastChapter?: string | null
+  wordCount?: string | null
+  updateTime?: string | null
+}
+
 export interface BookSource {
   id: string
   name: string
   url: string
   searchUrl: string
-  ruleSearch: Record<string, any>
-  ruleBookInfo: Record<string, any>
-  ruleToc: Record<string, any>
-  ruleContent: Record<string, any>
-  ruleExplore?: Record<string, any>
-  exploreUrl?: string
+  ruleSearch: SearchRule
+  ruleBookInfo: BookInfoRule
+  ruleToc: TocRule
+  ruleContent: ContentRule
+  ruleExplore?: ExploreRule | null
+  exploreUrl?: string | null
   enabled: boolean
   group?: string | null
   comment?: string | null
@@ -48,11 +110,15 @@ export interface BookSource {
   jsLib?: string | null
   loginUrl?: string | null
   loginUi?: string | null
+  loginCheckJs?: string | null
   respondTime: number
   lastUpdateTime: number
   bookUrlPattern?: string | null
   code?: string | null
   concurrentRate?: number
+  enabledExplore?: boolean
+  customOrder?: number
+  bookSourceType?: 0 | 1
   _legado: boolean
   _desktop: boolean
 }
@@ -118,8 +184,8 @@ export function createSource(data: Partial<BookSource> = {}): BookSource {
     ruleBookInfo: data.ruleBookInfo ?? {},
     ruleToc: data.ruleToc ?? {},
     ruleContent: data.ruleContent ?? {},
-    ruleExplore: data.ruleExplore ?? {},
-    exploreUrl: data.exploreUrl ?? '',
+    ruleExplore: data.ruleExplore ?? null,
+    exploreUrl: data.exploreUrl ?? null,
     enabled: data.enabled !== undefined ? data.enabled : true,
     group: data.group ?? null,
     comment: data.comment ?? null,
@@ -129,11 +195,15 @@ export function createSource(data: Partial<BookSource> = {}): BookSource {
     jsLib: data.jsLib ?? null,
     loginUrl: data.loginUrl ?? null,
     loginUi: data.loginUi ?? null,
+    loginCheckJs: data.loginCheckJs ?? null,
     respondTime: data.respondTime ?? 0,
     lastUpdateTime: data.lastUpdateTime ?? now,
     bookUrlPattern: data.bookUrlPattern ?? null,
     code: data.code ?? null,
     concurrentRate: data.concurrentRate ?? 0,
+    enabledExplore: data.enabledExplore !== undefined ? data.enabledExplore : true,
+    customOrder: data.customOrder ?? 0,
+    bookSourceType: data.bookSourceType ?? 0,
     _legado: !!data.code,
     _desktop: true,
   }

@@ -84,6 +84,10 @@ import { store, engine as engineApi } from '@/api'
 import { handleApiError } from '@/utils/error'
 import type { Book, BookSource } from '@shared/types'
 
+defineOptions({
+  name: 'Search'
+})
+
 const message = useMessage()
 const sources = ref<BookSource[]>([])
 const keyword = ref('')
@@ -128,7 +132,6 @@ async function doSearch() {
     return
   }
 
-  // 获取所有已启用的书源
   const enabledSources = sources.value.filter(s => s.enabled)
   if (enabledSources.length === 0) {
     message.warning('没有已启用的书源')
@@ -141,7 +144,6 @@ async function doSearch() {
   totalSources.value = enabledSources.length
   searchResults.value = {}
 
-  // 清洗书源数据
   const cleanSources = enabledSources.map((source: any) => ({
     id: source.id,
     name: source.name,
@@ -166,14 +168,13 @@ async function doSearch() {
     lastUpdateTime: source.lastUpdateTime || Date.now(),
     bookUrlPattern: source.bookUrlPattern || null,
     code: source.code || null,
+    concurrentRate: source.concurrentRate || 0,
     _legado: source._legado || false,
     _desktop: true,
   }))
 
-  // 使用 JSON 深度清洗
   const finalSources = JSON.parse(JSON.stringify(cleanSources))
 
-  // 监听搜索进度
   if (unlistenProgress) {
     unlistenProgress()
     unlistenProgress = null
@@ -181,7 +182,6 @@ async function doSearch() {
 
   unlistenProgress = window.electronAPI.on('search-progress', (data: any) => {
     completedCount.value = data.completed
-    // 清洗返回的书籍数据
     const cleanBooks = (data.books || []).map((book: any) => ({
       id: book.id,
       sourceId: book.sourceId,
@@ -201,14 +201,12 @@ async function doSearch() {
   })
 
   try {
-    // 使用流式搜索
     const result = await window.electronAPI.invoke('engine-batch-search-stream', finalSources, kw)
 
     if (!result.success) {
       throw new Error(result.error)
     }
 
-    // 最终结果合并
     const data = result.data || {}
     let totalBooks = 0
     for (const [id, books] of Object.entries(data)) {
@@ -432,5 +430,3 @@ onUnmounted(() => {
 .empty-state p { font-size: 14px; color: var(--text-muted); }
 .empty-state.initial { padding: 80px 0; }
 </style>
-
-

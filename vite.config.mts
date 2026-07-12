@@ -1,12 +1,16 @@
 import { defineConfig } from "vite";
 import vue from "@vitejs/plugin-vue";
 import path from "path";
+import { fileURLToPath } from "url";
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 export default defineConfig({
   plugins: [vue()],
   root: path.join(__dirname, "src/renderer"),
   base: "./",
   build: {
+    target: "es2022",
     outDir: path.join(__dirname, "dist"),
     emptyOutDir: true,
     rollupOptions: {
@@ -21,7 +25,6 @@ export default defineConfig({
         "module",
         "async_hooks",
         "electron",
-        "cheerio",
         "undici",
         "node:vm",
         "node:fs",
@@ -29,6 +32,9 @@ export default defineConfig({
         "node:util",
         "node:events",
         "node:buffer",
+        "node:crypto",
+        "node:fs/promises",
+        "fs/promises",
       ],
     },
   },
@@ -37,6 +43,8 @@ export default defineConfig({
       "@": path.join(__dirname, "src/renderer"),
       "@engine": path.join(__dirname, "src/engine"),
       "@shared": path.join(__dirname, "src/shared"),
+      // 关键：将 node:vm 重定向到浏览器空实现
+      "node:vm": path.join(__dirname, "src/engine/utils/js-source.browser.js"),
     },
   },
   server: {
@@ -61,6 +69,8 @@ export default defineConfig({
       "file-saver",
       "jszip",
       "chinese-simple2traditional",
+      "cheerio",
+      "crypto-js",
     ],
     exclude: [
       "buffer",
@@ -68,8 +78,13 @@ export default defineConfig({
       "fs",
       "path",
       "electron",
-      "cheerio",
       "undici",
+      "node:vm",
+      "node:fs",
+      "node:path",
+      "node:crypto",
+      "node:fs/promises",
+      "fs/promises",
     ],
   },
 });

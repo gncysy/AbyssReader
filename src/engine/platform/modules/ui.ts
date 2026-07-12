@@ -1,4 +1,3 @@
-import { BrowserWindow, Notification } from "electron";
 import { getPlatformAdapter } from "../adapter.js";
 
 export const ui = {

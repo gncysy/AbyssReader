@@ -14,7 +14,8 @@ export function createWindow(): BrowserWindow {
   }
 
   const indexPath = path.join(__dirname, '..', 'index.html');
-  console.log('[Window] 加载:', indexPath);
+  const fileUrl = `file://${indexPath.replace(/\\/g, '/')}`;
+  console.log('[Window] 加载:', fileUrl);
 
   mainWindow = new BrowserWindow({
     width: 1200,
@@ -24,8 +25,6 @@ export function createWindow(): BrowserWindow {
     frame: false,
     title: '墨阅',
     titleBarStyle: 'hidden',
-    // 不透明背景，让 Electron 全程控制圆角
-    transparent: false,
     backgroundColor: '#0d0d0d',
     show: true,
     roundedCorners: true,
@@ -42,7 +41,7 @@ export function createWindow(): BrowserWindow {
 
   Menu.setApplicationMenu(null);
 
-  mainWindow.loadFile(indexPath).catch((err) => {
+  mainWindow.loadURL(fileUrl).catch((err) => {
     console.error('[Window] 加载失败:', err);
   });
 

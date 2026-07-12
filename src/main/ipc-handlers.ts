@@ -1,43 +1,13 @@
 import { ipcMain, dialog, BrowserWindow } from "electron";
 import Store from "electron-store";
-
-
+import vm from "node:vm";
 import fs from "fs/promises";
 import crypto from "crypto";
 import { getMainWindow } from "./window-manager.js";
 import { search, getToc, getContent, getBookInfo, batchSearch } from "../engine/index.js";
 import { getGlobalHttpClient } from "../engine/network/client.js";
 import { normalizeSource, parseSourcesFromJson } from "../engine/source-helper.js";
-
-// 类型定义
-interface BookSource {
-  id: string;
-  name: string;
-  url: string;
-  searchUrl: string;
-  ruleSearch: Record<string, any>;
-  ruleBookInfo: Record<string, any>;
-  ruleToc: Record<string, any>;
-  ruleContent: Record<string, any>;
-  ruleExplore?: Record<string, any>;
-  exploreUrl?: string;
-  enabled: boolean;
-  group?: string | null;
-  comment?: string | null;
-  weight: number;
-  header?: string | null;
-  enabledCookieJar: boolean;
-  jsLib?: string | null;
-  loginUrl?: string | null;
-  loginUi?: string | null;
-  respondTime: number;
-  lastUpdateTime: number;
-  bookUrlPattern?: string | null;
-  code?: string | null;
-  _legado: boolean;
-  _desktop: boolean;
-}
-
+import type { BookSource } from "../shared/types.js";
 
 function getEncryptionKey(): string {
   if (process.env.STORE_ENCRYPTION_KEY) {
@@ -205,6 +175,92 @@ function sanitizeSourceInput(source: any): any {
   return clean;
 }
 
+async function executeJsInSandbox(code: string, context: any = {}, timeout: number = 5000): Promise<any> {
+  const maxTimeout = 10000;
+  const effectiveTimeout = Math.min(timeout, maxTimeout);
+
+  let processed = code.trim();
+  if (processed.startsWith("@js:")) processed = processed.substring(4);
+  if (processed.startsWith("<js>") && processed.endsWith("</js>")) {
+    processed = processed.substring(4, processed.length - 5);
+  }
+
+  const dangerousPatterns = [
+    /require\s*\(/,
+    /import\s*\(/,
+    /process\./,
+    /global\./,
+    /__dirname/,
+    /__filename/,
+    /eval\s*\(/,
+    /Function\s*\(/,
+    /new\s+Function/,
+    /child_process/,
+    /exec\s*\(/,
+    /spawn\s*\(/,
+    /fork\s*\(/,
+    /fs\./,
+    /http\./,
+    /https\./,
+    /net\./,
+    /dgram\./,
+    /cluster\./,
+    /vm\./,
+  ];
+
+  for (const pattern of dangerousPatterns) {
+    if (pattern.test(processed)) {
+      console.warn("[Security] 拒绝执行包含危险模式的代码:", pattern);
+      return { success: false, error: `代码包含不安全操作: ${pattern.source}` };
+    }
+  }
+
+  const sandbox: any = {
+    Math: Math,
+    JSON: JSON,
+    Date: Date,
+    String: String,
+    Number: Number,
+    Boolean: Boolean,
+    Array: Array,
+    Object: Object,
+    encodeURI: encodeURIComponent,
+    decodeURI: decodeURIComponent,
+    parseInt: parseInt,
+    parseFloat: parseFloat,
+    isNaN: isNaN,
+    isFinite: isFinite,
+    console: {
+      log: (...args: any[]) => console.log("[Sandbox]", ...args),
+      error: (...args: any[]) => console.error("[Sandbox]", ...args),
+      warn: (...args: any[]) => console.warn("[Sandbox]", ...args),
+      info: (...args: any[]) => console.info("[Sandbox]", ...args),
+    },
+    context: JSON.parse(JSON.stringify(context || {})),
+  };
+  Object.freeze(sandbox.Math);
+  Object.freeze(sandbox.JSON);
+  Object.freeze(sandbox.Date);
+  Object.freeze(sandbox.String);
+  Object.freeze(sandbox.Number);
+  Object.freeze(sandbox.Boolean);
+  Object.freeze(sandbox.Array);
+  Object.freeze(sandbox.Object);
+  Object.freeze(sandbox);
+
+  const vmContext = vm.createContext(sandbox);
+
+  try {
+    const script = new vm.Script(`(() => { ${processed} })()`, { timeout: effectiveTimeout } as any);
+    const result = script.runInContext(vmContext, { timeout: effectiveTimeout, displayErrors: true, breakOnSigint: true });
+    const safeResult = typeof result === "object" && result !== null ? JSON.parse(JSON.stringify(result)) : result;
+    return { success: true, result: String(safeResult) };
+  } catch (error: any) {
+    console.error("[execute-js] 执行失败:", error.message);
+    return { success: false, error: error.message };
+  }
+}
+
 export function setupIpcHandlers() {
   // Store handlers
   ipcMain.handle("store-get", (_event: any, key: string) => {
@@ -243,7 +299,7 @@ export function setupIpcHandlers() {
         method,
         headers,
         body,
-        timeout: 30000,
+        timeout: 60000,
       });
 
       let data = response.data;
@@ -293,91 +349,9 @@ export function setupIpcHandlers() {
     return process.env.APP_PATH || process.cwd();
   });
 
-  // Execute JS handler - 使用 ExecSandbox
+  // Execute JS handler
   ipcMain.handle("execute-js", async (_event: any, code: string, context: any = {}, timeout: number = 5000) => {
-    const maxTimeout = 10000;
-    const effectiveTimeout = Math.min(timeout, maxTimeout);
-
-    let processed = code.trim();
-    if (processed.startsWith("@js:")) processed = processed.substring(4);
-    if (processed.startsWith("<js>") && processed.endsWith("</js>")) {
-      processed = processed.substring(4, processed.length - 5);
-    }
-
-    const dangerousPatterns = [
-      /require\s*\(/,
-      /import\s*\(/,
-      /process\./,
-      /global\./,
-      /__dirname/,
-      /__filename/,
-      /eval\s*\(/,
-      /Function\s*\(/,
-      /new\s+Function/,
-      /child_process/,
-      /exec\s*\(/,
-      /spawn\s*\(/,
-      /fork\s*\(/,
-      /fs\./,
-      /http\./,
-      /https\./,
-      /net\./,
-      /dgram\./,
-      /cluster\./,
-      /vm\./,
-    ];
-
-    for (const pattern of dangerousPatterns) {
-      if (pattern.test(processed)) {
-        console.warn("[Security] 拒绝执行包含危险模式的代码:", pattern);
-        return { success: false, error: `代码包含不安全操作: ${pattern.source}` };
-      }
-    }
-
-    // 构建作用域变量（ExecSandbox 通过 run 的第二个参数传入）
-    const scopeVars: Record<string, any> = {
-      Math: Math,
-      JSON: JSON,
-      Date: Date,
-      String: String,
-      Number: Number,
-      Boolean: Boolean,
-      Array: Array,
-      Object: Object,
-      encodeURI: encodeURIComponent,
-      decodeURI: decodeURIComponent,
-      parseInt: parseInt,
-      parseFloat: parseFloat,
-      isNaN: isNaN,
-      isFinite: isFinite,
-      console: {
-        log: (...args: any[]) => console.log("[Sandbox]", ...args),
-        error: (...args: any[]) => console.error("[Sandbox]", ...args),
-        warn: (...args: any[]) => console.warn("[Sandbox]", ...args),
-        info: (...args: any[]) => console.info("[Sandbox]", ...args),
-      },
-    };
-
-    // 注入上下文
-    try {
-      scopeVars.context = JSON.parse(JSON.stringify(context || {}));
-    } catch {
-      scopeVars.context = {};
-    }
-
-    const sandbox = new ExecSandbox(false);
-    try {
-      const result = await sandbox.run(`(() => { ${processed} })()`, scopeVars);
-      const safeResult = typeof result === "object" && result !== null
-        ? JSON.parse(JSON.stringify(result))
-        : result;
-      return { success: true, result: String(safeResult) };
-    } catch (error: any) {
-      console.error("[execute-js] 执行失败:", error.message);
-      return { success: false, error: error.message };
-    } finally {
-      sandbox.dispose();
-    }
+    return await executeJsInSandbox(code, context, timeout);
   });
 
   // Window handlers
@@ -458,7 +432,7 @@ export function setupIpcHandlers() {
       throw new Error("未找到有效的书源数据");
     }
 
-    const existing: BookSource[] = store.get("sources") || [];
+    const existing = store.get("sources") || [];
     const normalized = sourceList.map((s: any) => {
       const clean = sanitizeSourceInput(s);
       return normalizeSource(clean);
@@ -491,7 +465,7 @@ export function setupIpcHandlers() {
     const response = await httpClient.request({
       url,
       method: "GET",
-      timeout: 30000,
+      timeout: 60000,
     });
 
     if (response.status < 200 || response.status >= 300) {
@@ -504,7 +478,7 @@ export function setupIpcHandlers() {
       throw new Error("未找到有效的书源数据");
     }
 
-    const existing: BookSource[] = store.get("sources") || [];
+    const existing = store.get("sources") || [];
     const normalized = sourceList.map((s: any) => {
       const clean = sanitizeSourceInput(s);
       return normalizeSource(clean);
@@ -530,7 +504,7 @@ export function setupIpcHandlers() {
   });
 
   ipcMain.handle("test-source", async (_event: any, sourceId: string) => {
-    const sources: BookSource[] = store.get("sources") || [];
+    const sources = store.get("sources") || [];
     const source = sources.find((s: any) => s.id === sourceId);
     if (!source) throw new Error("书源未找到");
 
@@ -545,7 +519,7 @@ export function setupIpcHandlers() {
         url: testUrl,
         method: "GET",
         headers: source.header ? JSON.parse(source.header) : {},
-        timeout: 10000,
+        timeout: 60000,
       });
       const elapsed = Date.now() - start;
       const size = response.data ? response.data.length : 0;
@@ -556,7 +530,7 @@ export function setupIpcHandlers() {
   });
 
   ipcMain.handle("test-all-sources", async (_event: any) => {
-    const sources: BookSource[] = store.get("sources") || [];
+    const sources = store.get("sources") || [];
     const results: any[] = [];
     const totalTimeout = 60000;
     const startTime = Date.now();
@@ -590,7 +564,7 @@ export function setupIpcHandlers() {
           url: testUrl,
           method: "GET",
           headers: source.header ? JSON.parse(source.header) : {},
-          timeout: 8000,
+          timeout: 60000,
         });
         timeMs = Date.now() - start;
         sizeKb = Math.round((response.data ? response.data.length : 0) / 1024);
@@ -616,7 +590,7 @@ export function setupIpcHandlers() {
   });
 
   ipcMain.handle("delete-failed-sources", async (_event: any) => {
-    const sources: BookSource[] = store.get("sources") || [];
+    const sources = store.get("sources") || [];
     const total = sources.length;
     let tested = 0;
     const failedIds: string[] = [];
@@ -632,7 +606,7 @@ export function setupIpcHandlers() {
             url: testUrl,
             method: "GET",
             headers: source.header ? JSON.parse(source.header) : {},
-            timeout: 8000,
+            timeout: 60000,
           });
         }
       } catch {
@@ -649,7 +623,7 @@ export function setupIpcHandlers() {
       });
     }
 
-    const existing: BookSource[] = store.get("sources") || [];
+    const existing = store.get("sources") || [];
     const filtered = existing.filter((s: any) => !failedIds.includes(s.id));
     store.set("sources", filtered);
 
@@ -659,7 +633,7 @@ export function setupIpcHandlers() {
   });
 
   ipcMain.handle("get-explore-categories", async (_event: any, sourceId: string) => {
-    const sources: BookSource[] = store.get("sources") || [];
+    const sources = store.get("sources") || [];
     const source = sources.find((s: any) => s.id === sourceId);
     if (!source) return [];
 
@@ -667,6 +641,24 @@ export function setupIpcHandlers() {
     if (!exploreUrl) return [];
 
     let processedUrl = exploreUrl;
+
+    if (processedUrl.startsWith("@js:")) {
+      try {
+        const code = processedUrl.substring(4);
+        const result = await executeJsInSandbox(code, {}, 5000);
+        if (result && result.success) {
+          const parsed = JSON.parse(result.result);
+          if (Array.isArray(parsed)) {
+            return parsed;
+          }
+        }
+        return [];
+      } catch (err) {
+        console.warn("[Explore] JS 分类生成失败:", err);
+        return [];
+      }
+    }
+
     if (processedUrl.includes("{{")) {
       processedUrl = processedUrl
         .replace(/\{\{key\}\}/g, "")
@@ -696,7 +688,7 @@ export function setupIpcHandlers() {
             url: processedUrl,
             method: "GET",
             headers: source.header ? JSON.parse(source.header) : {},
-            timeout: 10000,
+            timeout: 60000,
           });
 
           const data = response.data;
@@ -786,7 +778,7 @@ export function setupIpcHandlers() {
     return chapter ? chapter.content : "";
   });
 
-  // Engine handlers
+  // ===== Engine handlers =====
   ipcMain.handle("engine-search", async (_event: any, source: any, keyword: string, page: number = 1) => {
     try {
       const results = await search(source, keyword, { page });
@@ -887,7 +879,37 @@ export function setupIpcHandlers() {
   ipcMain.handle("engine-get-toc", async (_event: any, source: any, tocUrl: string) => {
     try {
       const chapters = await getToc(source, tocUrl);
-      return { success: true, data: chapters };
+      if (!Array.isArray(chapters)) {
+        console.warn("[Engine] getToc 返回的不是数组，返回空数组");
+        return { success: true, data: [] };
+      }
+      const safeChapters = chapters.map((ch: any) => {
+        try {
+          const test = {
+            id: typeof ch.id === 'number' ? ch.id : 0,
+            title: String(ch.title || ''),
+            url: String(ch.url || ''),
+            index: typeof ch.index === 'number' ? ch.index : 0,
+            isVip: !!ch.isVip,
+            isPay: !!ch.isPay,
+            content: ch.content ? String(ch.content) : null,
+            updateTime: ch.updateTime ? String(ch.updateTime || '') : undefined,
+          };
+          JSON.stringify(test);
+          return test;
+        } catch (e) {
+          console.warn("[Engine] 章节序列化失败，使用默认值:", e);
+          return { id: 0, title: "章节加载失败", url: "", index: 0, isVip: false, isPay: false, content: null };
+        }
+      });
+      try {
+        JSON.stringify(safeChapters);
+      } catch (e) {
+        console.error("[Engine] 整体序列化测试失败，返回空数组");
+        return { success: true, data: [] };
+      }
+      console.log(`[Engine] 成功返回 ${safeChapters.length} 个章节`);
+      return { success: true, data: safeChapters };
     } catch (error: any) {
       console.error("[Engine] Get TOC error:", error);
       return { success: false, error: error.message };
@@ -923,13 +945,38 @@ export function setupIpcHandlers() {
       return { success: false, error: error.message };
     }
   });
+
+  // ===== 发现功能处理器 =====
+  ipcMain.handle("engine-parse-explore-categories", async (_event: any, source: any, exploreUrl: string, options: any = {}) => {
+    try {
+      console.log("[Engine] 解析发现分类:", exploreUrl);
+      const { parseExploreCategories } = await import("../engine/explore.js");
+      const result = parseExploreCategories(exploreUrl, source, options);
+      return { success: true, data: result };
+    } catch (error: any) {
+      console.error("[Engine] Parse explore categories error:", error);
+      return { success: false, error: error.message };
+    }
+  });
+
+  ipcMain.handle("engine-explore", async (_event: any, source: any, exploreUrl: string, options: any = {}) => {
+    try {
+      console.log("[Engine] 执行发现:", exploreUrl);
+      const { explore } = await import("../engine/explore.js");
+      const result = await explore(source, exploreUrl, options);
+      // 深度清理，确保可克隆
+      const cleanResult = JSON.parse(JSON.stringify(result));
+      return { success: true, data: cleanResult };
+    } catch (error: any) {
+      console.error("[Engine] Explore error:", error);
+      return { success: false, error: error.message };
+    }
+  });
 }
 
 export function clearChapterCache() {
   chapterCache.clear();
 }
-
-
 
 
 

@@ -15,22 +15,18 @@ import type { BookSource, Chapter } from '../shared/types.js';
  * 深度清洗任意值，确保可 JSON 序列化（无函数、Symbol、DOM 节点）
  */
 function deepSanitize(value: any): any {
-  // 处理基本类型
   if (value === null || value === undefined) return null;
   if (typeof value === 'string') return value;
   if (typeof value === 'number') return value;
   if (typeof value === 'boolean') return value;
-  if (typeof value === 'function') return null;        // 函数不可克隆
-  if (typeof value === 'symbol') return null;          // Symbol 不可克隆
+  if (typeof value === 'function') return null;
+  if (typeof value === 'symbol') return null;
 
-  // 数组处理
   if (Array.isArray(value)) {
     return value.map(item => deepSanitize(item));
   }
 
-  // 对象处理
   if (typeof value === 'object') {
-    // 检测 cheerio 元素（常见于 parseAndExecute 返回的 DOM 元素）
     if (value.constructor?.name === 'Element' || value.tagName || value.attribs) {
       return null;
     }
@@ -45,12 +41,10 @@ function deepSanitize(value: any): any {
     }
   }
 
-  // 其他类型（如 BigInt）转为字符串
   return String(value);
 }
 
 export async function getToc(source: BookSource, tocUrl: string): Promise<Chapter[]> {
-  // 最外层捕获所有异常，确保永远不会抛出克隆错误
   try {
     // ===== JS书源支持 =====
     if (isJsSource(source)) {
@@ -102,10 +96,6 @@ export async function getToc(source: BookSource, tocUrl: string): Promise<Chapte
           charset: config.charset || 'utf-8',
           timeout: 30000,
         });
-      console.log('[Toc] 响应状态:', response.status);
-      console.log('[Toc] 响应头:', JSON.stringify(response.headers));
-      const dataStr = typeof response.data === 'string' ? response.data : JSON.stringify(response.data);
-      console.log('[Toc] 响应数据前500字符:', dataStr.substring(0, 500));
 
         if (response.status < 200 || response.status >= 300) break;
 
@@ -130,7 +120,6 @@ export async function getToc(source: BookSource, tocUrl: string): Promise<Chapte
           listResult = parseAndExecute(html, rule.chapterList, context);
         }
 
-        // 深度清洗 parseAndExecute 返回的结果
         if (listResult && Array.isArray(listResult)) {
           const cleaned = listResult.map((item: any) => deepSanitize(item));
           allChapters = allChapters.concat(cleaned);
@@ -146,14 +135,12 @@ export async function getToc(source: BookSource, tocUrl: string): Promise<Chapte
         }
         currentTocUrl = nextUrl;
       } catch (err) {
-        // 单页出错，继续下一页
         break;
       }
     }
 
     if (allChapters.length === 0) return [];
 
-    // 构建章节对象
     const chapters: Chapter[] = [];
     let isVolumeActive = false;
     let currentVolume = '';
@@ -194,12 +181,10 @@ export async function getToc(source: BookSource, tocUrl: string): Promise<Chapte
           updateTime: updateTime ? String(updateTime) : undefined,
         });
       } catch (e) {
-        // 单条出错，跳过
         continue;
       }
     }
 
-    // 最终强制清洗，构建绝对安全的数组
     const result = chapters.map((ch: any) => ({
       id: typeof ch.id === 'number' ? ch.id : 0,
       title: String(ch.title || ''),
@@ -211,19 +196,15 @@ export async function getToc(source: BookSource, tocUrl: string): Promise<Chapte
       updateTime: ch.updateTime ? String(ch.updateTime || '') : undefined,
     }));
 
-    // 尝试序列化，如果失败则返回空数组
     try {
       JSON.stringify(result);
-      console.log('[Toc] 成功返回', result.length, '个章节');
       return result;
     } catch (e) {
       console.error('[Toc] 序列化失败，返回空数组', e);
       return [];
     }
   } catch (error) {
-    // 捕获所有异常，返回空数组，避免克隆错误传播
     console.error('[Toc] 未知错误，返回空数组:', error);
     return [];
   }
 }
-

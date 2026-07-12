@@ -1,4 +1,4 @@
-import { parseCss, executeCss } from './css.js'
+import { parseCss, executeCss, splitRule } from './css.js'
 import { parseXPath, executeXPath } from './xpath.js'
 import { parseJsonPath, executeJsonPath } from './jsonpath.js'
 import { parseJs, executeJs } from './js.js'
@@ -121,6 +121,10 @@ export function executeRule(
   return result
 }
 
+/**
+ * 解析并执行规则（支持 && / || / %% 分割）
+ * 自动跳过引号和括号内的内容
+ */
 export function parseAndExecute(
   source: any,
   rule: string,
@@ -128,13 +132,32 @@ export function parseAndExecute(
 ): any {
   if (!source || !rule) return null
 
+  // 先尝试直接解析
   const parsed = parseRule(rule)
   if (parsed) {
     return executeRule(source, parsed, context)
   }
 
-  const parts = parseFallbackRule(rule)
-  for (const part of parts) {
+  // 尝试分割规则（支持 && / || / %%）
+  const parts = splitRule(rule, ['&&', '||', '%%'])
+  if (parts.length > 1) {
+    const results: any[] = []
+    for (const part of parts) {
+      const p = parseRule(part)
+      if (p) {
+        const result = executeRule(source, p, context)
+        if (result !== null && result !== undefined && result !== '') {
+          results.push(result)
+        }
+      }
+    }
+    if (results.length === 0) return null
+    return results.length === 1 ? results[0] : results
+  }
+
+  // 回退到 || 分割
+  const fallbackParts = parseFallbackRule(rule)
+  for (const part of fallbackParts) {
     const p = parseRule(part)
     if (p) {
       const result = executeRule(source, p, context)
@@ -183,3 +206,5 @@ export function parseFallbackRule(rule: string): string[] {
 
   return parts
 }
+
+export { splitRule } from './css.js'
