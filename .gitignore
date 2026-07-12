@@ -79,4 +79,5 @@ crash.log
 *.bak
 *.backup
 *.old
-*.orig
+*.orig*.bak
+*.bak*
