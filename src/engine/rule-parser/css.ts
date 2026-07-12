@@ -30,29 +30,31 @@ export function executeCss(
   if (!source) return null
 
   const html = typeof source === 'string' ? source : String(source)
-  const $ = cheerio.load(html)
-  const elements = $(expression)
+  
+  try {
+    const $ = cheerio.load(html)
+    const elements = $(expression)
+    
+    if (elements.length === 0) return null
 
-  if (elements.length === 0) return null
+    const results: string[] = []
+    elements.each((i, el) => {
+      let value: string | null = null
+      if (attribute === 'text' || !attribute) {
+        value = $(el).text().trim()
+      } else if (attribute === 'html') {
+        value = $(el).html() || null
+      } else if (attribute === 'outerHTML') {
+        value = $.html(el) || null
+      } else {
+        value = $(el).attr(attribute) || null
+      }
+      if (value) results.push(value)
+    })
 
-  const results: string[] = []
-
-  elements.each((i, el) => {
-    let value: string | null = null
-    if (attribute === 'text' || !attribute) {
-      value = $(el).text().trim()
-    } else if (attribute === 'html') {
-      value = $(el).html() || ''
-    } else if (attribute === 'outerHTML') {
-      value = $.html(el)
-    } else {
-      value = $(el).attr(attribute) || null
-    }
-
-    if (value !== null && value !== undefined && value !== '') {
-      results.push(value)
-    }
-  })
-
-  return results.length === 0 ? null : results.length === 1 ? results[0] : results
+    return results.length === 0 ? null : results.length === 1 ? results[0] : results
+  } catch (error: any) {
+    console.warn('[CSS] 执行失败:', error.message, '选择器:', expression)
+    return null
+  }
 }

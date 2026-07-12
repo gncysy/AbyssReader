@@ -145,9 +145,11 @@ function handleImageError(e: Event) {
 }
 
 function openBook(book: Book) {
-  const source = sources.value.find(s => s.id === book.sourceId)
+  console.log('[Bookshelf] 打开书籍:', book.name)
+  const foundSource = sources.value.find(s => s.id === book.sourceId)
+  console.log('[Bookshelf] 找到书源:', foundSource?.name || '未找到')
   currentBook.value = book
-  currentSource.value = source || null
+  currentSource.value = foundSource || null
 }
 
 function closeReader() {
@@ -162,7 +164,6 @@ onMounted(() => {
 </script>
 
 <style scoped>
-/* 样式保持不变 */
 .bookshelf-page {
   position: relative;
   z-index: 1;

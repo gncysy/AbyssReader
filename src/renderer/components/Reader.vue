@@ -170,6 +170,9 @@ function setTheme(value: string) {
 
 // ===== 加载章节 =====
 async function loadChapters() {
+  console.log('[Reader] ===== loadChapters 被调用 =====');
+  console.log('[Reader] props.book:', props.book);
+  console.log('[Reader] props.source:', props.source);
   if (!props.book) return
 
   try {
@@ -201,8 +204,7 @@ async function loadChapters() {
       return
     }
 
-    const result = await window.electronAPI.engineGetToc(
-      props.source,
+    const result = await window.electronAPI.engineGetToc(JSON.parse(JSON.stringify(props.source)),
       props.book.tocUrl || props.book.bookUrl
     )
 
@@ -254,7 +256,7 @@ async function preloadNextChapters() {
       const url = queue.shift()
       if (!url) break
       try {
-        await window.electronAPI.engineGetContent(props.source!, url)
+        await window.electronAPI.engineGetContent(JSON.parse(JSON.stringify(props.source)), url)
       } catch {
         // 忽略
       }
@@ -290,8 +292,7 @@ async function loadContent() {
       return
     }
 
-    const result = await window.electronAPI.engineGetContent(
-      props.source,
+    const result = await window.electronAPI.engineGetContent(JSON.parse(JSON.stringify(props.source)),
       currentChapter.value.url
     )
 
@@ -818,3 +819,5 @@ defineExpose({
   background: rgba(139, 119, 80, 0.15);
 }
 </style>
+
+

@@ -49,6 +49,19 @@ export default defineConfig({
     "process.version": JSON.stringify(process.version),
   },
   optimizeDeps: {
+    include: [
+      "naive-ui",
+      "vue",
+      "pinia",
+      "vue-router",
+      "@vicons/ionicons5",
+      "isomorphic-dompurify",
+      "dompurify",
+      "dayjs",
+      "file-saver",
+      "jszip",
+      "chinese-simple2traditional",
+    ],
     exclude: [
       "buffer",
       "vm",

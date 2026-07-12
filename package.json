@@ -3,19 +3,18 @@
   "version": "0.1.0",
   "description": "A modern e-book reader built with Electron and Vue",
   "main": "dist/main/index.js",
-  "type": "module",
   "engines": {
     "node": ">=18.0.0",
     "npm": ">=9.0.0"
   },
   "scripts": {
-    "dev": "vite --config vite.config.ts",
+    "dev": "vite --config vite.config.mts",
     "build:vite": "vite build",
     "build:tsc": "tsc -p src/main/tsconfig.json",
     "build:alias": "tsc-alias -p src/main/tsconfig.json",
-    "build:preload": "node scripts/copy-preload.js",
+    "build:preload": "node scripts/copy-preload.cjs",
     "build": "npm run build:vite && npm run build:tsc && npm run build:alias && npm run build:preload",
-    "electron:dev": "npm run build && electron --require ./scripts/polyfill.cjs .",
+    "electron:dev": "npm run build && electron .",
     "electron:build": "npm run build && electron-builder",
     "type-check": "tsc -p src/main/tsconfig.json --noEmit",
     "lint": "eslint . --ext .ts,.vue --fix",
@@ -25,21 +24,21 @@
     "@vicons/ionicons5": "^0.12.0",
     "axios": "^1.6.0",
     "axios-cookiejar-support": "^5.0.0",
-    "cheerio": "^1.0.0-rc.12",
+    "cheerio": "1.0.0-rc.12",
     "chinese-simple2traditional": "^2.3.2",
     "crypto-js": "^4.2.0",
-    "dayjs": "^1.11.10",
-    "electron-store": "^8.2.0",
+    "dayjs": "^1.11.13",
+    "electron-store": "^10.0.0",
     "file-saver": "^2.0.5",
     "iconv-lite": "^0.6.3",
-    "isomorphic-dompurify": "^1.0.0",
+    "isomorphic-dompurify": "^2.20.0",
     "jsonpath": "^1.1.1",
     "jszip": "^3.10.1",
-    "naive-ui": "^2.34.0",
-    "pinia": "^2.1.7",
+    "naive-ui": "^2.41.0",
+    "pinia": "^2.3.1",
     "tough-cookie": "^4.1.3",
-    "vue": "^3.4.0",
-    "vue-router": "^4.2.0",
+    "vue": "^3.5.13",
+    "vue-router": "^4.5.0",
     "xpath": "^0.0.34"
   },
   "devDependencies": {
@@ -49,14 +48,14 @@
     "@types/tough-cookie": "^4.0.5",
     "@vitejs/plugin-vue": "^5.0.0",
     "electron": "^28.0.0",
-    "electron-builder": "^24.9.0",
+    "electron-builder": "^24.13.3",
     "eslint": "^8.56.0",
     "eslint-plugin-vue": "^9.20.0",
     "prettier": "^3.1.0",
     "tsc-alias": "^1.8.8",
     "typescript": "^5.8.0",
     "vite": "^5.0.0",
-    "vue-tsc": "^2.2.0"
+    "vue-tsc": "^2.2.12"
   },
   "build": {
     "appId": "com.gncysy.abyss-reader",
@@ -89,8 +88,6 @@
     }
   },
   "author": "gncysy",
-  "license": "GPL-3.0"
+  "license": "GPL-3.0",
+  "type": "module"
 }
-
-
-

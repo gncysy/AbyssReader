@@ -36,19 +36,43 @@ export function normalizeSource(source: any): BookSource {
   }
 }
 
-export function parseSourcesFromJson(jsonStr: string): any[] {
-  const data = JSON.parse(jsonStr)
-  let sourceList: any[] = []
+export function parseSourcesFromJson(jsonStr: any): any[] {
+  console.log('[SourceHelper] parseSourcesFromJson 被调用, 输入类型:', typeof jsonStr);
   
-  if (data.sources && Array.isArray(data.sources)) {
-    sourceList = data.sources
-  } else if (Array.isArray(data)) {
-    sourceList = data
-  } else if (data.bookSourceUrl || data.bookSourceName || data.ruleSearch) {
-    sourceList = [data]
+  // 如果传入的是对象，直接使用
+  let data = jsonStr;
+  if (typeof jsonStr === 'object' && jsonStr !== null) {
+    console.log('[SourceHelper] 输入是对象，直接使用');
+    data = jsonStr;
+  } else if (typeof jsonStr === 'string') {
+    // 如果是 "[object Object]"，说明传入的是被错误序列化的对象
+    if (jsonStr === '[object Object]') {
+      console.error('[SourceHelper] 收到 "[object Object]" 字符串，无法解析');
+      return [];
+    }
+    try {
+      data = JSON.parse(jsonStr);
+      console.log('[SourceHelper] JSON 解析成功');
+    } catch (e) {
+      console.error('[SourceHelper] JSON 解析失败:', e);
+      return [];
+    }
+  } else {
+    console.error('[SourceHelper] 不支持的数据类型:', typeof jsonStr);
+    return [];
   }
   
-  return sourceList
+  let sourceList: any[] = [];
+  if (data.sources && Array.isArray(data.sources)) {
+    sourceList = data.sources;
+  } else if (Array.isArray(data)) {
+    sourceList = data;
+  } else if (data.bookSourceUrl || data.bookSourceName || data.ruleSearch) {
+    sourceList = [data];
+  }
+  
+  console.log('[SourceHelper] 解析到书源数量:', sourceList.length);
+  return sourceList;
 }
 
 export function validateSource(source: any): boolean {

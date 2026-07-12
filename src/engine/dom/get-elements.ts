@@ -1,5 +1,4 @@
 import * as cheerio from 'cheerio'
-import { Element, Document } from 'domhandler'
 
 export function getElements(
   html: string,
@@ -22,17 +21,18 @@ export function getElements(
         results.push(attrValue)
       }
     } else {
-      // 检查是否为 Element 类型
-      const isElement = 'tagName' in el && 'attribs' in el
+      // 使用 cheerio 的 API 获取信息，避免直接访问 el 的属性
       const result: any = {
-        tag: isElement ? (el as Element).tagName?.toLowerCase() || '' : '',
+        tag: (el as any).name || '',
         text: $(el).text().trim(),
         html: $(el).html() || '',
         outerHTML: $.html(el),
         attributes: {} as Record<string, string>,
       }
-      if (isElement && (el as Element).attribs) {
-        for (const [key, value] of Object.entries((el as Element).attribs)) {
+      // 使用 cheerio 的 attr 方法获取所有属性
+      const attribs = (el as any).attribs
+      if (attribs) {
+        for (const [key, value] of Object.entries(attribs)) {
           result.attributes[key] = value
         }
       }
@@ -51,3 +51,4 @@ export function getElement(
   const results = getElements(html, selector, attribute)
   return results.length > 0 ? results[0] : null
 }
+
