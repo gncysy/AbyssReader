@@ -11,8 +11,4 @@ export const engine = {
     ipcInvoke('engine-get-content', source, chapterUrl),
   getBookInfo: (source: any, bookUrl: string) =>
     ipcInvoke('engine-get-book-info', source, bookUrl),
-  getExploreCategories: (source: any) =>
-    ipcInvoke('engine-get-explore-categories', source),
-  getExploreBooks: (source: any, categoryUrl: string, page: number) =>
-    ipcInvoke('engine-get-explore-books', source, categoryUrl, page),
 }

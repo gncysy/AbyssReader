@@ -60,18 +60,6 @@ export const network = {
     return lastByteResponse
   },
 
-  // ===== 新增：并发请求 =====
-  async ajaxAll(urls: string[]): Promise<any[]> {
-    const promises = urls.map(async (url) => {
-      try {
-        return await this.ajax(url)
-      } catch {
-        return null
-      }
-    })
-    return Promise.all(promises)
-  },
-
   cookie: {
     async getCookie(url: string): Promise<string> {
       const httpClient = getGlobalHttpClient()

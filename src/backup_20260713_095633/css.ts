@@ -22,14 +22,21 @@ export function parseCss(rule: string): ParsedRule {
   }
 }
 
+/**
+ * 处理索引选择器
+ * 格式：selector!index 或 selector.index
+ * 例如：div.book!0:3 或 div.book.-1:10:2
+ */
 function processIndexSelector(selector: string): { baseSelector: string; indexMode: string; indexes: number[] } | null {
+  // 匹配 !index 或 .index 格式
   const match = selector.match(/^(.*?)([!.])([0-9:,.-]+)$/)
   if (!match) return null
 
   const baseSelector = match[1]
-  const indexMode = match[2]
+  const indexMode = match[2] // '!' 或 '.'
   const indexStr = match[3]
 
+  // 解析索引
   const indexes: number[] = []
   const parts = indexStr.split(':')
   for (const part of parts) {
@@ -47,6 +54,9 @@ function processIndexSelector(selector: string): { baseSelector: string; indexMo
   return { baseSelector, indexMode, indexes }
 }
 
+/**
+ * 提取元素属性值
+ */
 function extractValue($: cheerio.CheerioAPI, el: any, attribute?: string): string | null {
   if (attribute === 'text' || !attribute) {
     return $(el).text().trim() || null
@@ -63,12 +73,10 @@ function extractValue($: cheerio.CheerioAPI, el: any, attribute?: string): strin
   if (attribute === 'tag') {
     return el.name || null
   }
+  // 属性提取
   return $(el).attr(attribute) || null
 }
 
-/**
- * 执行 CSS 选择器，支持 &&（合并）、%%（矩阵合并）
- */
 export function executeCss(
   source: any,
   expression: string,
@@ -81,60 +89,17 @@ export function executeCss(
   try {
     const $ = cheerio.load(html)
 
-    // ===== 处理 &&（合并多个选择器结果） =====
-    if (expression.includes('&&')) {
-      const parts = expression.split('&&').map(s => s.trim())
-      const allResults: string[] = []
-      for (const part of parts) {
-        const result = executeCss(source, part, attribute)
-        if (result !== null && result !== undefined) {
-          if (Array.isArray(result)) {
-            allResults.push(...result.map(String))
-          } else {
-            allResults.push(String(result))
-          }
-        }
-      }
-      return allResults.length > 0 ? allResults : null
-    }
-
-    // ===== 处理 %%（矩阵合并） =====
-    if (expression.includes('%%')) {
-      const parts = expression.split('%%').map(s => s.trim())
-      const matrixResults: string[][] = []
-      for (const part of parts) {
-        const result = executeCss(source, part, attribute)
-        if (result !== null && result !== undefined) {
-          if (Array.isArray(result)) {
-            matrixResults.push(result.map(String))
-          } else {
-            matrixResults.push([String(result)])
-          }
-        } else {
-          matrixResults.push([])
-        }
-      }
-      // 按索引对齐合并
-      const maxLen = Math.max(...matrixResults.map(arr => arr.length))
-      const merged: string[] = []
-      for (let i = 0; i < maxLen; i++) {
-        for (const arr of matrixResults) {
-          if (i < arr.length) {
-            merged.push(arr[i])
-          }
-        }
-      }
-      return merged.length > 0 ? merged : null
-    }
-
-    // ===== 正常执行选择器 =====
+    // 检查是否有索引选择器
     const indexInfo = processIndexSelector(expression)
+
     let elements: any
 
     if (indexInfo) {
+      // 先获取基础选择器的所有元素
       const allElements = $(indexInfo.baseSelector)
       if (allElements.length === 0) return null
 
+      // 根据索引模式筛选
       const selected: any[] = []
       const totalLen = allElements.length
 
@@ -149,6 +114,7 @@ export function executeCss(
       }
 
       if (indexInfo.indexMode === '!') {
+        // 排除模式：返回除指定索引外的所有元素
         const excludeSet = new Set(selected)
         const result: any[] = []
         for (let i = 0; i < totalLen; i++) {
@@ -158,9 +124,11 @@ export function executeCss(
         }
         elements = result
       } else {
+        // 选择模式：只返回指定索引的元素
         elements = selected
       }
     } else {
+      // 标准选择器
       elements = $(expression)
     }
 

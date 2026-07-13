@@ -1,315 +1,188 @@
+import { getGlobalHttpClient } from './network/client.js'
 import { parseAndExecute } from './rule-parser/index.js'
-import { getGlobalHttpClient } from './network/index.js'
-import { buildUrl, buildHeaders, resolveUrl, cleanIntro } from './utils/url.js'
-import { processVariables, executeInitRule, variableStore } from './rule-parser/variable.js'
-import type { BookSource, Book, ExploreRule } from '../shared/types.js'
+import { resolveUrl } from './utils/url.js'
+import type { Book, BookSource } from '../shared/types.js'
 
-export interface ExploreOptions {
-  page?: number
-  timeout?: number
-}
-
-/**
- * 执行 JS 代码（用于 exploreUrl 中的 @js: 和 <js>）
- */
-function evalJs(code: string, context: any): any {
-  try {
-    // 使用 Function 构造器执行（安全沙箱）
-    const fn = new Function(
-      'source',
-      'baseUrl',
-      'page',
-      'key',
-      'result',
-      'java',
-      `"use strict"; return (${code})`
-    )
-    return fn(
-      context.source,
-      context.baseUrl,
-      context.page || 1,
-      context.key || '',
-      context.result || null,
-      context.java || null
-    )
-  } catch (e: any) {
-    console.error('[Explore] JS 执行失败:', e.message)
-    return null
+export interface Category {
+  title: string
+  url: string
+  style?: {
+    layout_flexGrow?: number
+    layout_flexBasisPercent?: number
   }
 }
 
 /**
- * 处理 exploreUrl（支持 <js>、@js:、{{page}}）
+ * 解析发现分类列表
+ * 支持三种格式：
+ * 1. JSON 数组
+ * 2. 换行分隔（title::url）
+ * 3. <js> 标签执行
  */
-function processExploreUrl(exploreUrl: string, options: ExploreOptions, context: any): string {
-  if (!exploreUrl) return ''
-
-  let processed = exploreUrl
-
-  // 1. 处理 <js> 标签
-  const jsTagMatch = processed.match(/<js>([\s\S]*?)<\/js>/)
-  if (jsTagMatch) {
-    const code = jsTagMatch[1].trim()
-    try {
-      const result = evalJs(code, context)
-      if (result && typeof result === 'string') {
-        processed = processed.replace(/<js>[\s\S]*?<\/js>/, result)
-      }
-    } catch (e) {
-      console.error('[Explore] <js> 执行失败:', e)
-    }
-  }
-
-  // 2. 处理 @js: 前缀
-  if (processed.startsWith('@js:')) {
-    const code = processed.substring(4).trim()
-    try {
-      const result = evalJs(code, context)
-      if (result && typeof result === 'string') {
-        processed = result
-      }
-    } catch (e) {
-      console.error('[Explore] @js: 执行失败:', e)
-    }
-  }
-
-  // 3. 替换 {{page}}
-  const page = options.page || 1
-  processed = processed.replace(/\{\{page\}\}/g, String(page))
-
-  // 4. 替换 {{key}}
-  processed = processed.replace(/\{\{key\}\}/g, '')
-
-  return processed
-}
-
-/**
- * 解析分类 URL（支持 JSON 数组、换行分隔、JS 动态生成）
- */
-export function parseExploreCategories(
-  exploreUrl: string,
-  source: BookSource,
-  options: ExploreOptions = {}
-): Array<{ title: string; url: string }> {
+export function getExploreCategories(source: BookSource): Category[] {
+  const exploreUrl = source.exploreUrl
   if (!exploreUrl) return []
 
-  const context = {
-    source,
-    baseUrl: source.url,
-    page: options.page || 1,
-    key: '',
-    result: null,
-    java: null,
-  }
+  const trimmed = exploreUrl.trim()
 
-  // 处理 JS 动态生成
-  const processed = processExploreUrl(exploreUrl, options, context)
-
-  // 解析 JSON 数组
-  if (processed.trim().startsWith('[')) {
+  // 1. JSON 数组
+  if (trimmed.startsWith('[')) {
     try {
-      const parsed = JSON.parse(processed)
+      const parsed = JSON.parse(trimmed)
       if (Array.isArray(parsed)) {
-        return parsed
-          .filter((item: any) => item.title && item.url)
-          .map((item: any) => ({
-            title: String(item.title),
-            url: String(item.url),
-          }))
+        return parsed.map(item => ({
+          title: item.title || '未命名',
+          url: item.url || '',
+          style: item.style || undefined,
+        }))
       }
-    } catch (e) {
-      console.warn('[Explore] JSON 解析失败:', e)
+    } catch {
+      console.warn('[Explore] JSON 解析失败:', trimmed)
     }
   }
 
-  // 解析换行分隔
-  if (processed.includes('\n')) {
-    const lines = processed.split('\n')
-      .filter(line => line.trim() && line.includes('::'))
+  // 2. 换行分隔（title::url）
+  if (trimmed.includes('\n') && trimmed.includes('::')) {
+    return trimmed.split('\n')
+      .filter(line => line.includes('::'))
       .map(line => {
-        const parts = line.split('::')
-        return {
-          title: parts[0].trim(),
-          url: parts.slice(1).join('::').trim(),
-        }
+        const [title, url] = line.split('::').map(s => s.trim())
+        return { title, url }
       })
-      .filter(item => item.url)
-    if (lines.length > 0) return lines
   }
 
-  // 如果是单个 URL，返回默认分类
-  if (processed.startsWith('http://') || processed.startsWith('https://')) {
-    return [{ title: '全部', url: processed }]
+  // 3. <js> 标签执行
+  if (trimmed.includes('<js>')) {
+    try {
+      // 提取 JS 代码
+      const jsMatch = trimmed.match(/<js>([\s\S]*?)<\/js>/)
+      if (jsMatch) {
+        const jsCode = jsMatch[1].trim()
+        // 使用引擎的 JS 执行器（需要传入 source 作为上下文）
+        const result = parseAndExecute(source, `@js:${jsCode}`, { source })
+        if (Array.isArray(result)) {
+          return result.map(item => ({
+            title: item.title || '未命名',
+            url: item.url || '',
+            style: item.style || undefined,
+          }))
+        }
+      }
+    } catch (e) {
+      console.warn('[Explore] <js> 执行失败:', e)
+    }
   }
 
   return []
 }
 
 /**
- * 发现 - 获取书籍列表
+ * 获取分类下的书籍列表
+ * 复用搜索解析逻辑，规则来源优先 ruleExplore，回退 ruleSearch
  */
-export async function explore(
+export async function getExploreBooks(
   source: BookSource,
-  exploreUrl: string,
-  options: ExploreOptions = {}
+  categoryUrl: string,
+  page: number = 1
 ): Promise<Book[]> {
-  const page = options.page || 1
-  const timeout = options.timeout || 30000
+  const httpClient = getGlobalHttpClient()
 
-  // 如果书源没有启用发现，返回空
-  if (source.enabledExplore === false) {
+  // 替换 {{page}} 占位符
+  let url = categoryUrl.replace(/\{\{page\}\}/g, String(page))
+
+  // 如果 URL 还是包含占位符，说明格式不对，返回空
+  if (url.includes('{{')) {
+    console.warn('[Explore] URL 仍有未替换的占位符:', url)
     return []
   }
 
-  // 处理 exploreUrl
-  const context = {
-    source,
-    baseUrl: source.url,
-    page,
-    key: '',
-    result: null,
-    java: null,
+  // 处理相对路径
+  if (!url.startsWith('http://') && !url.startsWith('https://')) {
+    const base = source.url.replace(/\/+$/, '')
+    url = url.startsWith('/') ? base + url : base + '/' + url
   }
 
-  const processedUrl = processExploreUrl(exploreUrl, options, context)
+  // 请求
+  const response = await httpClient.request({
+    url,
+    method: 'GET',
+    headers: source.header ? JSON.parse(source.header) : {},
+    timeout: 30000,
+  })
 
-  // 如果是 JS 生成的 JSON，直接解析
-  if (processedUrl.trim().startsWith('[')) {
-    try {
-      const parsed = JSON.parse(processedUrl)
-      if (Array.isArray(parsed)) {
-        return parsed.map((item: any) => ({
-          id: `explore_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
-          sourceId: source.id,
-          sourceName: source.name,
-          name: item.title || item.name || '未命名',
-          author: item.author || '未知作者',
-          coverUrl: item.coverUrl || null,
-          intro: item.intro || null,
-          kind: item.kind || null,
-          lastChapter: item.lastChapter || null,
-          bookUrl: item.url || item.bookUrl || '',
-          tocUrl: item.tocUrl || null,
-          createdAt: new Date().toISOString(),
-          updatedAt: new Date().toISOString(),
-        }))
-      }
-    } catch (e) {
-      console.warn('[Explore] JSON 解析失败:', e)
-    }
+  if (response.status < 200 || response.status >= 300) {
+    console.warn('[Explore] 请求失败:', response.status)
+    return []
   }
 
-  // 构建请求 URL
-  const finalUrl = buildUrl(processedUrl, source.url, { page: String(page) })
+  const html = response.data
 
-  const httpClient = getGlobalHttpClient()
-  const headers = source.header ? buildHeaders(source, {}) : {
-    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+  // 选择规则：优先 ruleExplore，回退 ruleSearch
+  const rule = source.ruleExplore || source.ruleSearch
+  if (!rule || !rule.bookList) {
+    console.warn('[Explore] 没有可用的规则 (ruleExplore 或 ruleSearch)')
+    return []
   }
 
-  try {
-    const response = await httpClient.request({
-      url: finalUrl,
-      method: 'GET',
-      headers,
-      timeout,
-    })
-
-    if (response.status < 200 || response.status >= 300) {
-      throw new Error(`HTTP ${response.status}`)
-    }
-
-    const rule = source.ruleExplore
-    if (!rule || !rule.bookList) {
-      return []
-    }
-
-    const html = response.data
-    const parseContext = {
-      source,
-      baseUrl: source.url,
-      page,
-      key: '',
-      json: null,
-    }
-
-    // 检查是否为 JSON 响应
-    let listResult: any = null
-    const contentType = response.headers['content-type'] || ''
-    if (contentType.includes('application/json')) {
-      try {
-        const json = typeof html === 'string' ? JSON.parse(html) : html
-        const list = json.data || json.list || json.books || json.items || json
-        if (Array.isArray(list)) {
-          listResult = list
-        } else {
-          listResult = parseAndExecute(json, rule.bookList, { ...parseContext, json })
-        }
-      } catch (e) {
-        // 不是 JSON，继续 HTML 解析
-      }
-    }
-
-    if (!listResult) {
-      listResult = parseAndExecute(html, rule.bookList, parseContext)
-    }
-
-    if (!listResult || !Array.isArray(listResult)) {
-      return []
-    }
-
-    const books: Book[] = []
-    for (const item of listResult) {
-      const book = parseExploreItem(item, source, rule)
-      if (book) {
-        books.push(book)
-      }
-    }
-
-    return books
-  } catch (error: any) {
-    throw new Error(`发现失败 (${source.name}): ${error.message}`)
-  }
+  // 复用搜索解析逻辑（从 search.ts 中提取的 parseBookItem 逻辑）
+  return parseExploreBooks(html, rule, source)
 }
 
 /**
- * 解析单个发现项
+ * 解析书籍列表（从搜索模块复制的逻辑）
  */
-function parseExploreItem(item: any, source: BookSource, rule: ExploreRule): Book | null {
-  try {
-    const context = { source, baseUrl: source.url, item }
+function parseExploreBooks(
+  html: string,
+  rule: any,
+  source: BookSource
+): Book[] {
+  const context = { source, baseUrl: source.url }
 
-    const name = parseAndExecute(item, rule.name || '', context)
-    if (!name) return null
+  // 获取书籍列表
+  let bookList = parseAndExecute(html, rule.bookList, context)
+  if (!bookList || !Array.isArray(bookList)) {
+    return []
+  }
 
-    const bookUrl = parseAndExecute(item, rule.bookUrl || '', context)
-    if (!bookUrl) return null
+  const books: Book[] = []
 
-    const author = parseAndExecute(item, rule.author || '', context) || '未知作者'
-    const coverUrl = parseAndExecute(item, rule.coverUrl || '', context)
-    const intro = parseAndExecute(item, rule.intro || '', context)
-    const kind = parseAndExecute(item, rule.kind || '', context)
-    const lastChapter = parseAndExecute(item, rule.lastChapter || '', context)
+  for (const item of bookList) {
+    const itemContext = { ...context, result: item }
 
-    const resolvedBookUrl = resolveUrl(String(bookUrl), source.url)
+    const name = parseAndExecute(item, rule.name || '', itemContext)
+    if (!name) continue
 
-    return {
-      id: resolvedBookUrl || `explore_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+    const author = parseAndExecute(item, rule.author || '', itemContext) || '未知作者'
+    const coverUrl = parseAndExecute(item, rule.coverUrl || '', itemContext)
+    const intro = parseAndExecute(item, rule.intro || '', itemContext)
+    const bookUrl = parseAndExecute(item, rule.bookUrl || '', itemContext)
+    const lastChapter = parseAndExecute(item, rule.lastChapter || '', itemContext)
+    const kind = parseAndExecute(item, rule.kind || '', itemContext)
+
+    // 处理 bookUrl
+    let resolvedBookUrl = bookUrl || ''
+    if (!resolvedBookUrl) {
+      const nameSlug = String(name).replace(/[^a-zA-Z0-9\u4e00-\u9fa5]/g, '')
+      resolvedBookUrl = `book_${Date.now()}_${nameSlug}`
+    }
+    resolvedBookUrl = resolveUrl(resolvedBookUrl, source.url)
+
+    books.push({
+      id: resolvedBookUrl || `book_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
       sourceId: source.id,
       sourceName: source.name,
       name: String(name).trim(),
       author: String(author).trim(),
       coverUrl: coverUrl ? resolveUrl(String(coverUrl), source.url) : null,
-      intro: intro ? cleanIntro(String(intro)) : null,
+      intro: intro ? String(intro).trim().substring(0, 500) : null,
       kind: kind ? String(kind).trim() : null,
       lastChapter: lastChapter ? String(lastChapter).trim() : null,
       bookUrl: resolvedBookUrl,
       tocUrl: null,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
-    }
-  } catch (error) {
-    return null
+    })
   }
-}
 
+  return books
+}

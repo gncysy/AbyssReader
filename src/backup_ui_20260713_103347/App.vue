@@ -9,7 +9,6 @@
       <n-notification-provider>
         <n-dialog-provider>
           <div class="app-shell" :data-theme="currentTheme" @dblclick="toggleMaximize">
-            <!-- 标题栏 -->
             <div class="titlebar" :data-theme="currentTheme" @dblclick="toggleMaximize">
               <div class="titlebar-drag"></div>
               <div class="titlebar-actions">
@@ -19,7 +18,6 @@
               </div>
             </div>
 
-            <!-- 主体 -->
             <div class="app-body">
               <nav class="app-sidebar">
                 <div class="sidebar-logo">
@@ -50,29 +48,13 @@
               <main class="app-main">
                 <div class="main-glow"></div>
                 <router-view v-slot="{ Component }">
-                  <transition name="page" mode="out-in">
+                  <keep-alive :include="keepAlivePages">
                     <component :is="Component" />
-                  </transition>
+                  </keep-alive>
                 </router-view>
               </main>
             </div>
           </div>
-
-          <!-- 书籍详情浮窗（全局） -->
-          <BookDetail
-            v-if="bookshelfStore.showDetail"
-            :book="bookshelfStore.detailBook!"
-            :source="bookshelfStore.detailSource"
-            @close="bookshelfStore.closeDetail()"
-          />
-
-          <!-- 阅读器（全屏） -->
-          <Reader
-            v-if="bookshelfStore.showReader"
-            :book="bookshelfStore.readerBook!"
-            :source="bookshelfStore.readerSource"
-            @close="bookshelfStore.closeReader()"
-          />
         </n-dialog-provider>
       </n-notification-provider>
     </n-message-provider>
@@ -91,16 +73,16 @@ import {
   SettingsOutline,
   AppsOutline,
 } from '@vicons/ionicons5'
-import { useBookshelfStore, useReadingStore } from '@/store'
+import { useReadingStore } from '@/store'
 import { ROUTES, APP_VERSION } from '@shared/constants'
-import BookDetail from '@/components/BookDetail.vue'
-import Reader from '@/components/Reader.vue'
 
 const route = useRoute()
 const router = useRouter()
-const bookshelfStore = useBookshelfStore()
 const readingStore = useReadingStore()
 const currentRoute = computed(() => route.name)
+
+// Keep-alive 页面列表
+const keepAlivePages = ['bookshelf', 'search', 'sourcemanager']
 
 // ===== 从 Pinia 获取主题 =====
 const currentTheme = computed({
@@ -124,7 +106,6 @@ function applyThemeToDOM(theme: string) {
 function setTheme(theme: string) {
   readingStore.setTheme(theme)
   applyThemeToDOM(theme)
-  // 通知主进程更新标题栏颜色
   window.electronAPI?.invoke?.('update-title-bar-overlay', theme).catch(() => {})
 }
 
@@ -209,7 +190,6 @@ watch(currentTheme, (val) => {
 </script>
 
 <style scoped>
-/* 原有样式保持不变，新增全局浮窗覆盖样式 */
 * {
   box-sizing: border-box;
   margin: 0;

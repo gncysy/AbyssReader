@@ -12,12 +12,6 @@ export async function getToc(
     cachedHtml?: string
   }
 ): Promise<Chapter[]> {
-  // 如果 tocUrl 无效，返回空数组
-  if (!tocUrl || typeof tocUrl !== 'string' || tocUrl === '' || !tocUrl.startsWith('http')) {
-    console.warn('[Toc] tocUrl 无效:', tocUrl)
-    return []
-  }
-
   const httpClient = getGlobalHttpClient()
   const rule = source.ruleToc
 
@@ -95,6 +89,7 @@ export async function getToc(
     const item = chapterList[i]
     const itemContext = { ...context, result: item }
 
+    // 检测卷名
     if (rule.isVolume) {
       const volume = parseAndExecute(item, rule.isVolume || '', itemContext)
       if (volume && typeof volume === 'string' && volume.trim()) {
@@ -106,23 +101,11 @@ export async function getToc(
 
     const title = parseAndExecute(item, rule.chapterName || '', itemContext) || '无标题'
     const url = parseAndExecute(item, rule.chapterUrl || '', itemContext)
-
-    // 检查 URL 有效性
-    let finalUrl = url
-    if (!finalUrl || typeof finalUrl !== 'string' || !finalUrl.startsWith('http')) {
-      if (item.url && typeof item.url === 'string' && item.url.startsWith('http')) {
-        finalUrl = item.url
-      } else if (item.bookUrl && typeof item.bookUrl === 'string' && item.bookUrl.startsWith('http')) {
-        finalUrl = item.bookUrl
-      } else {
-        console.warn(`[Toc] 章节 ${i} URL 无效，跳过:`, finalUrl)
-        continue
-      }
-    }
-
     const isVip = parseAndExecute(item, rule.isVip || '', itemContext)
     const isPay = parseAndExecute(item, rule.isPay || '', itemContext)
     const updateTime = parseAndExecute(item, rule.updateTime || '', itemContext)
+
+    if (!url) continue
 
     let chapterTitle = String(title).trim()
     if (isVolumeActive && currentVolume) {
@@ -132,7 +115,7 @@ export async function getToc(
     chapters.push({
       id: i,
       title: chapterTitle,
-      url: resolveUrl(String(finalUrl), finalRedirectUrl),
+      url: resolveUrl(String(url), finalRedirectUrl),
       index: i,
       isVip: isVip === 'true' || isVip === true,
       isPay: isPay === 'true' || isPay === true,
@@ -141,7 +124,7 @@ export async function getToc(
     })
   }
 
-  // 处理下一页目录
+  // 获取下一页目录
   if (rule.nextTocUrl) {
     const nextUrls = parseAndExecute(html, rule.nextTocUrl, context)
     if (nextUrls) {
@@ -151,6 +134,7 @@ export async function getToc(
         .filter(u => u && u !== tocUrl)
 
       if (validUrls.length === 1) {
+        // 单页：递归获取
         try {
           const nextChapters = await getToc(source, validUrls[0], {
             redirectUrl: finalRedirectUrl,
@@ -160,6 +144,7 @@ export async function getToc(
           console.warn('[Toc] 获取下一页目录失败:', err)
         }
       } else if (validUrls.length > 1) {
+        // 多页：并发获取
         const promises = validUrls.map(async url => {
           try {
             return await getToc(source, url, { redirectUrl: finalRedirectUrl })
@@ -193,3 +178,4 @@ export async function getToc(
   console.log('[Toc] 返回章节数:', unique.length)
   return unique
 }
+

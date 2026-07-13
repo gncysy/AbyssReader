@@ -21,13 +21,11 @@ export interface RuleContext {
   baseUrl?: string
   redirectUrl?: string
   variables?: Record<string, any>
-  book?: any
-  chapter?: any
   [key: string]: any
 }
 
 // ============================================
-// 变量存储
+// 变量存储（@put / @get）
 // ============================================
 
 const variableStore = new Map<string, any>()
@@ -45,120 +43,6 @@ export function clearVariables(): void {
 }
 
 // ============================================
-// 规则预处理
-// ============================================
-
-function preprocessRule(rule: string, context: RuleContext): string {
-  if (!rule || typeof rule !== 'string') return rule
-
-  let result = rule
-  let maxIterations = 10
-
-  // 1. 处理 <js>...</js> 标签
-  while (maxIterations-- > 0) {
-    const match = result.match(/<js>([\s\S]*?)<\/js>/)
-    if (!match) break
-    try {
-      const jsCode = match[1].trim()
-      const evalResult = executeJs(context.source || {}, jsCode, context)
-      const replacement = evalResult !== null && evalResult !== undefined ? String(evalResult) : ''
-      result = result.replace(match[0], replacement)
-    } catch (e) {
-      console.warn('[Preprocess] <js> 执行失败:', e)
-      result = result.replace(match[0], '')
-    }
-  }
-
-  // 2. 处理 {{...}} 模板语法（支持 JSONPath + ## 清理）
-  maxIterations = 10
-  while (maxIterations-- > 0) {
-    const match = result.match(/\{\{([\s\S]*?)\}\}/)
-    if (!match) break
-    try {
-      let expr = match[1].trim()
-      
-      let cleanPattern: string | null = null
-      let cleanReplacement: string = ''
-      let finalExpr = expr
-      
-      if (expr.includes('##')) {
-        const parts = expr.split('##')
-        finalExpr = parts[0].trim()
-        if (parts.length > 1) {
-          cleanPattern = parts[1].trim()
-        }
-        if (parts.length > 2) {
-          cleanReplacement = parts[2] || ''
-        }
-        console.log('[Preprocess] 检测到 ## 清理规则, 表达式:', finalExpr, '模式:', cleanPattern)
-      }
-      
-      let resultValue = ''
-      
-      // 检测是否是 JSONPath 表达式（以 $ 开头）或 JSONPath 风格的表达式
-      if (finalExpr.startsWith('$') || finalExpr.startsWith('$.')) {
-        try {
-          const jsonPathResult = executeJsonPath(context.source || {}, finalExpr)
-          resultValue = jsonPathResult !== null && jsonPathResult !== undefined ? String(jsonPathResult) : ''
-          console.log('[Preprocess] JSONPath 结果:', resultValue, '表达式:', finalExpr)
-        } catch (e) {
-          console.warn('[Preprocess] JSONPath 失败，尝试 JS:', e)
-          const evalResult = executeJs(context.source || {}, finalExpr, context)
-          resultValue = evalResult !== null && evalResult !== undefined ? String(evalResult) : ''
-        }
-      } else {
-        const evalResult = executeJs(context.source || {}, finalExpr, context)
-        resultValue = evalResult !== null && evalResult !== undefined ? String(evalResult) : ''
-      }
-      
-      if (cleanPattern && resultValue) {
-        try {
-          const regex = new RegExp(cleanPattern, 'g')
-          resultValue = resultValue.replace(regex, cleanReplacement || '')
-          console.log('[Preprocess] 清理后:', resultValue)
-        } catch (e) {
-          console.warn('[Preprocess] 清理规则失败:', cleanPattern)
-        }
-      }
-      
-      result = result.replace(match[0], resultValue)
-    } catch (e) {
-      console.warn('[Preprocess] {{}} 执行失败:', e)
-      result = result.replace(match[0], '')
-    }
-  }
-
-  // 3. 处理内联 @js:
-  maxIterations = 10
-  while (maxIterations-- > 0) {
-    const match = result.match(/@js:\s*([\s\S]*?)(?=\s*(?:@\w+:|$))/)
-    if (!match) break
-    try {
-      const jsCode = match[1].trim()
-      const evalResult = executeJs(context.source || {}, jsCode, context)
-      const replacement = evalResult !== null && evalResult !== undefined ? String(evalResult) : ''
-      result = result.replace(match[0], replacement)
-    } catch (e) {
-      console.warn('[Preprocess] @js: 执行失败:', e)
-      result = result.replace(match[0], '')
-    }
-  }
-
-  // 4. 简单占位符兜底
-  if (context.key !== undefined) {
-    result = result.replace(/\{\{key\}\}/g, String(context.key))
-  }
-  if (context.page !== undefined) {
-    result = result.replace(/\{\{page\}\}/g, String(context.page))
-  }
-  if (context.baseUrl) {
-    result = result.replace(/\{\{baseUrl\}\}/g, String(context.baseUrl))
-  }
-
-  return result
-}
-
-// ============================================
 // 规则解析
 // ============================================
 
@@ -169,6 +53,7 @@ export function parseRule(rule: string): ParsedRule | null {
   let cleanPattern: string | null = null
   let cleanReplacement: string | null = null
 
+  // 分离清理规则 ##
   const cleanParts = trimmed.split('##')
   if (cleanParts.length >= 3) {
     const selectorPart = cleanParts.slice(0, cleanParts.length - 2).join('##')
@@ -183,7 +68,7 @@ export function parseRule(rule: string): ParsedRule | null {
 
   let parsed: ParsedRule | null = null
 
-  // @put:
+  // @put: 规则（存储变量）
   if (trimmed.match(/^@put:/i)) {
     const match = trimmed.match(/^@put:\s*\{([^}]+)\}/i)
     if (match) {
@@ -191,42 +76,31 @@ export function parseRule(rule: string): ParsedRule | null {
         const pairs = match[1].split(',').map(p => p.trim().split(':'))
         for (const [key, value] of pairs) {
           if (key && value) {
-            putVariable(key.trim(), value.trim())
+            const parsedValue = parseRule(value.trim())
+            if (parsedValue) {
+              // 暂存为特殊类型，执行时再取值
+              parsed = {
+                type: 'text',
+                expression: `@put:${key}:${value.trim()}`,
+                attribute: null,
+                cleanPattern: null,
+                cleanReplacement: null,
+                flags: null,
+                original: rule,
+              }
+            }
           }
         }
       } catch {}
     }
-    parsed = {
-      type: 'text',
-      expression: '',
-      attribute: null,
-      cleanPattern: null,
-      cleanReplacement: null,
-      flags: null,
-      original: rule,
-    }
   }
 
-  // @get:
+  // @get: 规则（读取变量）
   if (trimmed.match(/^@get:/i)) {
     const key = trimmed.replace(/^@get:\s*\{?([^}]+)\}?/i, '$1').trim()
-    const value = getVariable(key)
     parsed = {
       type: 'text',
-      expression: value !== undefined ? String(value) : '',
-      attribute: null,
-      cleanPattern: null,
-      cleanReplacement: null,
-      flags: null,
-      original: rule,
-    }
-  }
-
-  // ===== 检测是否为 URL（纯文本） =====
-  if (!parsed && (trimmed.startsWith('http://') || trimmed.startsWith('https://'))) {
-    parsed = {
-      type: 'text',
-      expression: trimmed,
+      expression: `@get:${key}`,
       attribute: null,
       cleanPattern: null,
       cleanReplacement: null,
@@ -254,6 +128,7 @@ export function parseRule(rule: string): ParsedRule | null {
       }
       parsed = { type: 'text', expression: text, attribute: null, cleanPattern, cleanReplacement, flags: null, original: rule }
     } else {
+      // CSS 选择器
       let expression = trimmed
       let attribute: string | null = null
       const attrMatch = expression.match(/^(.+)@([a-zA-Z-]+)$/)
@@ -287,6 +162,28 @@ export function executeRule(
 
   const { type, expression, attribute, cleanPattern, cleanReplacement } = parsedRule
 
+  // 处理 @put:
+  if (type === 'text' && expression.startsWith('@put:')) {
+    const match = expression.match(/^@put:([^:]+):(.+)$/)
+    if (match) {
+      const key = match[1].trim()
+      const ruleStr = match[2].trim()
+      const parsed = parseRule(ruleStr)
+      if (parsed) {
+        const value = executeRule(source, parsed, context)
+        putVariable(key, value)
+        return value
+      }
+    }
+    return null
+  }
+
+  // 处理 @get:
+  if (type === 'text' && expression.startsWith('@get:')) {
+    const key = expression.replace(/^@get:/, '').trim()
+    return getVariable(key)
+  }
+
   let result: any = null
 
   switch (type) {
@@ -312,23 +209,22 @@ export function executeRule(
       result = null
   }
 
+  // 应用清理规则
   if (result !== null && result !== undefined && cleanPattern) {
-    try {
-      const regex = new RegExp(cleanPattern, 'g')
-      const replacement = cleanReplacement || ''
-      if (typeof result === 'string') {
-        result = result.replace(regex, replacement)
-      } else if (Array.isArray(result)) {
-        result = result.map(item => typeof item === 'string' ? item.replace(regex, replacement) : item)
-      }
-    } catch (e) {}
+    const regex = new RegExp(cleanPattern, 'g')
+    const replacement = cleanReplacement || ''
+    if (typeof result === 'string') {
+      result = result.replace(regex, replacement)
+    } else if (Array.isArray(result)) {
+      result = result.map(item => typeof item === 'string' ? item.replace(regex, replacement) : item)
+    }
   }
 
   return result
 }
 
 // ============================================
-// 管道执行
+// 管道执行（支持 ||、&&、%% 组合）
 // ============================================
 
 export function parseAndExecute(
@@ -338,21 +234,21 @@ export function parseAndExecute(
 ): any {
   if (!source || !rule) return null
 
-  const processedRule = preprocessRule(rule, context)
-
+  // 拆分组合规则：||、&&、%%
   const combinators = ['||', '&&', '%%']
   let usedCombinator: string | null = null
-  let parts: string[] = [processedRule]
+  let parts: string[] = [rule]
 
   for (const comb of combinators) {
-    if (processedRule.includes(comb)) {
+    if (rule.includes(comb)) {
       usedCombinator = comb
-      parts = processedRule.split(comb).map(s => s.trim())
+      parts = rule.split(comb).map(s => s.trim())
       break
     }
   }
 
   if (parts.length === 1) {
+    // 单规则
     const parsed = parseRule(parts[0])
     if (parsed) {
       return executeRule(source, parsed, context)
@@ -360,6 +256,7 @@ export function parseAndExecute(
     return null
   }
 
+  // 多规则组合执行
   const results: any[] = []
   for (const part of parts) {
     const parsed = parseRule(part)
@@ -375,11 +272,14 @@ export function parseAndExecute(
 
   switch (usedCombinator) {
     case '||':
+      // 或：返回第一个有效结果
       return validResults.length > 0 ? validResults[0] : null
 
-    case '&&': {
+    case '&&':
+      // 与：合并所有结果
       if (validResults.length === 0) return null
       if (validResults.length === 1) return validResults[0]
+      // 合并为字符串数组
       const merged: string[] = []
       for (const r of validResults) {
         if (typeof r === 'string') {
@@ -391,9 +291,9 @@ export function parseAndExecute(
         }
       }
       return merged
-    }
 
-    case '%%': {
+    case '%%':
+      // 矩阵合并：按索引对齐
       if (validResults.length === 0) return null
       const matrixResults = validResults.map(r => Array.isArray(r) ? r : [r])
       const maxLen = Math.max(...matrixResults.map(arr => arr.length))
@@ -406,13 +306,13 @@ export function parseAndExecute(
         }
       }
       return matrixMerged
-    }
 
     default:
       return validResults.length > 0 ? validResults[0] : null
   }
 }
 
+// 兼容旧接口
 export function parseFallbackRule(rule: string): string[] {
   return rule.split(/\s*\|\|\s*/).filter(s => s.trim())
 }

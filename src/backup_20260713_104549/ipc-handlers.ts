@@ -586,7 +586,7 @@ export function setupIpcHandlers() {
       const response = await httpClient.request({
         url: testUrl,
         method: "GET",
-        headers: source.header ? (await import("../engine/source-helper.js")).parseHeader(source.header) || {} : {},
+        headers: source.header ? JSON.parse(source.header) : {},
         timeout: 10000,
       });
       const elapsed = Date.now() - start;
@@ -631,7 +631,7 @@ export function setupIpcHandlers() {
         const response = await httpClient.request({
           url: testUrl,
           method: "GET",
-          headers: source.header ? (await import("../engine/source-helper.js")).parseHeader(source.header) || {} : {},
+          headers: source.header ? JSON.parse(source.header) : {},
           timeout: 8000,
         });
         timeMs = Date.now() - start;
@@ -673,7 +673,7 @@ export function setupIpcHandlers() {
           await httpClient.request({
             url: testUrl,
             method: "GET",
-            headers: source.header ? (await import("../engine/source-helper.js")).parseHeader(source.header) || {} : {},
+            headers: source.header ? JSON.parse(source.header) : {},
             timeout: 8000,
           });
         }
@@ -737,7 +737,7 @@ export function setupIpcHandlers() {
           const response = await httpClient.request({
             url: processedUrl,
             method: "GET",
-            headers: source.header ? (await import("../engine/source-helper.js")).parseHeader(source.header) || {} : {},
+            headers: source.header ? JSON.parse(source.header) : {},
             timeout: 10000,
           });
 
@@ -927,11 +927,8 @@ export function setupIpcHandlers() {
   });
 
   ipcMain.handle("engine-get-toc", async (_event: any, source: any, tocUrl: string) => {
-    console.log("[IPC] engine-get-toc 被调用, tocUrl:", tocUrl)
-    console.log("[IPC] source.id:", source?.id, "source.name:", source?.name)
     try {
       const chapters = await getToc(source, tocUrl);
-            console.log("[IPC] engine-get-toc 返回章节数:", chapters?.length || 0)
       return { success: true, data: chapters };
     } catch (error: any) {
       console.error("[Engine] Get TOC error:", error);
@@ -994,7 +991,5 @@ export function setupIpcHandlers() {
 export function clearChapterCache() {
   chapterCache.clear();
 }
-
-
 
 

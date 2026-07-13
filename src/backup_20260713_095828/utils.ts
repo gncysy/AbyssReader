@@ -1,7 +1,6 @@
 import dayjs from "dayjs";
 import utc from "dayjs/plugin/utc.js";
 import { toSimplified } from "chinese-simple2traditional";
-import { getGlobalHttpClient } from "../../network/client.js";
 
 dayjs.extend(utc);
 
@@ -78,39 +77,18 @@ export const utils = {
     console.log("[书源JS]", ...args);
   },
 
-  /**
-   * 加载外部 JS 脚本
-   * 支持 HTTP/HTTPS URL 或本地文件路径
-   * @param path 脚本路径（URL 或本地文件路径）
-   * @returns 脚本内容（字符串）
-   */
+  // 使用动态 import 延迟加载，避免 Vite 静态分析警告
   async importScript(path: string): Promise<string> {
     try {
-      // HTTP/HTTPS URL
-      if (path.startsWith('http://') || path.startsWith('https://')) {
-        const httpClient = getGlobalHttpClient()
-        const response = await httpClient.request({
-          url: path,
-          method: 'GET',
-          timeout: 30000,
-        })
-        if (response.status >= 200 && response.status < 300) {
-          return response.data
-        }
-        throw new Error(`HTTP ${response.status}`)
-      }
-
-      // 本地文件
-      const fs = await import('fs/promises')
-      const content = await fs.readFile(path, "utf-8")
-      return content
-    } catch (error: any) {
-      console.error('[utils.importScript] 加载失败:', error.message)
-      return ''
+      const fs = await import('fs/promises');
+      const content = await fs.readFile(path, "utf-8");
+      return content;
+    } catch {
+      return "";
     }
   },
 
   random(): number {
     return Math.random();
   },
-}
+};

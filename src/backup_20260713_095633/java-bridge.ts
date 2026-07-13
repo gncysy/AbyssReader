@@ -17,11 +17,10 @@ export function buildJavaAPI(): any {
     // ===== 网络 =====
     ajax: network.ajax,
     post: network.post,
-    httpGet: network.httpGet,
+    get: network.httpGet,
     connect: network.connect,
     getStrResponse: network.getStrResponse,
     getByteResponse: network.getByteResponse,
-    ajaxAll: network.ajaxAll,
 
     // ===== Cookie =====
     cookie: network.cookie,
@@ -58,7 +57,7 @@ export function buildJavaAPI(): any {
 
     // ===== 上下文 =====
     put: context.put,
-    get: context.get,
+    getVar: context.get,
     clear: context.clear,
 
     // ===== UI =====
@@ -86,7 +85,19 @@ export function buildJavaAPI(): any {
     importScript: utils.importScript,
     random: utils.random,
 
-    // ===== 缓存文件 =====
+    // ===== 新增：并发请求 =====
+    ajaxAll: async (urls: string[]): Promise<any[]> => {
+      const promises = urls.map(async (url) => {
+        try {
+          return await network.ajax(url)
+        } catch {
+          return null
+        }
+      })
+      return Promise.all(promises)
+    },
+
+    // ===== 新增：缓存文件 =====
     cacheFile: async (url: string, saveTime?: number): Promise<string | null> => {
       const key = `cache_${cryptoApi.md5Encode(url)}`
       const cached = store.get(key)
@@ -105,7 +116,7 @@ export function buildJavaAPI(): any {
       }
     },
 
-    // ===== 获取 Cookie =====
+    // ===== 新增：获取 Cookie =====
     getCookie: async (tag: string, key?: string): Promise<string> => {
       const jar = httpClient.getCookieJar()
       try {
@@ -129,4 +140,3 @@ export function buildJavaAPI(): any {
     },
   }
 }
-

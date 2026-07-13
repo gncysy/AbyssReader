@@ -65,16 +65,6 @@ export class HttpClient {
   }
 
   async request(config: RequestConfig): Promise<ResponseData> {
-    // 如果 config 中有 source 和 header，先解析 header
-    let finalHeaders = config.headers || {}
-    if ((config as any).source && (config as any).source.header) {
-      const { parseHeader } = await import('../source-helper.js')
-      const parsed = parseHeader((config as any).source.header, { source: (config as any).source })
-      if (parsed) {
-        finalHeaders = { ...parsed, ...finalHeaders }
-      }
-    }
-    // 继续原有逻辑...
     try {
       const urlObj = new URL(config.url)
       if (isBlockedHost(urlObj.hostname)) {
@@ -88,7 +78,9 @@ export class HttpClient {
     const axiosConfig: AxiosRequestConfig = {
       url: config.url,
       method: config.method || 'GET',
-      headers: { ...this.defaultHeaders, ...finalHeaders,
+      headers: {
+        ...this.defaultHeaders,
+        ...(config.headers || {}),
       },
       timeout: config.timeout || this.defaultTimeout,
       maxRedirects: config.followRedirect !== false ? 5 : 0,
@@ -278,5 +270,3 @@ export function createHttpClientForSource(sourceId: string): HttpClient {
     },
   })
 }
-
-

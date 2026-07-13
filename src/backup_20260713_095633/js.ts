@@ -55,22 +55,13 @@ export function executeJs(
     return null
   }
 
-  // 构建沙箱上下文 - 注入所有书源需要的变量
   const sandbox: Record<string, any> = {
-    // 核心对象
     source: context.source || source,
     result: context.result || source,
     baseUrl: context.baseUrl || '',
-    redirectUrl: context.redirectUrl || '',
     key: context.key || '',
     page: context.page || 1,
-    book: context.book || null,
-    chapter: context.chapter || null,
-
-    // java.* API
     java: buildJavaAPI(),
-
-    // 原生对象
     Math,
     JSON,
     Date,
@@ -78,8 +69,6 @@ export function executeJs(
     parseFloat,
     encodeURI: encodeURIComponent,
     decodeURI: decodeURIComponent,
-
-    // 工具函数
     trim: (s: any) => String(s).trim(),
     replace: (s: any, p: string, r: string) => String(s).replace(new RegExp(p, 'g'), r),
     split: (s: any, p: string) => String(s).split(p),
@@ -93,16 +82,11 @@ export function executeJs(
     isObject: (v: any) => typeof v === 'object' && v !== null && !Array.isArray(v),
   }
 
-  // 合并额外的上下文变量
   for (const [key, value] of Object.entries(context)) {
     if (key in sandbox) continue
     if (value === null || value === undefined ||
         typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
       sandbox[key] = value
-    } else if (Array.isArray(value) && value.every(v => typeof v !== 'function')) {
-      sandbox[key] = value
-    } else {
-      console.warn('[RuleParser.js] 拒绝注入复杂对象:', key, typeof value)
     }
   }
 

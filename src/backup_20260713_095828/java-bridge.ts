@@ -17,7 +17,7 @@ export function buildJavaAPI(): any {
     // ===== 网络 =====
     ajax: network.ajax,
     post: network.post,
-    httpGet: network.httpGet,
+    get: network.httpGet,
     connect: network.connect,
     getStrResponse: network.getStrResponse,
     getByteResponse: network.getByteResponse,
@@ -129,4 +129,3 @@ export function buildJavaAPI(): any {
     },
   }
 }
-

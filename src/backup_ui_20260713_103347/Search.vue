@@ -37,15 +37,13 @@
           <h3>{{ getSourceName(sourceId) }}</h3>
           <span>{{ searchResults[sourceId]?.length || 0 }} 本</span>
         </div>
-        <!-- 卡片网格 -->
-        <div class="books-grid">
+        <div class="result-list">
           <div
             v-for="book in searchResults[sourceId]"
             :key="book.bookUrl"
-            class="book-card"
-            @click="openBookDetail(book, sourceId)"
+            class="result-item"
           >
-            <div class="book-cover">
+            <div class="result-cover">
               <img
                 v-if="book.coverUrl"
                 :src="book.coverUrl"
@@ -54,11 +52,12 @@
               />
               <div v-else class="cover-placeholder">{{ book.name?.charAt(0) || '?' }}</div>
             </div>
-            <div class="book-info">
+            <div class="result-info">
               <h4>{{ book.name || '无标题' }}</h4>
               <p>{{ book.author || '佚名' }}</p>
-              <p v-if="book.lastChapter" class="book-last">{{ book.lastChapter }}</p>
+              <p v-if="book.lastChapter" class="result-last">{{ book.lastChapter }}</p>
             </div>
+            <button class="btn-add" @click="addToShelf(book, sourceId)">+ 添加</button>
           </div>
         </div>
       </div>
@@ -82,12 +81,14 @@
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useMessage } from 'naive-ui'
 import { store, engine as engineApi } from '@/api'
-import { useBookshelfStore } from '@/store'
 import { handleApiError } from '@/utils/error'
 import type { Book, BookSource } from '@shared/types'
 
+defineOptions({
+  name: 'Search'
+})
+
 const message = useMessage()
-const bookshelfStore = useBookshelfStore()
 const sources = ref<BookSource[]>([])
 const keyword = ref('')
 const loading = ref(false)
@@ -143,10 +144,36 @@ async function doSearch() {
   totalSources.value = enabledSources.length
   searchResults.value = {}
 
-  const cleanSources = enabledSources.map((source: any) => {
-    const clean = JSON.parse(JSON.stringify(source))
-    return clean
-  })
+  const cleanSources = enabledSources.map((source: any) => ({
+    id: source.id,
+    name: source.name,
+    url: source.url,
+    searchUrl: source.searchUrl,
+    ruleSearch: source.ruleSearch || {},
+    ruleBookInfo: source.ruleBookInfo || {},
+    ruleToc: source.ruleToc || {},
+    ruleContent: source.ruleContent || {},
+    ruleExplore: source.ruleExplore || {},
+    exploreUrl: source.exploreUrl || '',
+    enabled: source.enabled,
+    group: source.group || null,
+    comment: source.comment || null,
+    weight: source.weight || 0,
+    header: source.header || null,
+    enabledCookieJar: source.enabledCookieJar || false,
+    jsLib: source.jsLib || null,
+    loginUrl: source.loginUrl || null,
+    loginUi: source.loginUi || null,
+    respondTime: source.respondTime || 0,
+    lastUpdateTime: source.lastUpdateTime || Date.now(),
+    bookUrlPattern: source.bookUrlPattern || null,
+    code: source.code || null,
+    concurrentRate: source.concurrentRate || 0,
+    _legado: source._legado || false,
+    _desktop: true,
+  }))
+
+  const finalSources = JSON.parse(JSON.stringify(cleanSources))
 
   if (unlistenProgress) {
     unlistenProgress()
@@ -174,7 +201,7 @@ async function doSearch() {
   })
 
   try {
-    const result = await window.electronAPI.invoke('engine-batch-search-stream', cleanSources, kw)
+    const result = await window.electronAPI.invoke('engine-batch-search-stream', finalSources, kw)
 
     if (!result.success) {
       throw new Error(result.error)
@@ -224,13 +251,46 @@ async function doSearch() {
   }
 }
 
-function openBookDetail(book: Book, sourceId: string) {
+async function addToShelf(book: Book, sourceId: string) {
   const source = sources.value.find(s => s.id === sourceId)
   if (!source) {
     message.error('书源未找到')
     return
   }
-  bookshelfStore.openDetail(book, source)
+
+  if (!book.name || !book.bookUrl) {
+    message.warning('书籍信息不完整')
+    return
+  }
+
+  try {
+    const books = await store.get('books') || []
+    if (books.find((b: Book) => b.bookUrl === book.bookUrl)) {
+      message.warning('该书已在书架中')
+      return
+    }
+
+    const newBook: Book = {
+      id: `${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+      sourceId: source.id,
+      sourceName: source.name,
+      name: book.name,
+      author: book.author || '未知作者',
+      coverUrl: book.coverUrl || '',
+      intro: book.intro || '',
+      lastChapter: book.lastChapter || '',
+      bookUrl: book.bookUrl,
+      tocUrl: book.tocUrl || '',
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    }
+
+    books.unshift(newBook)
+    await store.set('books', books)
+    message.success(`已添加《${book.name}》到书架`)
+  } catch (err: any) {
+    message.error('添加失败: ' + (err.message || '未知错误'))
+  }
 }
 
 onMounted(() => {
@@ -294,84 +354,68 @@ onUnmounted(() => {
 .progress-text { font-size: 12px; color: var(--text-muted); }
 
 .results { margin-top: 16px; }
-.result-group { margin-bottom: 32px; }
+.result-group { margin-bottom: 24px; }
 .group-header {
   display: flex;
   justify-content: space-between;
   align-items: center;
   padding-bottom: 8px;
   border-bottom: 1px solid var(--border-color);
-  margin-bottom: 12px;
 }
 .group-header h3 { font-size: 16px; font-weight: 500; color: var(--text-primary); }
 .group-header span { font-size: 13px; color: var(--text-muted); }
 
-.books-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
-  gap: 16px;
-}
-.book-card {
-  cursor: pointer;
-  transition: transform 0.2s, box-shadow 0.2s;
-  border-radius: 8px;
-  overflow: hidden;
+.result-list { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; }
+.result-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
   background: var(--bg-card);
   border: 1px solid var(--border-color);
+  border-radius: 6px;
+  cursor: default;
+  transition: all 0.2s;
 }
-.book-card:hover {
-  transform: translateY(-4px);
-  box-shadow: 0 8px 24px rgba(0,0,0,0.2);
-  border-color: var(--brand);
-}
+.result-item:hover { border-color: var(--brand); }
 
-.book-cover {
-  aspect-ratio: 2/3;
+.result-cover {
+  width: 40px;
+  height: 56px;
+  flex-shrink: 0;
   background: var(--bg-hover);
+  border-radius: 4px;
   overflow: hidden;
 }
-.book-cover img {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-}
+.result-cover img { width: 100%; height: 100%; object-fit: cover; }
 .cover-placeholder {
   width: 100%;
   height: 100%;
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 40px;
+  font-size: 18px;
   color: var(--brand);
-  background: var(--bg-hover);
 }
 
-.book-info {
-  padding: 8px 10px;
-}
-.book-info h4 {
-  font-size: 14px;
-  font-weight: 500;
-  color: var(--text-primary);
-  margin: 0;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.book-info p {
+.result-info { flex: 1; min-width: 0; }
+.result-info h4 { font-size: 14px; font-weight: 500; color: var(--text-primary); }
+.result-info p { font-size: 12px; color: var(--text-muted); }
+.result-last { font-size: 12px; color: var(--text-muted); opacity: 0.6; margin-top: 2px; }
+
+.btn-add {
+  padding: 4px 12px;
   font-size: 12px;
-  color: var(--text-muted);
-  margin: 2px 0 0;
+  color: var(--brand);
+  background: var(--bg-active);
+  border: 1px solid var(--brand);
+  border-radius: 4px;
+  cursor: pointer;
+  opacity: 0;
+  transition: all 0.2s;
 }
-.book-last {
-  font-size: 11px;
-  color: var(--text-muted);
-  opacity: 0.6;
-  margin-top: 2px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
+.result-item:hover .btn-add { opacity: 1; }
+.btn-add:hover { background: var(--brand); color: white; }
 
 .empty-state {
   display: flex;

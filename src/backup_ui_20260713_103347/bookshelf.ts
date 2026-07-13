@@ -1,20 +1,12 @@
 import { defineStore } from 'pinia'
 import { store } from '@/api'
-import type { Book, BookSource } from '@shared/types'
+import type { Book } from '@shared/types'
 
 export const useBookshelfStore = defineStore('bookshelf', {
   state: () => ({
     books: [] as Book[],
     loading: false,
     filterText: '',
-    // 详情浮窗状态
-    showDetail: false,
-    detailBook: null as Book | null,
-    detailSource: null as BookSource | null,
-    // 阅读器状态
-    showReader: false,
-    readerBook: null as Book | null,
-    readerSource: null as BookSource | null,
   }),
 
   getters: {
@@ -31,7 +23,6 @@ export const useBookshelfStore = defineStore('bookshelf', {
   },
 
   actions: {
-    // 加载书架
     async loadBooks() {
       this.loading = true
       try {
@@ -45,7 +36,6 @@ export const useBookshelfStore = defineStore('bookshelf', {
       }
     },
 
-    // 添加书籍
     async addBook(book: Book) {
       const exists = this.books.find((b) => b.bookUrl === book.bookUrl)
       if (exists) return false
@@ -90,7 +80,7 @@ export const useBookshelfStore = defineStore('bookshelf', {
       this.filterText = ''
     },
 
-    // 批量添加
+    // 批量添加书籍
     async addBooks(bookList: Book[]) {
       let added = 0
       for (const book of bookList) {
@@ -112,14 +102,17 @@ export const useBookshelfStore = defineStore('bookshelf', {
       return added
     },
 
+    // 检查书籍是否已在书架
     hasBook(bookUrl: string): boolean {
       return this.books.some((b) => b.bookUrl === bookUrl)
     },
 
+    // 获取书籍详情
     getBook(bookId: string | number): Book | undefined {
       return this.books.find((b) => b.id === bookId)
     },
 
+    // 按书源分组
     getBooksBySource(): Record<string, Book[]> {
       const groups: Record<string, Book[]> = {}
       for (const book of this.books) {
@@ -130,37 +123,10 @@ export const useBookshelfStore = defineStore('bookshelf', {
       return groups
     },
 
+    // 清空书架
     async clearAll() {
       this.books = []
       await this.saveBooks()
-    },
-
-    // ===== 详情浮窗 =====
-    openDetail(book: Book, source: BookSource | null) {
-      this.detailBook = book
-      this.detailSource = source
-      this.showDetail = true
-    },
-
-    closeDetail() {
-      this.showDetail = false
-      this.detailBook = null
-      this.detailSource = null
-    },
-
-    // ===== 阅读器 =====
-    openReader(book: Book, source: BookSource | null) {
-      this.readerBook = book
-      this.readerSource = source
-      this.showReader = true
-    },
-
-    closeReader() {
-      this.showReader = false
-      this.readerBook = null
-      this.readerSource = null
-      // 刷新书架（可能更新进度）
-      this.loadBooks()
     },
   },
 })

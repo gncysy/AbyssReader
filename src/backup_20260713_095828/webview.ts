@@ -1,18 +1,7 @@
 import { BrowserWindow, session } from 'electron'
 import { getPlatformAdapter } from '../adapter.js'
 
-/**
- * WebView 渲染器
- * 在 Electron 中创建隐藏 BrowserWindow，加载页面并执行 JS 后返回结果
- */
 export const webview = {
-  /**
-   * 使用 WebView 加载页面
-   * @param headers 请求头（注入到页面）
-   * @param url 要加载的 URL
-   * @param js 要执行的 JS 代码（可选，不传则返回页面 HTML）
-   * @returns JS 执行结果或页面 HTML
-   */
   async webView(headers: any, url: string, js?: string): Promise<string> {
     return new Promise((resolve, reject) => {
       const win = new BrowserWindow({
@@ -62,7 +51,6 @@ export const webview = {
         reject(new Error(`WebView加载失败: ${errorDescription}`))
       })
 
-      // 超时处理
       setTimeout(() => {
         win.close()
         reject(new Error('WebView加载超时(30s)'))
@@ -72,16 +60,10 @@ export const webview = {
     })
   },
 
-  /**
-   * 初始化 URL（占位）
-   */
   initUrl(): void {
     console.warn('[WebView] initUrl 已调用')
   },
 
-  /**
-   * 刷新书籍 URL（占位）
-   */
   refreshBookUrl(): void {
     const adapter = getPlatformAdapter()
     console.warn('[WebView] refreshBookUrl 已调用')

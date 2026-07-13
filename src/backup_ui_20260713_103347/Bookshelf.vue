@@ -34,7 +34,7 @@
         v-for="book in bookshelfStore.filteredBooks"
         :key="book.id"
         class="book-card"
-        @click="openBookDetail(book)"
+        @click="openBook(book)"
       >
         <div class="book-cover">
           <img
@@ -61,12 +61,20 @@
       <p>导入 TXT 文件或搜索添加书籍</p>
       <button class="btn-primary" @click="triggerImport">导入第一本书</button>
     </div>
+
+    <Reader
+      v-if="currentBook"
+      :book="currentBook"
+      :source="currentSource"
+      @close="closeReader"
+    />
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, watch, onMounted } from 'vue'
+import { ref, computed, watch, onMounted } from 'vue'
 import { useMessage } from 'naive-ui'
+import Reader from '@/components/Reader.vue'
 import { useBookshelfStore } from '@/store'
 import { store, reader as readerApi } from '@/api'
 import type { Book, BookSource } from '@shared/types'
@@ -77,7 +85,10 @@ const bookshelfStore = useBookshelfStore()
 const sources = ref<BookSource[]>([])
 const searchText = ref('')
 const fileInput = ref<HTMLInputElement | null>(null)
+const currentBook = ref<Book | null>(null)
+const currentSource = ref<BookSource | null>(null)
 
+// 同步搜索文本到 store
 watch(searchText, (val) => {
   bookshelfStore.setFilter(val)
 })
@@ -89,6 +100,10 @@ async function loadSources() {
   } catch (err: any) {
     console.error('加载书源失败:', err)
   }
+}
+
+async function loadBooks() {
+  await bookshelfStore.loadBooks()
 }
 
 function triggerImport() {
@@ -129,9 +144,18 @@ function handleImageError(e: Event) {
   }
 }
 
-function openBookDetail(book: Book) {
-  const source = sources.value.find(s => s.id === book.sourceId)
-  bookshelfStore.openDetail(book, source || null)
+function openBook(book: Book) {
+  console.log('[Bookshelf] 打开书籍:', book.name)
+  const foundSource = sources.value.find(s => s.id === book.sourceId)
+  console.log('[Bookshelf] 找到书源:', foundSource?.name || '未找到')
+  currentBook.value = book
+  currentSource.value = foundSource || null
+}
+
+function closeReader() {
+  currentBook.value = null
+  currentSource.value = null
+  bookshelfStore.loadBooks()
 }
 
 onMounted(() => {
@@ -204,22 +228,19 @@ onMounted(() => {
 
 .book-card {
   cursor: pointer;
-  transition: transform 0.2s, box-shadow 0.2s;
-  border-radius: 8px;
-  overflow: hidden;
-  background: var(--bg-card);
-  border: 1px solid var(--border-color);
+  transition: transform 0.2s;
 }
+
 .book-card:hover {
   transform: translateY(-4px);
-  box-shadow: 0 8px 24px rgba(0,0,0,0.2);
-  border-color: var(--brand);
 }
 
 .book-cover {
   aspect-ratio: 2/3;
   background: var(--bg-card);
+  border-radius: 12px;
   overflow: hidden;
+  border: 1px solid var(--border-color);
   position: relative;
 }
 
@@ -241,8 +262,9 @@ onMounted(() => {
 }
 
 .book-info {
-  padding: 8px 10px;
+  margin-top: 8px;
 }
+
 .book-title {
   font-size: 14px;
   font-weight: 500;
@@ -250,12 +272,11 @@ onMounted(() => {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  margin: 0;
 }
+
 .book-author {
   font-size: 12px;
   color: var(--text-muted);
-  margin: 2px 0 0;
 }
 
 .empty-state {

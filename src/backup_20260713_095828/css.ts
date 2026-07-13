@@ -22,6 +22,11 @@ export function parseCss(rule: string): ParsedRule {
   }
 }
 
+/**
+ * 处理索引选择器
+ * 支持: !n (取第n个), !-1 (取最后一个)
+ * 例如: li!2 或 a!-1
+ */
 function processIndexSelector(selector: string): { baseSelector: string; indexMode: string; indexes: number[] } | null {
   const match = selector.match(/^(.*?)([!.])([0-9:,.-]+)$/)
   if (!match) return null
@@ -66,9 +71,6 @@ function extractValue($: cheerio.CheerioAPI, el: any, attribute?: string): strin
   return $(el).attr(attribute) || null
 }
 
-/**
- * 执行 CSS 选择器，支持 &&（合并）、%%（矩阵合并）
- */
 export function executeCss(
   source: any,
   expression: string,
@@ -81,54 +83,8 @@ export function executeCss(
   try {
     const $ = cheerio.load(html)
 
-    // ===== 处理 &&（合并多个选择器结果） =====
-    if (expression.includes('&&')) {
-      const parts = expression.split('&&').map(s => s.trim())
-      const allResults: string[] = []
-      for (const part of parts) {
-        const result = executeCss(source, part, attribute)
-        if (result !== null && result !== undefined) {
-          if (Array.isArray(result)) {
-            allResults.push(...result.map(String))
-          } else {
-            allResults.push(String(result))
-          }
-        }
-      }
-      return allResults.length > 0 ? allResults : null
-    }
-
-    // ===== 处理 %%（矩阵合并） =====
-    if (expression.includes('%%')) {
-      const parts = expression.split('%%').map(s => s.trim())
-      const matrixResults: string[][] = []
-      for (const part of parts) {
-        const result = executeCss(source, part, attribute)
-        if (result !== null && result !== undefined) {
-          if (Array.isArray(result)) {
-            matrixResults.push(result.map(String))
-          } else {
-            matrixResults.push([String(result)])
-          }
-        } else {
-          matrixResults.push([])
-        }
-      }
-      // 按索引对齐合并
-      const maxLen = Math.max(...matrixResults.map(arr => arr.length))
-      const merged: string[] = []
-      for (let i = 0; i < maxLen; i++) {
-        for (const arr of matrixResults) {
-          if (i < arr.length) {
-            merged.push(arr[i])
-          }
-        }
-      }
-      return merged.length > 0 ? merged : null
-    }
-
-    // ===== 正常执行选择器 =====
     const indexInfo = processIndexSelector(expression)
+
     let elements: any
 
     if (indexInfo) {
