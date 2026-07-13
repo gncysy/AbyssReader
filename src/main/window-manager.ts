@@ -25,6 +25,11 @@ export function createWindow(): BrowserWindow {
     frame: false,
     title: '墨阅',
     titleBarStyle: 'hidden',
+    titleBarOverlay: {
+      color: '#0d0d0d',
+      symbolColor: '#e8e8e8',
+      height: 36,
+    },
     backgroundColor: '#0d0d0d',
     show: true,
     roundedCorners: true,

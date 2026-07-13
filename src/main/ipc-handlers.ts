@@ -991,9 +991,31 @@ export function setupIpcHandlers() {
   });
 }
 
+
+  // ===== 更新标题栏主题 =====
+  ipcMain.handle("update-title-bar-overlay", async (_event: any, theme: string) => {
+    try {
+      const win = BrowserWindow.getFocusedWindow() || getMainWindow()
+      if (win) {
+        const isDark = theme === 'dark' || (theme === 'system' && process.platform !== 'win32')
+        win.setTitleBarOverlay({
+          color: isDark ? '#0d0d0d' : '#f0ede8',
+          symbolColor: isDark ? '#e8e8e8' : '#1a1a1a',
+          height: 36,
+        })
+      }
+      return { success: true }
+    } catch (error: any) {
+      console.error('[Window] 更新标题栏失败:', error)
+      return { success: false, error: error.message }
+    }
+  })
 export function clearChapterCache() {
   chapterCache.clear();
 }
+
+
+
 
 
 
