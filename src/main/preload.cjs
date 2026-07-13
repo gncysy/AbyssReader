@@ -27,6 +27,7 @@ const validChannels = [
   'import-sources-from-url',
   'test-source',
   'test-all-sources',
+  'delete-source',
   'delete-failed-sources',
   'get-explore-categories',
   // TXT 导入
@@ -40,9 +41,9 @@ const validChannels = [
   'engine-get-toc',
   'engine-get-content',
   'engine-get-book-info',
+  'engine-get-explore-books',
+  'explore-books-by-id',
   'parse-rule',
-  'engine-parse-explore-categories',
-  'engine-explore',
   // 事件监听
   'verification-complete',
   'verification-cancel',
@@ -111,6 +112,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   importSourcesFromUrl: (url) => ipcRenderer.invoke('import-sources-from-url', url),
   testSource: (sourceId) => ipcRenderer.invoke('test-source', sourceId),
   testAllSources: () => ipcRenderer.invoke('test-all-sources'),
+  deleteSource: (sourceId) => ipcRenderer.invoke('delete-source', sourceId),
   deleteFailedSources: () => ipcRenderer.invoke('delete-failed-sources'),
   getExploreCategories: (sourceId) => ipcRenderer.invoke('get-explore-categories', sourceId),
 
@@ -122,9 +124,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // ===== 引擎 API =====
   engineSearch: (source, keyword, page) => ipcRenderer.invoke('engine-search', source, keyword, page),
   engineBatchSearch: (sources, keyword, page) => ipcRenderer.invoke('engine-batch-search', sources, keyword, page),
+  engineBatchSearchStream: (sources, keyword, page) => ipcRenderer.invoke('engine-batch-search-stream', sources, keyword, page),
   engineGetToc: (source, tocUrl) => ipcRenderer.invoke('engine-get-toc', source, tocUrl),
   engineGetContent: (source, chapterUrl) => ipcRenderer.invoke('engine-get-content', source, chapterUrl),
   engineGetBookInfo: (source, bookUrl) => ipcRenderer.invoke('engine-get-book-info', source, bookUrl),
+  engineGetExploreBooks: (source, categoryUrl, page) => ipcRenderer.invoke('engine-get-explore-books', source, categoryUrl, page),
+  exploreBooksById: (sourceId, categoryUrl, page) => ipcRenderer.invoke('explore-books-by-id', sourceId, categoryUrl, page),
 
   // ===== 事件监听 =====
   on: (channel, callback) => {

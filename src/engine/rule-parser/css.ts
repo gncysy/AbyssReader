@@ -1,181 +1,106 @@
 import * as cheerio from 'cheerio'
-import type { ParsedRule } from './index.js'
+
+export interface ParsedRule {
+  type: 'css' | 'xpath' | 'json' | 'js' | 'regex' | 'text'
+  expression: string
+  attribute?: string | null
+  cleanPattern?: string | null
+  cleanReplacement?: string | null
+  flags?: string | null
+  original: string
+}
 
 export function parseCss(rule: string): ParsedRule {
   let expression = rule
   let attribute: string | null = null
-
   const attrMatch = expression.match(/^(.+)@([a-zA-Z-]+)$/)
-  if (attrMatch) {
-    expression = attrMatch[1]
-    attribute = attrMatch[2]
-  }
-
-  return {
-    type: 'css',
-    expression: expression.trim(),
-    attribute: attribute,
-    cleanPattern: null,
-    cleanReplacement: null,
-    flags: null,
-    original: rule,
-  }
+  if (attrMatch) { expression = attrMatch[1]; attribute = attrMatch[2] }
+  return { type: 'css', expression: expression.trim(), attribute, cleanPattern: null, cleanReplacement: null, flags: null, original: rule }
 }
 
 function processIndexSelector(selector: string): { baseSelector: string; indexMode: string; indexes: number[] } | null {
   const match = selector.match(/^(.*?)([!.])([0-9:,.-]+)$/)
   if (!match) return null
-
-  const baseSelector = match[1]
-  const indexMode = match[2]
-  const indexStr = match[3]
-
-  const indexes: number[] = []
-  const parts = indexStr.split(':')
-  for (const part of parts) {
-    if (part.includes(',')) {
-      const subParts = part.split(',').map(s => parseInt(s.trim(), 10))
-      for (const p of subParts) {
-        if (!isNaN(p)) indexes.push(p)
-      }
-    } else {
-      const num = parseInt(part.trim(), 10)
-      if (!isNaN(num)) indexes.push(num)
-    }
-  }
-
+  if (match[2] === "." && /^\d+$/.test(match[3])) return null
+  const baseSelector = match[1], indexMode = match[2], indexStr = match[3]
+  const indexes = indexStr.split(/[:,]/).map(s => parseInt(s, 10)).filter(n => !isNaN(n))
   return { baseSelector, indexMode, indexes }
 }
 
 function extractValue($: cheerio.CheerioAPI, el: any, attribute?: string): string | null {
-  if (attribute === 'text' || !attribute) {
-    return $(el).text().trim() || null
-  }
-  if (attribute === 'html') {
-    return $(el).html() || null
-  }
-  if (attribute === 'outerHTML') {
-    return $.html(el) || null
-  }
-  if (attribute === 'ownText') {
-    return $(el).contents().filter((i, node) => node.type === 'text').text().trim() || null
-  }
-  if (attribute === 'tag') {
-    return el.name || null
-  }
+  if (attribute === 'text' || !attribute) return $(el).text().trim() || null
+  if (attribute === 'html') return $(el).html() || null
+  if (attribute === 'outerHTML') return $.html(el) || null
+  if (attribute === 'ownText') return $(el).contents().filter((i, node) => node.type === 'text').text().trim() || null
+  if (attribute === 'tag') return el.name || null
   return $(el).attr(attribute) || null
 }
 
-/**
- * 执行 CSS 选择器，支持 &&（合并）、%%（矩阵合并）
- */
-export function executeCss(
-  source: any,
-  expression: string,
-  attribute?: string
-): any {
+export function executeCss(source: any, expression: string, attribute?: string): any {
   if (!source) return null
-
+  if (typeof expression === "string") {
+    expression = expression.split('\n').filter((line: string) => !line.trim().startsWith('//')).join('\n').trim()
+  }
   const html = typeof source === 'string' ? source : String(source)
-
   try {
     const $ = cheerio.load(html)
-
-    // ===== 处理 &&（合并多个选择器结果） =====
     if (expression.includes('&&')) {
       const parts = expression.split('&&').map(s => s.trim())
       const allResults: string[] = []
       for (const part of parts) {
         const result = executeCss(source, part, attribute)
         if (result !== null && result !== undefined) {
-          if (Array.isArray(result)) {
-            allResults.push(...result.map(String))
-          } else {
-            allResults.push(String(result))
-          }
+          if (Array.isArray(result)) allResults.push(...result.map(String))
+          else allResults.push(String(result))
         }
       }
       return allResults.length > 0 ? allResults : null
     }
-
-    // ===== 处理 %%（矩阵合并） =====
     if (expression.includes('%%')) {
       const parts = expression.split('%%').map(s => s.trim())
       const matrixResults: string[][] = []
       for (const part of parts) {
         const result = executeCss(source, part, attribute)
         if (result !== null && result !== undefined) {
-          if (Array.isArray(result)) {
-            matrixResults.push(result.map(String))
-          } else {
-            matrixResults.push([String(result)])
-          }
-        } else {
-          matrixResults.push([])
-        }
+          if (Array.isArray(result)) matrixResults.push(result.map(String))
+          else matrixResults.push([String(result)])
+        } else matrixResults.push([])
       }
-      // 按索引对齐合并
       const maxLen = Math.max(...matrixResults.map(arr => arr.length))
       const merged: string[] = []
       for (let i = 0; i < maxLen; i++) {
         for (const arr of matrixResults) {
-          if (i < arr.length) {
-            merged.push(arr[i])
-          }
+          if (i < arr.length) merged.push(arr[i])
         }
       }
       return merged.length > 0 ? merged : null
     }
-
-    // ===== 正常执行选择器 =====
     const indexInfo = processIndexSelector(expression)
     let elements: any
-
     if (indexInfo) {
       const allElements = $(indexInfo.baseSelector)
       if (allElements.length === 0) return null
-
       const selected: any[] = []
       const totalLen = allElements.length
-
       for (const idx of indexInfo.indexes) {
-        let actualIndex = idx
-        if (idx < 0) {
-          actualIndex = totalLen + idx
-        }
-        if (actualIndex >= 0 && actualIndex < totalLen) {
-          selected.push(allElements[actualIndex])
-        }
+        let actualIndex = idx < 0 ? totalLen + idx : idx
+        if (actualIndex >= 0 && actualIndex < totalLen) selected.push(allElements[actualIndex])
       }
-
       if (indexInfo.indexMode === '!') {
         const excludeSet = new Set(selected)
         const result: any[] = []
         for (let i = 0; i < totalLen; i++) {
-          if (!excludeSet.has(allElements[i])) {
-            result.push(allElements[i])
-          }
+          if (!excludeSet.has(allElements[i])) result.push(allElements[i])
         }
         elements = result
-      } else {
-        elements = selected
-      }
-    } else {
-      elements = $(expression)
-    }
-
+      } else elements = selected
+    } else elements = $(expression)
     if (!elements || elements.length === 0) return null
-
     const results: string[] = []
-
     for (let i = 0; i < elements.length; i++) {
-      const el = elements[i]
-      const value = extractValue($, el, attribute)
-      if (value !== null && value !== undefined) {
-        results.push(value)
-      }
+      const value = extractValue($, elements[i], attribute)
+      if (value !== null && value !== undefined) results.push(value)
     }
-
     return results.length === 0 ? null : results.length === 1 ? results[0] : results
   } catch (error: any) {
     console.warn('[CSS] 执行失败:', error.message, '选择器:', expression)

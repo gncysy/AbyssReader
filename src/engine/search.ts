@@ -81,6 +81,47 @@ export async function search(
     return [];
   }
 
+  // ============================================================
+  // 处理 @js: 类型的 searchUrl（整活书源）
+  // ============================================================
+  if (searchUrl.trim().startsWith('@js:')) {
+    console.log('[Search] 检测到 @js: searchUrl');
+    try {
+      const jsCode = searchUrl.trim().substring(4);
+      console.log('[Search] JS 代码:', jsCode);
+      
+      // 构建 Java API
+      const { buildJavaAPI } = await import('./platform/java-bridge.js');
+      const java = buildJavaAPI();
+      java.put('key', keyword);
+      
+      // 用 Function 构造器执行，末尾自动返回
+      const fn = new Function(
+        'key', 'java',
+        `
+          ${jsCode}
+          return java.get('_searchUrl') || 'https://www.baidu.com';
+        `
+      );
+      
+      const result = fn(keyword, java);
+      console.log('[Search] 执行结果:', result);
+      
+      if (result && typeof result === 'string') {
+        searchUrl = result;
+        console.log('[Search] 最终 searchUrl:', searchUrl);
+      } else {
+        console.warn('[Search] 结果无效，使用备用 URL');
+        searchUrl = 'https://www.baidu.com/s?wd=' + encodeURIComponent(keyword);
+      }
+    } catch (err: any) {
+      console.error('[Search] @js: searchUrl 执行失败:', err.message);
+      searchUrl = 'https://www.baidu.com/s?wd=' + encodeURIComponent(keyword);
+      console.log('[Search] 备用 URL:', searchUrl);
+    }
+  }
+
+  // 替换变量
   searchUrl = searchUrl
     .replace(/\{\{key\}\}/g, encodeURIComponent(keyword))
     .replace(/\{\{page\}\}/g, String(page));
@@ -165,7 +206,6 @@ function parseBookItem(item: any, source: BookSource, rule: any): Book | null {
     const lastChapter = parseAndExecute(item, rule.lastChapter || '', context);
     const kind = parseAndExecute(item, rule.kind || '', context);
 
-    // bookUrl 为空时，使用备选
     if (!bookUrl || typeof bookUrl !== 'string' || bookUrl === '' || bookUrl === 'null' || bookUrl === 'undefined') {
       console.warn('[Search] bookUrl 为空，使用备选:', name);
       bookUrl = item.id || item.bookUrl || `book_${Date.now()}_${name.slice(0, 10)}`;
@@ -173,10 +213,8 @@ function parseBookItem(item: any, source: BookSource, rule: any): Book | null {
 
     bookUrl = String(bookUrl).trim();
 
-    // 如果不是 http 开头，保留但记录
     if (!bookUrl.startsWith('http://') && !bookUrl.startsWith('https://') && !bookUrl.startsWith('//')) {
       console.warn('[Search] bookUrl 不是有效 URL，保留备选:', bookUrl, name);
-      // 不丢弃，保留
     }
 
     let finalName = String(name).trim();

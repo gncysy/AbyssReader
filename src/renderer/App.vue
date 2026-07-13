@@ -80,7 +80,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted, watch, provide } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch, provide, nextTick } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { darkTheme, lightTheme, zhCN, dateZhCN, NIcon } from 'naive-ui'
 import {
@@ -124,8 +124,19 @@ function applyThemeToDOM(theme: string) {
 function setTheme(theme: string) {
   readingStore.setTheme(theme)
   applyThemeToDOM(theme)
-  // 通知主进程更新标题栏颜色
-  window.electronAPI?.invoke?.('update-title-bar-overlay', theme).catch(() => {})
+  updateTitleBar(theme)
+}
+
+// ===== 更新标题栏颜色 =====
+function updateTitleBar(theme: string) {
+  try {
+    const api = window.electronAPI
+    if (api && typeof api.invoke === 'function') {
+      api.invoke('update-title-bar-overlay', theme).catch(() => {})
+    }
+  } catch {
+    // 忽略错误
+  }
 }
 
 provide('theme', {
@@ -182,14 +193,36 @@ function closeWindow() {
 function handleSystemThemeChange(e: MediaQueryListEvent) {
   if (currentTheme.value === 'system') {
     applyThemeToDOM('system')
+    updateTitleBar('system')
   }
 }
 
 let mediaListener: ((e: MediaQueryListEvent) => void) | null = null
 
-onMounted(() => {
-  readingStore.loadSettings()
+// ===== 初始化 =====
+async function initializeApp() {
+  // 1. 加载设置
+  await readingStore.loadSettings()
+  
+  // 2. 应用主题到 DOM
   applyThemeToDOM(currentTheme.value)
+  
+  // 3. 等待 DOM 渲染完成
+  await nextTick()
+  
+  // 4. 延迟更新标题栏（确保 electronAPI 就绪）
+  setTimeout(() => {
+    updateTitleBar(currentTheme.value)
+  }, 100)
+  
+  // 5. 再次延迟确保生效
+  setTimeout(() => {
+    updateTitleBar(currentTheme.value)
+  }, 300)
+}
+
+onMounted(() => {
+  initializeApp()
 
   const media = window.matchMedia('(prefers-color-scheme: dark)')
   mediaListener = handleSystemThemeChange
@@ -205,11 +238,11 @@ onUnmounted(() => {
 
 watch(currentTheme, (val) => {
   applyThemeToDOM(val)
+  updateTitleBar(val)
 })
 </script>
 
 <style scoped>
-/* 原有样式保持不变，新增全局浮窗覆盖样式 */
 * {
   box-sizing: border-box;
   margin: 0;

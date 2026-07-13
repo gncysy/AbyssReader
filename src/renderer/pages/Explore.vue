@@ -72,8 +72,7 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
 import { useMessage } from 'naive-ui'
-import { store, engine as engineApi } from '@/api'
-import { handleApiError } from '@/utils/error'
+import { store } from '@/api'
 import type { Book, BookSource } from '@shared/types'
 
 const message = useMessage()
@@ -84,69 +83,137 @@ const currentCategory = ref<{ title: string; url: string } | null>(null)
 const books = ref<Book[]>([])
 const loading = ref(false)
 
+function cleanSource(source: BookSource): any {
+  return {
+    id: String(source.id || ''),
+    name: String(source.name || ''),
+    url: String(source.url || ''),
+    searchUrl: String(source.searchUrl || ''),
+    ruleSearch: source.ruleSearch || {},
+    ruleBookInfo: source.ruleBookInfo || {},
+    ruleToc: source.ruleToc || {},
+    ruleContent: source.ruleContent || {},
+    ruleExplore: source.ruleExplore || {},
+    exploreUrl: String(source.exploreUrl || ''),
+    enabled: true,
+    header: typeof source.header === 'string' ? source.header : null,
+    code: source.code ? String(source.code) : null,
+    _legado: !!source.code,
+    _desktop: true,
+  }
+}
+
 async function loadSources() {
   try {
     const raw = await store.get('sources')
     sources.value = raw || []
     if (sources.value.length > 0) {
-      selectedSourceId.value = sources.value[0].id
-      await onSourceChange()
+      const firstWithExplore = sources.value.find(s => s.exploreUrl && s.exploreUrl.trim())
+      if (firstWithExplore) {
+        selectedSourceId.value = firstWithExplore.id
+        await loadCategories()
+      } else {
+        selectedSourceId.value = sources.value[0].id
+      }
     }
   } catch (err: any) {
     message.error('加载书源失败: ' + err.message)
   }
 }
 
-async function onSourceChange() {
-  categories.value = []
-  currentCategory.value = null
-  books.value = []
-
-  if (!selectedSourceId.value) return
+async function loadCategories() {
+  if (!selectedSourceId.value) {
+    categories.value = []
+    return
+  }
 
   const source = sources.value.find(s => s.id === selectedSourceId.value)
-  if (!source) return
+  if (!source || !source.exploreUrl || !source.exploreUrl.trim()) {
+    categories.value = []
+    return
+  }
 
   try {
-    const result = await engineApi.getExploreCategories(source)
-    if (result.success) {
-      categories.value = result.data || []
+    const result = await window.electronAPI.invoke('get-explore-categories', source.id)
+    if (result && Array.isArray(result) && result.length > 0) {
+      categories.value = result
       if (categories.value.length > 0) {
         await exploreCategory(categories.value[0])
       }
     } else {
-      message.error('加载分类失败: ' + (result.error || '未知错误'))
+      categories.value = []
     }
   } catch (err: any) {
-    message.error('加载分类失败: ' + err.message)
+    console.error('[Explore] 加载分类失败:', err)
+    categories.value = []
   }
+}
+
+async function onSourceChange() {
+  await loadCategories()
 }
 
 async function exploreCategory(cat: { title: string; url: string }) {
   const source = sources.value.find(s => s.id === selectedSourceId.value)
-  if (!source) return
+  if (!source) {
+    console.warn('[Explore] 书源未找到')
+    return
+  }
 
   currentCategory.value = cat
   loading.value = true
   books.value = []
 
   if (!cat.url || cat.url.trim() === '') {
-    message.info('该分类没有对应的 URL')
     loading.value = false
     return
   }
 
   try {
-    const result = await engineApi.getExploreBooks(source, cat.url, 1)
-    if (result.success) {
-      books.value = result.data || []
+    // 完全手动构建干净对象，避免任何不可序列化的内容
+    const cleanSource = {
+      id: String(source.id || ''),
+      name: String(source.name || ''),
+      url: String(source.url || ''),
+      searchUrl: String(source.searchUrl || ''),
+      exploreUrl: String(source.exploreUrl || ''),
+      ruleExplore: {
+        bookList: source.ruleExplore?.bookList || '',
+        name: source.ruleExplore?.name || '',
+        author: source.ruleExplore?.author || '',
+        bookUrl: source.ruleExplore?.bookUrl || '',
+        coverUrl: source.ruleExplore?.coverUrl || '',
+        intro: source.ruleExplore?.intro || '',
+        kind: source.ruleExplore?.kind || '',
+        lastChapter: source.ruleExplore?.lastChapter || '',
+        wordCount: source.ruleExplore?.wordCount || '',
+      },
+      ruleSearch: source.ruleSearch || {},
+      ruleToc: source.ruleToc || {},
+      ruleContent: source.ruleContent || {},
+      ruleBookInfo: source.ruleBookInfo || {},
+      header: typeof source.header === 'string' ? source.header : null,
+      enabled: true,
+    }
+
+    let categoryUrl = cat.url
+    if (categoryUrl && categoryUrl.includes('{{page}}')) {
+      categoryUrl = categoryUrl.replace(/\{\{page\}\}/g, '1')
+    }
+    console.log('[Explore] 调用 engine-get-explore-books:', { source: cleanSource.name, categoryUrl })
+        const result = await window.electronAPI.invoke('explore-books-by-id', source.id, categoryUrl, 1)
+    console.log('[Explore] 返回结果:', result)
+    
+    if (result && result.success && Array.isArray(result.data)) {
+      books.value = result.data
+    } else if (result && Array.isArray(result)) {
+      books.value = result
     } else {
-      message.error('加载书籍失败: ' + (result.error || '未知错误'))
+      books.value = []
     }
   } catch (err: any) {
-    const errorMsg = handleApiError(err, '加载分类失败')
-    message.error(errorMsg)
-    console.error('[Explore] 加载分类错误:', err)
+    console.error('[Explore] 加载书籍失败:', err)
+    books.value = []
   } finally {
     loading.value = false
   }
@@ -188,7 +255,9 @@ async function addToShelf(book: Book) {
   }
 }
 
-onMounted(() => loadSources())
+onMounted(() => {
+  loadSources()
+})
 </script>
 
 <style scoped>
@@ -208,8 +277,10 @@ onMounted(() => loadSources())
   cursor: pointer;
   margin-bottom: 12px;
   outline: none;
+  min-width: 180px;
 }
 .select-source:focus { border-color: var(--brand); }
+.select-source option { background: var(--bg-card); color: var(--text-primary); }
 
 .categories {
   display: flex;
@@ -279,3 +350,6 @@ onMounted(() => loadSources())
 .book-card-skeleton .skeleton { background: var(--bg-card); border-radius: 4px; animation: shimmer 1.5s infinite; }
 @keyframes shimmer { 0%, 100% { opacity: 0.4; } 50% { opacity: 0.7; } }
 </style>
+
+
+

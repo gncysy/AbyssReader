@@ -1,356 +1,131 @@
-import CryptoJS from 'crypto-js';
+/**
+ * AndroidApi - 纯包装层
+ * 所有功能实现在 modules/ 中，这里只做组装
+ */
 
-import dayjs from 'dayjs';
-import utc from 'dayjs/plugin/utc.js';
-import { toSimplified } from 'chinese-simple2traditional';
-import { getGlobalHttpClient, type RequestConfig } from '../network/index.js';
-import { getGlobalStore, type ContextStore } from '../context/index.js';
-import { getPlatformAdapter } from './adapter.js';
-
-dayjs.extend(utc);
+import { network } from './modules/network.js';
+import { cryptoApi } from './modules/crypto.js';
+import { dom } from './modules/dom.js';
+import { storage } from './modules/storage.js';
+import { ui } from './modules/ui.js';
+import { webview } from './modules/webview.js';
+import { context } from './modules/context.js';
+import { utils } from './modules/utils.js';
+import { getGlobalStore } from '../context/store.js';
 
 export class AndroidApi {
-  private store: ContextStore;
-  private httpClient: ReturnType<typeof getGlobalHttpClient>;
+  private store = getGlobalStore();
 
-  constructor(store?: ContextStore) {
-    this.store = store || getGlobalStore();
-    this.httpClient = getGlobalHttpClient();
-  }
+  // ============================================================
+  // network
+  // ============================================================
+  ajax = network.ajax.bind(network);
+  post = network.post.bind(network);
+  httpGet = network.httpGet.bind(network);
+  connect = network.connect.bind(network);
+  ajaxAll = network.ajaxAll.bind(network);
+  getStrResponse = network.getStrResponse.bind(network);
+  getByteResponse = network.getByteResponse.bind(network);
+  cookie = network.cookie;
 
-  async ajax(url: string, options: any = {}): Promise<any> {
-    const config: RequestConfig = {
-      url: url,
-      method: options.method || 'GET',
-      headers: options.headers || {},
-      body: options.body,
-      charset: options.charset || 'utf-8',
-      timeout: options.timeout || 30000,
-    };
+  // ============================================================
+  // crypto
+  // ============================================================
+  base64Encode = cryptoApi.base64Encode.bind(cryptoApi);
+  base64Decode = cryptoApi.base64Decode.bind(cryptoApi);
+  base64DecodeToByteArray = cryptoApi.base64DecodeToByteArray.bind(cryptoApi);
+  getByteArray = cryptoApi.getByteArray.bind(cryptoApi);
+  hexDecodeToString = cryptoApi.hexDecodeToString.bind(cryptoApi);
+  hexEncode = cryptoApi.hexEncode.bind(cryptoApi);
+  md5Encode = cryptoApi.md5Encode.bind(cryptoApi);
+  digestHex = cryptoApi.digestHex.bind(cryptoApi);
+  HMacHex = cryptoApi.HMacHex.bind(cryptoApi);
+  aesBase64DecodeToString = cryptoApi.aesBase64DecodeToString.bind(cryptoApi);
+  desEncodeToBase64String = cryptoApi.desEncodeToBase64String.bind(cryptoApi);
+  createSymmetricCrypto = cryptoApi.createSymmetricCrypto.bind(cryptoApi);
+  createAsymmetricCrypto = cryptoApi.createAsymmetricCrypto.bind(cryptoApi);
+  randomUUID = cryptoApi.randomUUID.bind(cryptoApi);
 
-    try {
-      const response = await this.httpClient.request(config);
-      if (response.status >= 200 && response.status < 300) {
-        return response.data;
-      }
-      throw new Error(`HTTP ${response.status}`);
-    } catch (error: any) {
-      console.error('[AndroidApi.ajax] 请求失败:', {
-        url,
-        method: config.method,
-        status: error.status,
-        message: error.message,
-        stack: error.stack,
-      });
-      throw error;
-    }
-  }
+  // ============================================================
+  // dom
+  // ============================================================
+  getElements = dom.getElements.bind(dom);
+  getString = dom.getString.bind(dom);
+  getStringList = dom.getStringList.bind(dom);
+  getElement = dom.getElement.bind(dom);
+  setContent = dom.setContent.bind(dom);
+  getContent = dom.getContent.bind(dom);
+  getContentBaseUrl = dom.getContentBaseUrl.bind(dom);
+  clearContentCache = dom.clearContentCache.bind(dom);
 
-  async ajaxAll(urls: string[]): Promise<any[]> {
-    try {
-      const requests = urls.map((url: string) => this.httpClient.request({ url }));
-      const responses = await Promise.all(requests);
-      return responses.map((res: any) => {
-        if (res.status >= 200 && res.status < 300) {
-          return res.data;
-        }
-        throw new Error(`HTTP ${res.status}`);
-      });
-    } catch (error: any) {
-      console.error('[AndroidApi.ajaxAll] 批量请求失败:', {
-        urls,
-        message: error.message,
-        stack: error.stack,
-      });
-      throw error;
-    }
-  }
+  // ============================================================
+  // storage
+  // ============================================================
+  getVariable = storage.getVariable.bind(storage);
+  setVariable = storage.setVariable.bind(storage);
+  getLoginInfoMap = storage.getLoginInfoMap.bind(storage);
+  putLoginHeader = storage.putLoginHeader.bind(storage);
+  getLoginHeader = storage.getLoginHeader.bind(storage);
+  // Legado 兼容
+  putBookVariable = storage.putBookVariable.bind(storage);
+  getBookVariable = storage.getBookVariable.bind(storage);
+  putChapterVariable = storage.putChapterVariable.bind(storage);
+  getChapterVariable = storage.getChapterVariable.bind(storage);
+  setReverseToc = storage.setReverseToc.bind(storage);
+  getReverseToc = storage.getReverseToc.bind(storage);
 
-  async post(url: string, body: any, headers: Record<string, string> = {}): Promise<any> {
-    const response = await this.httpClient.request({
-      url,
-      method: 'POST',
-      body,
-      headers,
-    });
-    if (response.status >= 200 && response.status < 300) {
-      return response.data;
-    }
-    throw new Error(`HTTP ${response.status}`);
-  }
+  // ============================================================
+  // ui
+  // ============================================================
+  toast = ui.toast.bind(ui);
+  longToast = ui.longToast.bind(ui);
+  startBrowserAwait = ui.startBrowserAwait.bind(ui);
 
-  async get(url: string, headers: Record<string, string> = {}): Promise<any> {
-    const response = await this.httpClient.request({
-      url,
-      method: 'GET',
-      headers,
-    });
-    if (response.status >= 200 && response.status < 300) {
-      return response.data;
-    }
-    throw new Error(`HTTP ${response.status}`);
-  }
+  // ============================================================
+  // webview
+  // ============================================================
+  webView = webview.webView.bind(webview);
+  initUrl = webview.initUrl.bind(webview);
+  refreshBookUrl = webview.refreshBookUrl.bind(webview);
 
-  base64Encode(str: string): string {
-    return Buffer.from(str, 'utf-8').toString('base64');
-  }
+  // ============================================================
+  // context
+  // ============================================================
+  put = context.put.bind(context);
+  get = context.get.bind(context);
+  clear = context.clear.bind(context);
 
-  base64Decode(str: string): string {
-    return Buffer.from(str, 'base64').toString('utf-8');
-  }
-
-  base64DecodeToByteArray(str: string): Uint8Array {
-    return new Uint8Array(Buffer.from(str, 'base64'));
-  }
-
-  getByteArray(data: any): Uint8Array {
-    if (typeof data === 'string') {
-      return new TextEncoder().encode(data);
-    }
-    if (Buffer.isBuffer(data)) {
-      return new Uint8Array(data);
-    }
-    if (data instanceof Uint8Array) {
-      return data;
-    }
-    return new Uint8Array();
-  }
-
-  md5Encode(str: string): string {
-    return CryptoJS.MD5(str).toString();
-  }
-
-  digestHex(str: string, algorithm: string = 'sha256'): string {
-    const map: Record<string, any> = {
-      'sha1': CryptoJS.SHA1,
-      'sha256': CryptoJS.SHA256,
-      'sha384': CryptoJS.SHA384,
-      'sha512': CryptoJS.SHA512,
-    };
-    return map[algorithm] ? map[algorithm](str).toString() : CryptoJS.SHA256(str).toString();
-  }
-
-  HMacHex(str: string, key: string, algorithm: string = 'sha256'): string {
-    const map: Record<string, any> = {
-      'sha1': CryptoJS.HmacSHA1,
-      'sha256': CryptoJS.HmacSHA256,
-      'sha384': CryptoJS.HmacSHA384,
-      'sha512': CryptoJS.HmacSHA512,
-    };
-    return map[algorithm] ? map[algorithm](str, key).toString() : CryptoJS.HmacSHA256(str, key).toString();
-  }
-
-  hexDecodeToString(hex: string): string {
-    return Buffer.from(hex, 'hex').toString('utf-8');
-  }
-
-  aesDecode(data: string, key: string, iv?: string, mode: string = 'CBC'): string {
-    const keyWord = CryptoJS.enc.Utf8.parse(key);
-    const ivWord = iv ? CryptoJS.enc.Utf8.parse(iv) : undefined;
-    const encrypted = CryptoJS.enc.Base64.parse(data);
-
-    const decrypted = (CryptoJS.AES.decrypt as any)(
-      { ciphertext: encrypted },
-      keyWord,
-      {
-        mode: mode === 'ECB' ? CryptoJS.mode.ECB : CryptoJS.mode.CBC,
-        padding: CryptoJS.pad.Pkcs7,
-        iv: ivWord,
-      }
-    );
-    return decrypted.toString(CryptoJS.enc.Utf8);
-  }
-
-  aesBase64DecodeToString(data: string, key: string, iv?: string, mode: string = 'CBC'): string {
-    return this.aesDecode(data, key, iv, mode);
-  }
-
-  desEncode(data: string, key: string, iv?: string, mode: string = 'CBC'): string {
-    const keyWord = CryptoJS.enc.Utf8.parse(key);
-    const ivWord = iv ? CryptoJS.enc.Utf8.parse(iv) : undefined;
-
-    const encrypted = (CryptoJS.DES.encrypt as any)(data, keyWord, {
-      mode: mode === 'ECB' ? CryptoJS.mode.ECB : CryptoJS.mode.CBC,
-      padding: CryptoJS.pad.Pkcs7,
-      iv: ivWord,
-    });
-    return encrypted.toString();
-  }
-
-  desEncodeToBase64String(data: string, key: string, iv?: string, mode: string = 'CBC'): string {
-    const keyWord = CryptoJS.enc.Utf8.parse(key);
-    const ivWord = iv ? CryptoJS.enc.Utf8.parse(iv) : undefined;
-
-    const encrypted = (CryptoJS.DES.encrypt as any)(data, keyWord, {
-      mode: mode === 'ECB' ? CryptoJS.mode.ECB : CryptoJS.mode.CBC,
-      padding: CryptoJS.pad.Pkcs7,
-      iv: ivWord,
-    });
-    return encrypted.toString(CryptoJS.enc.Base64);
-  }
-
-  createSymmetricCrypto(
-    algorithm: string,
-    key: string,
-    iv?: string
-  ): {
-    encryptStr: (data: string) => string;
-    decryptStr: (data: string) => string;
-  } {
-    const alg = algorithm.toLowerCase();
-    const keyWord = CryptoJS.enc.Utf8.parse(key);
-    const ivWord = iv ? CryptoJS.enc.Utf8.parse(iv) : undefined;
-
-    let mode: any = CryptoJS.mode.CBC;
-    if (alg.includes('/ecb/')) {
-      mode = CryptoJS.mode.ECB;
-    }
-
-    let cipher: any = CryptoJS.AES;
-    if (alg.includes('des')) {
-      cipher = CryptoJS.DES;
-    }
-
-    return {
-      encryptStr: (data: string): string => {
-        const encrypted = (cipher.encrypt as any)(data, keyWord, {
-          mode: mode,
-          padding: CryptoJS.pad.Pkcs7,
-          iv: ivWord,
-        });
-        return encrypted.toString();
-      },
-      decryptStr: (data: string): string => {
-        const decrypted = (cipher.decrypt as any)(data, keyWord, {
-          mode: mode,
-          padding: CryptoJS.pad.Pkcs7,
-          iv: ivWord,
-        });
-        return decrypted.toString(CryptoJS.enc.Utf8);
-      },
-    };
-  }
-
-  timeFormat(timestamp: number | string, format: string = 'YYYY-MM-DD HH:mm:ss'): string {
-    const date = typeof timestamp === 'number' ? timestamp : parseInt(timestamp);
-    return dayjs(date).format(format);
-  }
-
-  timeFormatUTC(timestamp: number | string, format: string = 'YYYY-MM-DD HH:mm:ss', offset: number = 0): string {
-    const date = typeof timestamp === 'number' ? timestamp : parseInt(timestamp);
-    return dayjs(date).utcOffset(offset).format(format);
-  }
-
-  escape(str: string): string {
-    return encodeURIComponent(str);
-  }
-
-  unescape(str: string): string {
-    return decodeURIComponent(str);
-  }
-
-  encodeURI(str: string): string {
-    return encodeURIComponent(str);
-  }
-
-  decodeURI(str: string): string {
-    return decodeURIComponent(str);
-  }
-
-  getVariable(key: string): any {
-    return this.store.get(key);
-  }
-
-  setVariable(key: string, value: any): void {
-    this.store.put(key, value);
-  }
-
-  putLoginHeader(headers: Record<string, string>): void {
-    this.store.put('loginHeaders', headers);
-  }
-
-  getLoginInfoMap(): Record<string, any> {
-    return this.store.getAll();
-  }
-
-  put(key: string, value: any): void {
-    this.store.put(key, value);
-  }
-
-  getString(key: string): string {
-    const value = this.store.get(key);
-    return value !== undefined && value !== null ? String(value) : '';
-  }
-
-  webView(url: string): void {
-    const adapter = getPlatformAdapter();
-    adapter.createWebViewWindow(url, '验证').catch(() => {});
-  }
-
-  initUrl(): void {
-    console.warn('[AndroidApi] initUrl is a UI operation, use platform adapter instead.');
-  }
-
-  refreshBookUrl(): void {
-    console.warn('[AndroidApi] refreshBookUrl is a UI operation, use platform adapter instead.');
-  }
-
-  async startBrowserAwait(url: string): Promise<string | void> {
-    const adapter = getPlatformAdapter();
-    return adapter.createWebViewWindow(url, '登录');
-  }
-
-  randomUUID(): string {
-    return crypto.randomUUID?.() || CryptoJS.lib.WordArray.random(16).toString();
-  }
-
-  log(...args: any[]): void {
-    console.log('[AndroidApi]', ...args);
-  }
-
-  toast(message: string): void {
-    const adapter = getPlatformAdapter();
-    adapter.showNotification('墨阅', message);
-  }
-
-  toNumChapter(str: string): number {
-    const match = str.match(/\d+/);
-    return match ? parseInt(match[0], 10) : 0;
-  }
-
-  t2s(str: string): string {
-    if (!str || typeof str !== 'string') return str;
-    try {
-      return toSimplified(str);
-    } catch {
-      return str;
-    }
-  }
-
-  importScript(path: string): string {
-    const fs = require('fs');
-    try {
-      return fs.readFileSync(path, 'utf-8');
-    } catch {
-      return '';
-    }
-  }
+  // ============================================================
+  // utils
+  // ============================================================
+  timeFormat = utils.timeFormat.bind(utils);
+  timeFormatUTC = utils.timeFormatUTC.bind(utils);
+  toNumChapter = utils.toNumChapter.bind(utils);
+  t2s = utils.t2s.bind(utils);
+  encodeURI = utils.encodeURI.bind(utils);
+  decodeURI = utils.decodeURI.bind(utils);
+  escape = utils.escape.bind(utils);
+  unescape = utils.unescape.bind(utils);
+  log = utils.log.bind(utils);
+  importScript = utils.importScript.bind(utils);
+  random = utils.random.bind(utils);
 }
 
-export function createAndroidApi(store?: ContextStore): AndroidApi {
-  return new AndroidApi(store);
-}
+// ============================================================
+// 单例
+// ============================================================
 
-let globalAndroidApi: AndroidApi | null = null;
+let instance: AndroidApi | null = null;
 
 export function getGlobalAndroidApi(): AndroidApi {
-  if (!globalAndroidApi) {
-    globalAndroidApi = new AndroidApi();
-  }
-  return globalAndroidApi;
+  if (!instance) instance = new AndroidApi();
+  return instance;
 }
 
 export function resetGlobalAndroidApi(): void {
-  globalAndroidApi = null;
+  instance = null;
 }
 
+export function createAndroidApi(): AndroidApi {
+  return new AndroidApi();
+}

@@ -1,85 +1,88 @@
-import vm from 'node:vm'
-import { buildJavaAPI } from '../platform/java-bridge.js'
-import type { ParsedRule, RuleContext } from './index.js'
+/**
+ * JS 执行沙箱 - 对标 Legado JsExtensions.kt
+ */
 
-export function parseJs(rule: string): ParsedRule {
-  return {
-    type: 'js',
-    expression: rule.substring(4).trim(),
-    attribute: null,
-    cleanPattern: null,
-    cleanReplacement: null,
-    flags: null,
-    original: rule,
-  }
+import vm from 'node:vm'
+import * as cheerio from 'cheerio'
+import { buildJavaAPI } from '../platform/java-bridge.js'
+import { putVariable, getVariable } from './index.js'
+
+export interface JsContext {
+  source?: any
+  baseUrl?: string
+  redirectUrl?: string
+  book?: any
+  chapter?: any
+  result?: any
+  src?: any
+  key?: string
+  page?: number
+  nextChapterUrl?: string
+  [key: string]: any
 }
 
-const dangerousPatterns = [
-  /require\s*\(/,
-  /import\s*\(/,
-  /process\./,
-  /global\./,
-  /__dirname/,
-  /__filename/,
-  /eval\s*\(/,
-  /Function\s*\(/,
-  /new\s+Function/,
-  /child_process/,
-  /exec\s*\(/,
-  /spawn\s*\(/,
-  /fork\s*\(/,
-  /fs\./,
-  /http\./,
-  /https\./,
-  /net\./,
-  /dgram\./,
-  /cluster\./,
-  /vm\./,
+const DANGEROUS_PATTERNS = [
+  /require\s*\(/, /import\s*\(/, /process\./, /global\./, /__dirname/, /__filename/,
+  /eval\s*\(/, /Function\s*\(/, /new\s+Function/, /child_process/, /exec\s*\(/, /spawn\s*\(/,
+  /fork\s*\(/, /fs\./, /http\./, /https\./, /net\./, /dgram\./, /cluster\./, /vm\./,
 ]
 
 function isDangerous(code: string): boolean {
-  for (const pattern of dangerousPatterns) {
+  for (const pattern of DANGEROUS_PATTERNS) {
     if (pattern.test(code)) return true
   }
   return false
 }
 
-export function executeJs(
-  source: any,
-  expression: string,
-  context: RuleContext
-): any {
-  if (!source) return null
-  if (isDangerous(expression)) {
-    console.error('[RuleParser.js] 拒绝执行包含危险模式的代码')
-    return null
+function createJavaAPI(context: JsContext): any {
+  const baseApi = buildJavaAPI()
+  return {
+    ...baseApi,
+    put: (key: string, value: any) => { putVariable(key, value); return value },
+    get: (key: string): any => getVariable(key),
+    getString: (key: string): string => { const v = getVariable(key); return v !== undefined && v !== null ? String(v) : '' },
+    putBookVariable: (key: string, value: any) => putVariable(key, value),
+    getBookVariable: (key: string): any => getVariable(key),
+    putChapterVariable: (key: string, value: any) => putVariable(key, value),
+    getChapterVariable: (key: string): any => getVariable(key),
+    timeFormat: (timestamp: number) => new Date(timestamp).toLocaleString('zh-CN'),
+    toNumChapter: (str: string): string => { if (!str) return ''; const m = str.match(/第\s*([零一二三四五六七八九十百千万0-9]+)\s*章/); return m ? m[0] : str },
   }
+}
 
-  // 构建沙箱上下文 - 注入所有书源需要的变量
+function buildSandbox(context: JsContext): Record<string, any> {
+  const java = createJavaAPI(context)
+  const Jsoup = { parse: (html: string) => cheerio.load(html || '') }
+  
   const sandbox: Record<string, any> = {
-    // 核心对象
-    source: context.source || source,
-    result: context.result || source,
+    java,
+    org: { jsoup: { Jsoup } },
+    source: context.source,
+    result: context.result || context.source,
     baseUrl: context.baseUrl || '',
     redirectUrl: context.redirectUrl || '',
+    src: context.src || context.source,
     key: context.key || '',
     page: context.page || 1,
-    book: context.book || null,
-    chapter: context.chapter || null,
-
-    // java.* API
-    java: buildJavaAPI(),
-
-    // 原生对象
-    Math,
-    JSON,
-    Date,
-    parseInt,
-    parseFloat,
-    encodeURI: encodeURIComponent,
-    decodeURI: decodeURIComponent,
-
-    // 工具函数
+    nextChapterUrl: context.nextChapterUrl || '',
+    book: context.book ? {
+      ...context.book,
+      putVariable: (key: string, value: any) => putVariable(key, value),
+      getVariable: (key: string) => getVariable(key),
+      get bookUrl() { return context.book?.bookUrl || '' },
+      get name() { return context.book?.name || '' },
+      get tocUrl() { return context.book?.tocUrl || '' },
+    } : null,
+    chapter: context.chapter ? {
+      ...context.chapter,
+      putVariable: (key: string, value: any) => putVariable(key, value),
+      getVariable: (key: string) => getVariable(key),
+      get url() { return context.chapter?.url || '' },
+      get title() { return context.chapter?.title || '' },
+    } : null,
+    Math, JSON, Date, String, Number, Boolean, Array, Object,
+    encodeURI: encodeURIComponent, decodeURI: decodeURIComponent,
+    parseInt, parseFloat, isNaN, isFinite,
     trim: (s: any) => String(s).trim(),
     replace: (s: any, p: string, r: string) => String(s).replace(new RegExp(p, 'g'), r),
     split: (s: any, p: string) => String(s).split(p),
@@ -91,30 +94,34 @@ export function executeJs(
     isNumber: (v: any) => typeof v === 'number',
     isArray: (v: any) => Array.isArray(v),
     isObject: (v: any) => typeof v === 'object' && v !== null && !Array.isArray(v),
+    log: (...args: any[]) => console.log('[JS]', ...args),
+    error: (...args: any[]) => console.error('[JS]', ...args),
   }
-
-  // 合并额外的上下文变量
+  
   for (const [key, value] of Object.entries(context)) {
     if (key in sandbox) continue
-    if (value === null || value === undefined ||
-        typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
-      sandbox[key] = value
-    } else if (Array.isArray(value) && value.every(v => typeof v !== 'function')) {
-      sandbox[key] = value
-    } else {
-      console.warn('[RuleParser.js] 拒绝注入复杂对象:', key, typeof value)
-    }
+    if (typeof value === 'function') continue
+    sandbox[key] = value
   }
+  return sandbox
+}
 
+export function executeJs(source: any, expression: string, context: JsContext = { source: null }): any {
+  if (!source && source !== null) return null
+  if (!expression) return null
+  if (isDangerous(expression)) { console.error('[RuleParser.js] 拒绝执行危险代码'); return null }
+  
   try {
-    const script = new vm.Script(`(() => { return (${expression}) })()`, { timeout: 1000 } as any)
-    const result = script.runInNewContext(sandbox, { timeout: 1000, displayErrors: true })
+    const sandbox = buildSandbox({ source, ...context })
+    const vmContext = vm.createContext(sandbox)
+    const script = new vm.Script(`(() => { ${expression} })()`, { timeout: 3000, displayErrors: true } as any)
+    const result = script.runInContext(vmContext, { timeout: 3000, displayErrors: true, breakOnSigint: true })
     if (result !== null && result !== undefined) {
       try { return JSON.parse(JSON.stringify(result)) } catch { return result }
     }
     return null
   } catch (error: any) {
-    console.error('[RuleParser.js] 执行失败:', error.message)
+    console.warn('[RuleParser.js] 执行失败:', error.message)
     return null
   }
 }

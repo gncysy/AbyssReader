@@ -1,13 +1,18 @@
+/**
+ * 规则解析引擎 - 对标 Legado AnalyzeRule.kt
+ * 支持：@XPath、@Json、@CSS、@Js、@Regex、@put、@get、{{}}、##、||、&&、%%
+ */
+
 import { executeCss } from './css.js'
 import { executeXPath } from './xpath.js'
 import { executeJsonPath } from './jsonpath.js'
 import { executeJs } from './js.js'
 import { executeRegex } from './regex.js'
 
-export type RuleType = 'css' | 'xpath' | 'json' | 'js' | 'regex' | 'text'
+export type RuleMode = 'xpath' | 'json' | 'css' | 'js' | 'regex' | 'text'
 
 export interface ParsedRule {
-  type: RuleType
+  type: RuleMode
   expression: string
   attribute?: string | null
   cleanPattern?: string | null
@@ -16,19 +21,29 @@ export interface ParsedRule {
   original: string
 }
 
-export interface RuleContext {
-  source: any
-  baseUrl?: string
-  redirectUrl?: string
-  variables?: Record<string, any>
-  book?: any
-  chapter?: any
-  [key: string]: any
+export interface SourceRule {
+  mode: RuleMode
+  rule: string
+  replaceRegex?: string
+  replacement?: string
+  replaceFirst?: boolean
+  putMap?: Record<string, string>
 }
 
-// ============================================
-// 变量存储
-// ============================================
+export interface RuleContext {
+  source?: any
+  baseUrl?: string
+  redirectUrl?: string
+  book?: any
+  chapter?: any
+  result?: any
+  src?: any
+  key?: string
+  page?: number
+  nextChapterUrl?: string
+  variables?: Record<string, any>
+  [key: string]: any
+}
 
 const variableStore = new Map<string, any>()
 
@@ -44,372 +59,178 @@ export function clearVariables(): void {
   variableStore.clear()
 }
 
-// ============================================
-// 规则预处理
-// ============================================
+const PUT_PATTERN = /@put:\s*\{([^}]+?)\}/gi
+const GET_PATTERN = /@get:\s*\{([^}]+?)\}/gi
 
-function preprocessRule(rule: string, context: RuleContext): string {
-  if (!rule || typeof rule !== 'string') return rule
-
-  let result = rule
-  let maxIterations = 10
-
-  // 1. 处理 <js>...</js> 标签
-  while (maxIterations-- > 0) {
-    const match = result.match(/<js>([\s\S]*?)<\/js>/)
-    if (!match) break
+export function parseRule(ruleStr: string, context: RuleContext = { source: null }): SourceRule[] {
+  if (!ruleStr || typeof ruleStr !== 'string') return []
+  
+  const rules: SourceRule[] = []
+  let mode: RuleMode = 'css'
+  let start = 0
+  const trimmed = ruleStr.trim()
+  
+  if (trimmed.startsWith('$.')) { mode = 'json' }
+  else if (trimmed.match(/^@XPath:/i)) { mode = 'xpath'; start = 7 }
+  else if (trimmed.match(/^@Json:/i)) { mode = 'json'; start = 6 }
+  else if (trimmed.match(/^@CSS:/i)) { mode = 'css'; start = 5 }
+  else if (trimmed.match(/^@Js:/i)) { mode = 'js'; start = 4 }
+  else if (trimmed.match(/^@Regex:/i)) { mode = 'regex'; start = 7 }
+  else if (trimmed.match(/^@text:/i)) { mode = 'text'; start = 6 }
+  
+  let rule = start > 0 ? ruleStr.substring(start).trim() : ruleStr
+  const putMap: Record<string, string> = {}
+  
+  rule = rule.replace(PUT_PATTERN, (match, content) => {
     try {
-      const jsCode = match[1].trim()
-      const evalResult = executeJs(context.source || {}, jsCode, context)
-      const replacement = evalResult !== null && evalResult !== undefined ? String(evalResult) : ''
-      result = result.replace(match[0], replacement)
-    } catch (e) {
-      console.warn('[Preprocess] <js> 执行失败:', e)
-      result = result.replace(match[0], '')
-    }
-  }
-
-  // 2. 处理 {{...}} 模板语法（支持 JSONPath + ## 清理）
-  maxIterations = 10
-  while (maxIterations-- > 0) {
-    const match = result.match(/\{\{([\s\S]*?)\}\}/)
-    if (!match) break
-    try {
-      let expr = match[1].trim()
-      
-      let cleanPattern: string | null = null
-      let cleanReplacement: string = ''
-      let finalExpr = expr
-      
-      if (expr.includes('##')) {
-        const parts = expr.split('##')
-        finalExpr = parts[0].trim()
-        if (parts.length > 1) {
-          cleanPattern = parts[1].trim()
-        }
-        if (parts.length > 2) {
-          cleanReplacement = parts[2] || ''
-        }
-        console.log('[Preprocess] 检测到 ## 清理规则, 表达式:', finalExpr, '模式:', cleanPattern)
-      }
-      
-      let resultValue = ''
-      
-      // 检测是否是 JSONPath 表达式（以 $ 开头）或 JSONPath 风格的表达式
-      if (finalExpr.startsWith('$') || finalExpr.startsWith('$.')) {
-        try {
-          const jsonPathResult = executeJsonPath(context.source || {}, finalExpr)
-          resultValue = jsonPathResult !== null && jsonPathResult !== undefined ? String(jsonPathResult) : ''
-          console.log('[Preprocess] JSONPath 结果:', resultValue, '表达式:', finalExpr)
-        } catch (e) {
-          console.warn('[Preprocess] JSONPath 失败，尝试 JS:', e)
-          const evalResult = executeJs(context.source || {}, finalExpr, context)
-          resultValue = evalResult !== null && evalResult !== undefined ? String(evalResult) : ''
-        }
-      } else {
-        const evalResult = executeJs(context.source || {}, finalExpr, context)
-        resultValue = evalResult !== null && evalResult !== undefined ? String(evalResult) : ''
-      }
-      
-      if (cleanPattern && resultValue) {
-        try {
-          const regex = new RegExp(cleanPattern, 'g')
-          resultValue = resultValue.replace(regex, cleanReplacement || '')
-          console.log('[Preprocess] 清理后:', resultValue)
-        } catch (e) {
-          console.warn('[Preprocess] 清理规则失败:', cleanPattern)
-        }
-      }
-      
-      result = result.replace(match[0], resultValue)
-    } catch (e) {
-      console.warn('[Preprocess] {{}} 执行失败:', e)
-      result = result.replace(match[0], '')
-    }
-  }
-
-  // 3. 处理内联 @js:
-  maxIterations = 10
-  while (maxIterations-- > 0) {
-    const match = result.match(/@js:\s*([\s\S]*?)(?=\s*(?:@\w+:|$))/)
-    if (!match) break
-    try {
-      const jsCode = match[1].trim()
-      const evalResult = executeJs(context.source || {}, jsCode, context)
-      const replacement = evalResult !== null && evalResult !== undefined ? String(evalResult) : ''
-      result = result.replace(match[0], replacement)
-    } catch (e) {
-      console.warn('[Preprocess] @js: 执行失败:', e)
-      result = result.replace(match[0], '')
-    }
-  }
-
-  // 4. 简单占位符兜底
-  if (context.key !== undefined) {
-    result = result.replace(/\{\{key\}\}/g, String(context.key))
-  }
-  if (context.page !== undefined) {
-    result = result.replace(/\{\{page\}\}/g, String(context.page))
-  }
-  if (context.baseUrl) {
-    result = result.replace(/\{\{baseUrl\}\}/g, String(context.baseUrl))
-  }
-
-  return result
-}
-
-// ============================================
-// 规则解析
-// ============================================
-
-export function parseRule(rule: string): ParsedRule | null {
-  if (!rule || typeof rule !== 'string') return null
-
-  let trimmed = rule.trim()
-  let cleanPattern: string | null = null
-  let cleanReplacement: string | null = null
-
-  const cleanParts = trimmed.split('##')
-  if (cleanParts.length >= 3) {
-    const selectorPart = cleanParts.slice(0, cleanParts.length - 2).join('##')
-    cleanPattern = cleanParts[cleanParts.length - 2]
-    cleanReplacement = cleanParts[cleanParts.length - 1] || ''
-    trimmed = selectorPart
-  } else if (cleanParts.length === 2) {
-    trimmed = cleanParts[0]
-    cleanPattern = cleanParts[1]
-    cleanReplacement = ''
-  }
-
-  let parsed: ParsedRule | null = null
-
-  // @put:
-  if (trimmed.match(/^@put:/i)) {
-    const match = trimmed.match(/^@put:\s*\{([^}]+)\}/i)
-    if (match) {
-      try {
-        const pairs = match[1].split(',').map(p => p.trim().split(':'))
-        for (const [key, value] of pairs) {
-          if (key && value) {
-            putVariable(key.trim(), value.trim())
-          }
-        }
-      } catch {}
-    }
-    parsed = {
-      type: 'text',
-      expression: '',
-      attribute: null,
-      cleanPattern: null,
-      cleanReplacement: null,
-      flags: null,
-      original: rule,
-    }
-  }
-
-  // @get:
-  if (trimmed.match(/^@get:/i)) {
-    const key = trimmed.replace(/^@get:\s*\{?([^}]+)\}?/i, '$1').trim()
-    const value = getVariable(key)
-    parsed = {
-      type: 'text',
-      expression: value !== undefined ? String(value) : '',
-      attribute: null,
-      cleanPattern: null,
-      cleanReplacement: null,
-      flags: null,
-      original: rule,
-    }
-  }
-
-  // ===== 检测是否为 URL（纯文本） =====
-  if (!parsed && (trimmed.startsWith('http://') || trimmed.startsWith('https://'))) {
-    parsed = {
-      type: 'text',
-      expression: trimmed,
-      attribute: null,
-      cleanPattern: null,
-      cleanReplacement: null,
-      flags: null,
-      original: rule,
-    }
-  }
-
-  // 其他规则类型
-  if (!parsed) {
-    if (trimmed.startsWith('$')) {
-      parsed = { type: 'json', expression: trimmed, attribute: null, cleanPattern, cleanReplacement, flags: null, original: rule }
-    } else if (trimmed.match(/^@xpath:/i)) {
-      parsed = { type: 'xpath', expression: trimmed.replace(/^@xpath:/i, ''), attribute: null, cleanPattern, cleanReplacement, flags: null, original: rule }
-    } else if (trimmed.match(/^@json:/i)) {
-      parsed = { type: 'json', expression: trimmed.replace(/^@json:/i, ''), attribute: null, cleanPattern, cleanReplacement, flags: null, original: rule }
-    } else if (trimmed.match(/^@js:/i)) {
-      parsed = { type: 'js', expression: trimmed.replace(/^@js:/i, ''), attribute: null, cleanPattern, cleanReplacement, flags: null, original: rule }
-    } else if (trimmed.match(/^@regex:/i)) {
-      parsed = { type: 'regex', expression: trimmed.replace(/^@regex:/i, ''), attribute: null, cleanPattern, cleanReplacement, flags: null, original: rule }
-    } else if (trimmed.match(/^@text:/i)) {
-      let text = trimmed.replace(/^@text:/i, '').trim()
-      if ((text.startsWith('"') && text.endsWith('"')) || (text.startsWith("'") && text.endsWith("'"))) {
-        text = text.slice(1, -1)
-      }
-      parsed = { type: 'text', expression: text, attribute: null, cleanPattern, cleanReplacement, flags: null, original: rule }
-    } else {
-      let expression = trimmed
-      let attribute: string | null = null
-      const attrMatch = expression.match(/^(.+)@([a-zA-Z-]+)$/)
-      if (attrMatch) {
-        expression = attrMatch[1]
-        attribute = attrMatch[2]
-      }
-      parsed = { type: 'css', expression, attribute, cleanPattern, cleanReplacement, flags: null, original: rule }
-    }
-  }
-
-  if (parsed) {
-    parsed.cleanPattern = cleanPattern || null
-    parsed.cleanReplacement = cleanReplacement || null
-    parsed.original = rule
-  }
-
-  return parsed
-}
-
-// ============================================
-// 规则执行
-// ============================================
-
-export function executeRule(
-  source: any,
-  parsedRule: ParsedRule,
-  context: RuleContext = { source }
-): any {
-  if (!source || !parsedRule) return null
-
-  const { type, expression, attribute, cleanPattern, cleanReplacement } = parsedRule
-
-  let result: any = null
-
-  switch (type) {
-    case 'css':
-      result = executeCss(source, expression, attribute || undefined)
-      break
-    case 'xpath':
-      result = executeXPath(source, expression, attribute || undefined)
-      break
-    case 'json':
-      result = executeJsonPath(source, expression)
-      break
-    case 'js':
-      result = executeJs(source, expression, context)
-      break
-    case 'regex':
-      result = executeRegex(source, expression)
-      break
-    case 'text':
-      result = expression
-      break
-    default:
-      result = null
-  }
-
-  if (result !== null && result !== undefined && cleanPattern) {
-    try {
-      const regex = new RegExp(cleanPattern, 'g')
-      const replacement = cleanReplacement || ''
-      if (typeof result === 'string') {
-        result = result.replace(regex, replacement)
-      } else if (Array.isArray(result)) {
-        result = result.map(item => typeof item === 'string' ? item.replace(regex, replacement) : item)
+      const pairs = content.split(',').map((p: string) => p.trim().split(':'))
+      for (const [key, value] of pairs) {
+        if (key && value) { putMap[key.trim()] = value.trim(); putVariable(key.trim(), value.trim()) }
       }
     } catch (e) {}
+    return ''
+  })
+  
+  rule = rule.replace(GET_PATTERN, (match, key) => {
+    const value = getVariable(key.trim())
+    return value !== undefined && value !== null ? String(value) : ''
+  })
+  
+  let replaceRegex = '', replacement = '', replaceFirst = false
+  const cleanParts = rule.split('##')
+  if (cleanParts.length >= 2) {
+    rule = cleanParts[0].trim()
+    replaceRegex = cleanParts[1].trim()
+    if (cleanParts.length >= 3) replacement = cleanParts[2] || ''
+    if (cleanParts.length >= 4) replaceFirst = true
   }
-
-  return result
+  
+  // 处理 {{}} 模板
+  const evalMatches = rule.match(/\{\{[\s\S]*?\}\}/g)
+  if (evalMatches) {
+    for (const match of evalMatches) {
+      const jsContent = match.match(/\{\{([\s\S]*?)\}\}/)
+      if (jsContent) {
+        try {
+          const result = executeJs(context.source || {}, jsContent[1].trim(), context)
+          rule = rule.replace(match, result !== null && result !== undefined ? String(result) : '')
+        } catch (e) { rule = rule.replace(match, '') }
+      }
+    }
+  }
+  
+  rule = rule.replace(/@js:\s*([\s\S]*?)(?=\s*(?:@\w+:|$))/gi, (match, code) => {
+    try {
+      const result = executeJs(context.source || {}, code.trim(), context)
+      return result !== null && result !== undefined ? String(result) : ''
+    } catch (e) { return '' }
+  })
+  
+  rules.push({ mode, rule: rule.trim() || rule, replaceRegex, replacement, replaceFirst, putMap: Object.keys(putMap).length > 0 ? putMap : undefined })
+  return rules
 }
 
-// ============================================
-// 管道执行
-// ============================================
+export function executeRule(source: any, rule: string, context: RuleContext = { source: null }): string {
+  if (!rule) return ''
+  const rules = parseRule(rule, context)
+  if (rules.length === 0) return ''
+  let result: any = source
+  
+  for (const sourceRule of rules) {
+    if (result === null || result === undefined) break
+    const ruleStr = sourceRule.rule
+    if (!ruleStr) continue
+    
+    if (sourceRule.replaceRegex) {
+      const regex = new RegExp(sourceRule.replaceRegex, 'g')
+      const repl = sourceRule.replacement || ''
+      if (typeof result === 'string') {
+        result = sourceRule.replaceFirst ? result.replace(regex, repl) : result.replace(regex, repl)
+      } else if (Array.isArray(result)) {
+        result = result.map(item => typeof item === 'string' ? (sourceRule.replaceFirst ? item.replace(regex, repl) : item.replace(regex, repl)) : item)
+      }
+      continue
+    }
+    
+    switch (sourceRule.mode) {
+      case 'xpath': result = executeXPath(result, ruleStr); break
+      case 'json': result = executeJsonPath(result, ruleStr); break
+      case 'js': result = executeJs(result, ruleStr, context); break
+      case 'regex': result = executeRegex(result, ruleStr); break
+      case 'text': result = ruleStr; break
+      default: result = executeCss(result, ruleStr); break
+    }
+  }
+  
+  if (result === null || result === undefined) return ''
+  if (typeof result === 'string') return result
+  if (Array.isArray(result)) return result.filter(item => item !== null && item !== undefined).join('\n')
+  return String(result)
+}
 
-export function parseAndExecute(
-  source: any,
-  rule: string,
-  context: RuleContext = { source }
-): any {
+export function executeRuleList(source: any, rule: string, context: RuleContext = { source: null }): string[] {
+  if (!rule) return []
+  const result = executeRule(source, rule, context)
+  if (!result) return []
+  if (Array.isArray(result)) return result.map(item => String(item)).filter(s => s)
+  if (typeof result === 'string') return result.split('\n').map(s => s.trim()).filter(s => s)
+  return [String(result)].filter(s => s)
+}
+
+export function executeRuleElements(source: any, rule: string, context: RuleContext = { source: null }): any[] {
+  if (!rule) return []
+  const result = executeRule(source, rule, context)
+  if (!result) return []
+  if (Array.isArray(result)) return result
+  return [result]
+}
+
+export function parseAndExecute(source: any, rule: string, context: RuleContext = { source: null }): any {
   if (!source || !rule) return null
-
-  const processedRule = preprocessRule(rule, context)
-
+  
   const combinators = ['||', '&&', '%%']
   let usedCombinator: string | null = null
-  let parts: string[] = [processedRule]
-
+  let parts: string[] = [rule]
+  
   for (const comb of combinators) {
-    if (processedRule.includes(comb)) {
+    if (rule.includes(comb)) {
       usedCombinator = comb
-      parts = processedRule.split(comb).map(s => s.trim())
+      parts = rule.split(comb).map(s => s.trim())
       break
     }
   }
-
-  if (parts.length === 1) {
-    const parsed = parseRule(parts[0])
-    if (parsed) {
-      return executeRule(source, parsed, context)
-    }
-    return null
-  }
-
+  
+  if (parts.length === 1) return executeRule(source, parts[0], context)
+  
   const results: any[] = []
-  for (const part of parts) {
-    const parsed = parseRule(part)
-    if (parsed) {
-      const result = executeRule(source, parsed, context)
-      results.push(result)
-    } else {
-      results.push(null)
-    }
-  }
-
+  for (const part of parts) results.push(executeRule(source, part, context))
   const validResults = results.filter(r => r !== null && r !== undefined && r !== '')
-
+  
   switch (usedCombinator) {
-    case '||':
-      return validResults.length > 0 ? validResults[0] : null
-
+    case '||': return validResults.length > 0 ? validResults[0] : null
     case '&&': {
       if (validResults.length === 0) return null
       if (validResults.length === 1) return validResults[0]
       const merged: string[] = []
       for (const r of validResults) {
-        if (typeof r === 'string') {
-          merged.push(r)
-        } else if (Array.isArray(r)) {
-          merged.push(...r.map(item => String(item)))
-        } else {
-          merged.push(String(r))
-        }
+        if (Array.isArray(r)) merged.push(...r.map(item => String(item)))
+        else merged.push(String(r))
       }
       return merged
     }
-
     case '%%': {
       if (validResults.length === 0) return null
       const matrixResults = validResults.map(r => Array.isArray(r) ? r : [r])
       const maxLen = Math.max(...matrixResults.map(arr => arr.length))
-      const matrixMerged: string[] = []
+      const merged: string[] = []
       for (let i = 0; i < maxLen; i++) {
         for (const arr of matrixResults) {
-          if (i < arr.length) {
-            matrixMerged.push(String(arr[i]))
-          }
+          if (i < arr.length) merged.push(String(arr[i]))
         }
       }
-      return matrixMerged
+      return merged
     }
-
-    default:
-      return validResults.length > 0 ? validResults[0] : null
+    default: return validResults.length > 0 ? validResults[0] : null
   }
 }
 

@@ -91,21 +91,58 @@ export const useReadingStore = defineStore('reading', {
       } catch {}
     },
 
+    // ===== 保存阅读进度 =====
     async saveProgress(bookId: string, chapterId: number, chapterTitle: string, scrollPercent: number) {
       try {
-        await store.set(`reading_progress_${bookId}`, {
+        const progressKey = `reading_progress_${bookId}`
+        const data = {
           chapterId,
           chapterTitle,
           scrollPercent,
           updatedAt: new Date().toISOString(),
-        })
-      } catch {}
+        }
+        console.log('[ReadingStore] 保存进度:', progressKey, data)
+        await store.set(progressKey, data)
+        
+        // 同时保存到 books 数组中的 current_chapter_id
+        const books = await store.get('books') || []
+        const bookIndex = books.findIndex((b: any) => String(b.id) === String(bookId))
+        if (bookIndex !== -1) {
+          books[bookIndex].current_chapter_id = chapterId
+          books[bookIndex].current_chapter_title = chapterTitle
+          books[bookIndex].read_progress = scrollPercent
+          await store.set('books', books)
+          console.log('[ReadingStore] 更新书籍进度:', bookId, '章节:', chapterId)
+        }
+      } catch (err) {
+        console.error('[ReadingStore] 保存进度失败:', err)
+      }
     },
 
+    // ===== 读取阅读进度 =====
     async loadProgress(bookId: string) {
       try {
-        return await store.get(`reading_progress_${bookId}`)
-      } catch {
+        const progressKey = `reading_progress_${bookId}`
+        const data = await store.get(progressKey)
+        console.log('[ReadingStore] 读取进度:', progressKey, data)
+        
+        // 如果 reading_progress 中没有，尝试从 books 数组中读取
+        if (!data) {
+          const books = await store.get('books') || []
+          const book = books.find((b: any) => String(b.id) === String(bookId))
+          if (book && book.current_chapter_id !== undefined) {
+            console.log('[ReadingStore] 从书籍数据恢复进度:', book.current_chapter_id)
+            return {
+              chapterId: book.current_chapter_id,
+              chapterTitle: book.current_chapter_title || '',
+              scrollPercent: book.read_progress || 0,
+              updatedAt: book.updatedAt || new Date().toISOString(),
+            }
+          }
+        }
+        return data
+      } catch (err) {
+        console.error('[ReadingStore] 读取进度失败:', err)
         return null
       }
     },

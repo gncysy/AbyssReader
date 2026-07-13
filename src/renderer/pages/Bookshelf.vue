@@ -14,13 +14,40 @@
             class="input-search"
           />
         </div>
+        <button class="btn-primary" @click="showAddUrlModal = true">添加网址</button>
         <button class="btn-primary" @click="triggerImport">导入 TXT</button>
-        <button class="btn-secondary" @click="bookshelfStore.loadBooks()">刷新</button>
+        <button class="btn-secondary" @click="refreshBooks">刷新</button>
       </div>
     </header>
 
     <input ref="fileInput" type="file" accept=".txt" class="hidden" @change="onImport" />
 
+    <!-- 添加网址对话框 -->
+    <n-modal v-model:show="showAddUrlModal" preset="dialog" title="添加网址" positive-text="添加" @positive-click="addUrlBook">
+      <div class="add-url-form">
+        <div class="form-group">
+          <label>书籍链接</label>
+          <n-input v-model:value="addUrl" placeholder="输入书籍详情页或目录页链接..." />
+        </div>
+        <div class="form-group">
+          <label>书籍变量（可选）</label>
+          <n-input v-model:value="addUrlVariables" placeholder="如: 全、跳、[目录url]、单、录..." />
+          <div class="form-hint">
+            可用指令：单、直、跳、全、逆、原、图、字、动、静
+          </div>
+        </div>
+        <div class="form-group">
+          <label>选择书源</label>
+          <select v-model="addUrlSourceId" class="form-select">
+            <option v-for="source in sources" :key="source.id" :value="source.id">
+              {{ source.name }}
+            </option>
+          </select>
+        </div>
+      </div>
+    </n-modal>
+
+    <!-- 书籍列表 -->
     <div v-if="bookshelfStore.loading" class="books-grid">
       <div v-for="i in 8" :key="i" class="book-card-skeleton">
         <div class="skeleton" style="aspect-ratio:2/3;border-radius:12px;"></div>
@@ -34,7 +61,7 @@
         v-for="book in bookshelfStore.filteredBooks"
         :key="book.id"
         class="book-card"
-        @click="openBookDetail(book)"
+        @click="openBook(book)"
       >
         <div class="book-cover">
           <img
@@ -51,6 +78,7 @@
         <div class="book-info">
           <h3 class="book-title">{{ book.name || '未命名' }}</h3>
           <p class="book-author">{{ book.author || '佚名' }}</p>
+          <p v-if="book._custom" class="book-tag">{{ book._custom }}</p>
         </div>
       </div>
     </div>
@@ -58,15 +86,18 @@
     <div v-else class="empty-state">
       <div class="empty-icon">📚</div>
       <h3>书架空空如也</h3>
-      <p>导入 TXT 文件或搜索添加书籍</p>
-      <button class="btn-primary" @click="triggerImport">导入第一本书</button>
+      <p>导入 TXT、添加网址或搜索添加书籍</p>
+      <div class="empty-actions">
+        <button class="btn-primary" @click="triggerImport">导入 TXT</button>
+        <button class="btn-primary" @click="showAddUrlModal = true">添加网址</button>
+      </div>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, watch, onMounted } from 'vue'
-import { useMessage } from 'naive-ui'
+import { useMessage, NModal, NInput } from 'naive-ui'
 import { useBookshelfStore } from '@/store'
 import { store, reader as readerApi } from '@/api'
 import type { Book, BookSource } from '@shared/types'
@@ -78,6 +109,11 @@ const sources = ref<BookSource[]>([])
 const searchText = ref('')
 const fileInput = ref<HTMLInputElement | null>(null)
 
+const showAddUrlModal = ref(false)
+const addUrl = ref('')
+const addUrlVariables = ref('')
+const addUrlSourceId = ref('')
+
 watch(searchText, (val) => {
   bookshelfStore.setFilter(val)
 })
@@ -86,9 +122,17 @@ async function loadSources() {
   try {
     const sourceData = await store.get('sources')
     sources.value = sourceData || []
+    if (sources.value.length > 0 && !addUrlSourceId.value) {
+      addUrlSourceId.value = sources.value[0].id
+    }
   } catch (err: any) {
     console.error('加载书源失败:', err)
   }
+}
+
+async function refreshBooks() {
+  await bookshelfStore.loadBooks()
+  message.success('已刷新')
 }
 
 function triggerImport() {
@@ -117,6 +161,86 @@ async function onImport(event: Event) {
   }
 }
 
+async function addUrlBook() {
+  if (!addUrl.value.trim()) {
+    message.warning('请输入书籍链接')
+    return
+  }
+
+  const source = sources.value.find(s => s.id === addUrlSourceId.value)
+  if (!source) {
+    message.error('请选择书源')
+    return
+  }
+
+  let bookUrl = addUrl.value.trim()
+  if (addUrlVariables.value.trim()) {
+    const vars = addUrlVariables.value.trim()
+    if (bookUrl.includes('?')) {
+      bookUrl += '&' + vars
+    } else {
+      bookUrl += '?' + vars
+    }
+  }
+
+  try {
+    const result = await window.electronAPI.engineGetBookInfo(source, bookUrl)
+    if (!result.success || !result.data) {
+      throw new Error(result.error || '获取书籍信息失败')
+    }
+
+    const bookData = result.data
+    const newBook: Book = {
+      ...bookData,
+      id: `${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+      sourceId: source.id,
+      sourceName: source.name,
+      _custom: addUrlVariables.value.trim() || '',
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    }
+
+    const books = await store.get('books') || []
+    books.unshift(newBook)
+    await store.set('books', books)
+    await bookshelfStore.loadBooks()
+
+    message.success(`已添加《${newBook.name}》到书架`)
+    showAddUrlModal.value = false
+    addUrl.value = ''
+    addUrlVariables.value = ''
+  } catch (err: any) {
+    message.error('添加失败: ' + err.message)
+  }
+}
+
+// ===== 点击书籍：打开详情页 =====
+function cleanSource(source: any): any {
+  if (!source) return null
+  try {
+    return JSON.parse(JSON.stringify(source))
+  } catch {
+    return {
+      id: source.id || '',
+      name: source.name || '',
+      url: source.url || '',
+      searchUrl: source.searchUrl || '',
+      ruleToc: source.ruleToc || {},
+      ruleContent: source.ruleContent || {},
+      ruleBookInfo: source.ruleBookInfo || {},
+      ruleSearch: source.ruleSearch || {},
+      header: typeof source.header === 'string' ? source.header : null,
+      enabled: true,
+    }
+  }
+}
+
+function openBook(book: Book) {
+  const rawSource = sources.value.find(s => s.id === book.sourceId)
+  const source = cleanSource(rawSource)
+  bookshelfStore.openDetail(book, source)
+}
+
 function handleImageError(e: Event) {
   const img = e.target as HTMLImageElement
   img.style.display = 'none'
@@ -129,22 +253,13 @@ function handleImageError(e: Event) {
   }
 }
 
-function openBookDetail(book: Book) {
-  const source = sources.value.find(s => s.id === book.sourceId)
-  bookshelfStore.openDetail(book, source || null)
-}
-
 onMounted(() => {
   Promise.all([bookshelfStore.loadBooks(), loadSources()])
 })
 </script>
 
 <style scoped>
-.bookshelf-page {
-  position: relative;
-  z-index: 1;
-}
-
+.bookshelf-page { position: relative; z-index: 1; }
 .page-header {
   display: flex;
   justify-content: space-between;
@@ -153,29 +268,11 @@ onMounted(() => {
   flex-wrap: wrap;
   gap: 12px;
 }
+.page-title { font-size: 28px; font-weight: 600; color: var(--text-primary); }
+.page-subtitle { font-size: 14px; color: var(--text-muted); margin-top: 4px; }
+.header-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 
-.page-title {
-  font-size: 28px;
-  font-weight: 600;
-  color: var(--text-primary);
-}
-
-.page-subtitle {
-  font-size: 14px;
-  color: var(--text-muted);
-  margin-top: 4px;
-}
-
-.header-actions {
-  display: flex;
-  gap: 8px;
-  align-items: center;
-}
-
-.search-wrapper {
-  position: relative;
-}
-
+.search-wrapper { position: relative; }
 .input-search {
   padding: 8px 12px;
   font-size: 14px;
@@ -187,21 +284,14 @@ onMounted(() => {
   width: 200px;
   transition: border-color 0.2s;
 }
-
-.input-search:focus {
-  border-color: var(--brand);
-}
-
-.input-search::placeholder {
-  color: var(--text-muted);
-}
+.input-search:focus { border-color: var(--brand); }
+.input-search::placeholder { color: var(--text-muted); }
 
 .books-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
   gap: 20px;
 }
-
 .book-card {
   cursor: pointer;
   transition: transform 0.2s, box-shadow 0.2s;
@@ -222,13 +312,7 @@ onMounted(() => {
   overflow: hidden;
   position: relative;
 }
-
-.book-cover img {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-}
-
+.book-cover img { width: 100%; height: 100%; object-fit: cover; }
 .book-cover-placeholder {
   width: 100%;
   height: 100%;
@@ -240,9 +324,7 @@ onMounted(() => {
   background: var(--bg-hover);
 }
 
-.book-info {
-  padding: 8px 10px;
-}
+.book-info { padding: 8px 10px; }
 .book-title {
   font-size: 14px;
   font-weight: 500;
@@ -257,6 +339,11 @@ onMounted(() => {
   color: var(--text-muted);
   margin: 2px 0 0;
 }
+.book-tag {
+  font-size: 10px;
+  color: var(--brand);
+  margin: 2px 0 0;
+}
 
 .empty-state {
   display: flex;
@@ -266,37 +353,77 @@ onMounted(() => {
   padding: 80px 0;
   text-align: center;
 }
+.empty-icon { font-size: 48px; margin-bottom: 16px; opacity: 0.5; }
+.empty-state h3 { font-size: 20px; color: var(--text-secondary); margin-bottom: 8px; }
+.empty-state p { font-size: 14px; color: var(--text-muted); margin-bottom: 24px; }
+.empty-actions { display: flex; gap: 12px; }
 
-.empty-icon {
-  font-size: 48px;
-  margin-bottom: 16px;
-  opacity: 0.5;
-}
+.hidden { display: none; }
 
-.empty-state h3 {
-  font-size: 20px;
-  color: var(--text-secondary);
-  margin-bottom: 8px;
-}
+.book-card-skeleton .skeleton { background: var(--bg-card); border-radius: 4px; animation: shimmer 1.5s infinite; }
+@keyframes shimmer { 0%, 100% { opacity: 0.4; } 50% { opacity: 0.7; } }
 
-.empty-state p {
-  font-size: 14px;
+.add-url-form { display: flex; flex-direction: column; gap: 12px; padding: 4px 0; }
+.form-group { display: flex; flex-direction: column; gap: 4px; }
+.form-group label { font-size: 13px; font-weight: 500; color: var(--text-secondary); }
+.form-hint {
+  font-size: 11px;
   color: var(--text-muted);
-  margin-bottom: 24px;
-}
-
-.hidden {
-  display: none;
-}
-
-.book-card-skeleton .skeleton {
-  background: var(--bg-card);
+  padding: 6px 10px;
+  background: var(--bg-hover);
   border-radius: 4px;
-  animation: shimmer 1.5s infinite;
+  line-height: 1.6;
 }
+.form-select {
+  padding: 8px 12px;
+  font-size: 14px;
+  color: var(--text-primary);
+  background: var(--bg-card);
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  outline: none;
+}
+.form-select:focus { border-color: var(--brand); }
 
-@keyframes shimmer {
-  0%, 100% { opacity: 0.4; }
-  50% { opacity: 0.7; }
+.btn-primary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 8px 16px;
+  font-size: 14px;
+  font-weight: 500;
+  color: #0d0d0d;
+  background: var(--brand);
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+.btn-primary:hover {
+  background: var(--brand-hover);
+  transform: translateY(-1px);
+  box-shadow: 0 4px 20px rgba(212, 160, 23, 0.25);
+}
+.btn-secondary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 8px 16px;
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  background: transparent;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+.btn-secondary:hover {
+  color: var(--text-primary);
+  background: var(--bg-hover);
+  border-color: var(--brand);
 }
 </style>
+

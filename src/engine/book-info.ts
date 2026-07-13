@@ -1,174 +1,217 @@
-import { getGlobalHttpClient } from './network/client.js';
-import { parseAndExecute, putVariable, getVariable } from './rule-parser/index.js';
-import {
-  resolveUrl,
-  cleanIntro,
-  isJsonResponse,
-  safeParseJson,
-} from './utils/url.js';
-import { isJsSource, executeJsBookInfo } from './utils/js-source.js';
-import type { Book, BookSource } from '../shared/types.js';
+/**
+ * 书籍详情解析 - 对标 Legado BookInfo.kt
+ * 
+ * 功能：
+ * - 支持 init 初始化规则
+ * - 自动获取 name、author、kind、wordCount、lastChapter、intro、coverUrl、tocUrl
+ * - 支持 canReName 重命名
+ * - 支持 tocUrl 自动补全
+ */
 
-export async function getBookInfo(source: BookSource, bookUrl: string): Promise<Book | null> {
-  if (isJsSource(source)) {
-    try {
-      const result = await executeJsBookInfo(source, bookUrl);
-      if (result) {
-        return {
-          id: result.id || bookUrl || `js_${Date.now()}`,
-          sourceId: source.id,
-          sourceName: source.name,
-          name: result.name || '未命名',
-          author: result.author || '未知作者',
-          coverUrl: result.coverUrl || null,
-          intro: result.intro || null,
-          kind: result.kind || null,
-          lastChapter: result.lastChapter || null,
-          bookUrl: result.bookUrl || bookUrl,
-          tocUrl: result.tocUrl || null,
-          createdAt: new Date().toISOString(),
-          updatedAt: new Date().toISOString(),
-        };
-      }
-      return null;
-    } catch (error: any) {
-      console.error('[BookInfo] JS书源获取详情失败:', error.message);
-      return null;
-    }
+import { getGlobalHttpClient } from './network/client.js'
+import { parseAndExecute, executeRule } from './rule-parser/index.js'
+import { resolveUrl, cleanIntro, isJsonResponse, safeParseJson } from './utils/url.js'
+import type { Book, BookSource } from '../shared/types.js'
+
+// ============================================================
+// 类型定义
+// ============================================================
+
+export interface BookInfoOptions {
+  redirectUrl?: string
+  cachedHtml?: string
+  canReName?: boolean
+  debugLog?: (msg: string) => void
+}
+
+// ============================================================
+// 主函数
+// ============================================================
+
+export async function getBookInfo(
+  source: BookSource,
+  bookUrl: string,
+  options: BookInfoOptions = {}
+): Promise<Book | null> {
+  if (!bookUrl || typeof bookUrl !== 'string' || !bookUrl.trim()) {
+    console.warn('[BookInfo] bookUrl 无效')
+    return null
   }
 
-  const httpClient = getGlobalHttpClient();
+  const httpClient = getGlobalHttpClient()
+  const rule = source.ruleBookInfo
 
-  const rule = source.ruleBookInfo;
   if (!rule) {
-    return null;
+    console.warn('[BookInfo] 书源缺少 ruleBookInfo')
+    return null
   }
 
-  try {
-    const headers: Record<string, string> = {
-      'User-Agent':
-        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-    };
+  const { redirectUrl = bookUrl, cachedHtml, canReName = false, debugLog } = options
 
-    if (source.header) {
-      try {
-        const { parseHeader } = await import('./source-helper.js');
-        const parsed = parseHeader(source.header, { source });
-        if (parsed) {
-          Object.assign(headers, parsed);
-        }
-      } catch {}
-    }
+  // ===== 1. 获取 HTML =====
+  let html = cachedHtml
+  let finalRedirectUrl = redirectUrl
 
-    const response = await httpClient.request({
-      url: bookUrl,
-      method: 'GET',
-      headers,
-      timeout: 30000,
-    });
+  if (!html) {
+    try {
+      const headers = source.header ? JSON.parse(source.header) : {}
+      const response = await httpClient.request({
+        url: bookUrl,
+        method: 'GET',
+        headers,
+        timeout: 30000,
+      })
 
-    if (response.status < 200 || response.status >= 300) {
-      throw new Error(`HTTP ${response.status}`);
-    }
-
-    const html = response.data;
-    const finalRedirectUrl = response.url || bookUrl;
-    const context = { source, baseUrl: source.url, bookUrl, redirectUrl: finalRedirectUrl };
-
-    // ===== 检查 Content-Type =====
-    if (isJsonResponse(response.headers)) {
-      const json = safeParseJson(html);
-      if (json) {
-        const bookData = json.data || json.book || json;
-        const name = bookData.name || bookData.title || bookData.bookName;
-        if (name) {
-          let tocUrl = bookData.tocUrl || bookData.chapterUrl || null;
-          if (!tocUrl || typeof tocUrl !== 'string' || tocUrl === '' || !tocUrl.startsWith('http')) {
-            console.warn('[BookInfo] JSON 中 tocUrl 无效，使用 bookUrl:', bookUrl);
-            tocUrl = bookUrl;
-          }
-          return {
-            id: bookUrl || `json_${Date.now()}`,
-            sourceId: source.id,
-            sourceName: source.name,
-            name: String(name).trim(),
-            author: String(bookData.author || bookData.writer || '未知作者').trim(),
-            coverUrl: bookData.coverUrl || bookData.cover || bookData.img || null,
-            intro: bookData.intro || bookData.description || null,
-            kind: bookData.kind || bookData.category || null,
-            lastChapter: bookData.lastChapter || bookData.latestChapter || null,
-            bookUrl: bookUrl,
-            tocUrl: tocUrl ? resolveUrl(tocUrl, finalRedirectUrl) : null,
-            createdAt: new Date().toISOString(),
-            updatedAt: new Date().toISOString(),
-          };
-        }
-        // 否则用规则解析JSON
-        const parsedName = parseAndExecute(json, rule.name || '', { ...context, json });
-        if (!parsedName) return null;
-        const parsedAuthor = parseAndExecute(json, rule.author || '', { ...context, json }) || '未知作者';
-        const parsedCoverUrl = parseAndExecute(json, rule.coverUrl || '', { ...context, json });
-        const parsedIntro = parseAndExecute(json, rule.intro || '', { ...context, json });
-        const parsedKind = parseAndExecute(json, rule.kind || '', { ...context, json });
-        const parsedLastChapter = parseAndExecute(json, rule.lastChapter || '', { ...context, json });
-        let parsedTocUrl = parseAndExecute(json, rule.tocUrl || '', { ...context, json });
-        if (!parsedTocUrl || typeof parsedTocUrl !== 'string' || parsedTocUrl === '' || !parsedTocUrl.startsWith('http')) {
-          console.warn('[BookInfo] 解析 tocUrl 无效，使用 bookUrl:', bookUrl);
-          parsedTocUrl = bookUrl;
-        }
-        return {
-          id: bookUrl,
-          sourceId: source.id,
-          sourceName: source.name,
-          name: String(parsedName).trim(),
-          author: String(parsedAuthor).trim(),
-          coverUrl: parsedCoverUrl ? resolveUrl(String(parsedCoverUrl), finalRedirectUrl) : null,
-          intro: parsedIntro ? cleanIntro(String(parsedIntro)) : null,
-          kind: parsedKind ? String(parsedKind).trim() : null,
-          lastChapter: parsedLastChapter ? String(parsedLastChapter).trim() : null,
-          bookUrl: bookUrl,
-          tocUrl: parsedTocUrl ? resolveUrl(String(parsedTocUrl), finalRedirectUrl) : null,
-          createdAt: new Date().toISOString(),
-          updatedAt: new Date().toISOString(),
-        };
+      if (response.status < 200 || response.status >= 300) {
+        console.warn('[BookInfo] HTTP 失败:', response.status)
+        return null
       }
+
+      html = response.data
+      if (response.url && response.url !== bookUrl) {
+        finalRedirectUrl = response.url
+      }
+    } catch (err: any) {
+      console.warn('[BookInfo] 请求失败:', err.message)
+      return null
     }
+  }
 
-    // ===== HTML 解析 =====
-    const name = parseAndExecute(html, rule.name || '', context);
-    if (!name) return null;
+  if (!html || typeof html !== 'string') {
+    return null
+  }
 
-    const author = parseAndExecute(html, rule.author || '', context) || '未知作者';
-    const coverUrl = parseAndExecute(html, rule.coverUrl || '', context);
-    const intro = parseAndExecute(html, rule.intro || '', context);
-    const kind = parseAndExecute(html, rule.kind || '', context);
-    const lastChapter = parseAndExecute(html, rule.lastChapter || '', context);
-    let tocUrl = parseAndExecute(html, rule.tocUrl || '', context);
+  // ===== 2. 构建上下文 =====
+  const bookObj = { bookUrl, name: '', tocUrl: '' }
+  const baseContext = {
+    source,
+    baseUrl: source.url,
+    bookUrl,
+    redirectUrl: finalRedirectUrl,
+    result: html,
+    src: html,
+    book: bookObj,
+  }
 
-    // ============================================================
-    // 关键修复：tocUrl 无效时使用 bookUrl
-    // ============================================================
-    if (!tocUrl || typeof tocUrl !== 'string' || tocUrl === '' || !tocUrl.startsWith('http')) {
-      console.warn('[BookInfo] tocUrl 无效，使用 bookUrl:', bookUrl);
-      tocUrl = bookUrl;
+  // ===== 3. 执行 init 规则 =====
+  if (rule.init) {
+    debugLog?.('[BookInfo] 执行 init 规则')
+    try {
+      const initResult = parseAndExecute(html, rule.init, baseContext)
+      if (initResult && typeof initResult === 'string') {
+        html = initResult
+        baseContext.result = initResult
+        baseContext.src = initResult
+      }
+    } catch (err) {
+      console.warn('[BookInfo] init 规则执行失败:', err)
     }
+  }
 
-    return {
-      id: bookUrl,
-      sourceId: source.id,
-      sourceName: source.name,
-      name: String(name).trim(),
-      author: String(author).trim(),
-      coverUrl: coverUrl ? resolveUrl(String(coverUrl), finalRedirectUrl) : null,
-      intro: intro ? cleanIntro(String(intro)) : null,
-      kind: kind ? String(kind).trim() : null,
-      lastChapter: lastChapter ? String(lastChapter).trim() : null,
-      bookUrl: bookUrl,
-      tocUrl: tocUrl ? resolveUrl(String(tocUrl), finalRedirectUrl) : null,
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    };
-  } catch (error: any) {
-    throw new Error(`获取书籍详情失败 (${source.name}): ${error.message}`);
+  // ===== 4. 提取各字段 =====
+  const context = { ...baseContext, result: html, src: html }
+
+  // 书名
+  debugLog?.('[BookInfo] 获取书名')
+  let name = executeRule(html, rule.name || '', context)
+  if (name && typeof name === 'string') {
+    name = name.trim()
+  } else {
+    name = ''
+  }
+
+  // 如果书名无效且 canReName 为 false，尝试用默认值
+  if (!name && !canReName) {
+    // 从标题获取
+    const titleMatch = html.match(/<title[^>]*>([^<]+)<\/title>/i)
+    if (titleMatch) {
+      name = titleMatch[1].trim()
+    }
+  }
+
+  if (!name) {
+    name = '未命名'
+  }
+
+  // 作者
+  debugLog?.('[BookInfo] 获取作者')
+  let author = executeRule(html, rule.author || '', context)
+  if (author && typeof author === 'string') {
+    author = author.trim()
+  } else {
+    author = '未知作者'
+  }
+
+  // 分类
+  debugLog?.('[BookInfo] 获取分类')
+  let kind = executeRule(html, rule.kind || '', context)
+  if (kind && typeof kind === 'string') {
+    kind = kind.trim()
+  } else {
+    kind = ""
+  }
+
+  // 字数
+  debugLog?.('[BookInfo] 获取字数')
+  let wordCount = executeRule(html, rule.wordCount || '', context)
+  if (wordCount && typeof wordCount === 'string') {
+    wordCount = wordCount.trim()
+  } else {
+    wordCount = ""
+  }
+
+  // 最新章节
+  debugLog?.('[BookInfo] 获取最新章节')
+  let lastChapter = executeRule(html, rule.lastChapter || '', context)
+  if (lastChapter && typeof lastChapter === 'string') {
+    lastChapter = lastChapter.trim()
+  } else {
+    lastChapter = ""
+  }
+
+  // 简介
+  debugLog?.('[BookInfo] 获取简介')
+  let intro = executeRule(html, rule.intro || '', context)
+  if (intro && typeof intro === 'string') {
+    intro = cleanIntro(intro)
+  } else {
+    intro = ""
+  }
+
+  // 封面
+  debugLog?.('[BookInfo] 获取封面')
+  let coverUrl = executeRule(html, rule.coverUrl || '', context)
+  if (coverUrl && typeof coverUrl === 'string') {
+    coverUrl = resolveUrl(coverUrl.trim(), finalRedirectUrl)
+  } else {
+    coverUrl = ""
+  }
+
+  // 目录 URL
+  debugLog?.('[BookInfo] 获取目录链接')
+  let tocUrl = executeRule(html, rule.tocUrl || '', context)
+  if (tocUrl && typeof tocUrl === 'string' && tocUrl.trim()) {
+    tocUrl = resolveUrl(tocUrl.trim(), finalRedirectUrl)
+  } else {
+    // 如果 tocUrl 无效，用 bookUrl
+    tocUrl = bookUrl
+  }
+
+  // ===== 5. 返回结果 =====
+  return {
+    id: bookUrl,
+    sourceId: source.id,
+    sourceName: source.name,
+    name: String(name),
+    author: String(author),
+    coverUrl: coverUrl || null,
+    intro: intro || null,
+    kind: kind || null,
+    lastChapter: lastChapter || null,
+    bookUrl: bookUrl,
+    tocUrl: tocUrl || null,
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
   }
 }
+

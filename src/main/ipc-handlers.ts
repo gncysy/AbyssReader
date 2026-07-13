@@ -15,7 +15,6 @@ import { getExploreCategories, getExploreBooks } from "../engine/explore.js";
 import { getGlobalHttpClient } from "../engine/network/client.js";
 import { normalizeSource, parseSourcesFromJson } from "../engine/source-helper.js";
 
-// 类型定义
 interface BookSource {
   id: string;
   name: string;
@@ -42,6 +41,16 @@ interface BookSource {
   code?: string | null;
   _legado: boolean;
   _desktop: boolean;
+}
+
+function safeClone<T>(obj: T): T {
+  try {
+    return JSON.parse(JSON.stringify(obj));
+  } catch {
+    if (Array.isArray(obj)) return [] as any;
+    if (obj && typeof obj === 'object') return {} as any;
+    return obj;
+  }
 }
 
 function getEncryptionKey(): string {
@@ -571,6 +580,17 @@ export function setupIpcHandlers() {
     return `从 URL 成功导入 ${added} 个书源`;
   });
 
+  ipcMain.handle("delete-source", async (_event: any, sourceId: string) => {
+    try {
+      const sources: any[] = store.get("sources") || [];
+      const filtered = sources.filter((s: any) => s.id !== sourceId);
+      store.set("sources", filtered);
+      return safeClone({ success: true, count: filtered.length });
+    } catch (err: any) {
+      return safeClone({ success: false, error: err.message });
+    }
+  });
+
   ipcMain.handle("test-source", async (_event: any, sourceId: string) => {
     const sources: any[] = store.get("sources") || [];
     const source = sources.find((s: any) => s.id === sourceId);
@@ -700,76 +720,95 @@ export function setupIpcHandlers() {
     return deleted;
   });
 
+  // ===== 发现分类 - 安全返回 =====
   ipcMain.handle("get-explore-categories", async (_event: any, sourceId: string) => {
-    const sources: any[] = store.get("sources") || [];
-    const source = sources.find((s: any) => s.id === sourceId);
-    if (!source) return [];
-
-    const exploreUrl = source.exploreUrl || "";
-    if (!exploreUrl) return [];
-
-    let processedUrl = exploreUrl;
-    if (processedUrl.includes("{{")) {
-      processedUrl = processedUrl
-        .replace(/\{\{key\}\}/g, "")
-        .replace(/\{\{page\}\}/g, "1")
-        .trim();
-    }
-
     try {
-      if (processedUrl.startsWith("[")) {
-        return JSON.parse(processedUrl);
-      }
+      const sources: any[] = store.get("sources") || [];
+      const source = sources.find((s: any) => s.id === sourceId);
+      if (!source) return safeClone([]);
 
-      if (processedUrl.includes("\n")) {
-        return processedUrl
-          .split("\n")
-          .filter((line: string) => line.trim() && line.includes("::"))
-          .map((line: string) => {
-            const parts = line.split("::");
-            return { title: parts[0].trim(), url: parts.slice(1).join("::").trim() };
-          })
-          .filter((item: any) => validateUrl(item.url));
-      }
-
-      if (validateUrl(processedUrl)) {
+      const exploreUrl = source.exploreUrl || "";
+      // 如果 exploreUrl 包含 <js>，执行它
+      let processedExploreUrl = exploreUrl;
+      if (exploreUrl.includes("<js>")) {
         try {
-          const response = await httpClient.request({
-            url: processedUrl,
-            method: "GET",
-            headers: source.header ? (await import("../engine/source-helper.js")).parseHeader(source.header) || {} : {},
-            timeout: 10000,
-          });
-
-          const data = response.data;
-          if (typeof data === "string") {
-            try {
-              const parsed = JSON.parse(data);
-              if (Array.isArray(parsed)) {
-                return parsed;
-              }
-              if (parsed.categories && Array.isArray(parsed.categories)) {
-                return parsed.categories;
-              }
-            } catch {
-              return data
-                .split("\n")
-                .filter((line: string) => line.trim() && line.includes("::"))
-                .map((line: string) => {
-                  const parts = line.split("::");
-                  return { title: parts[0].trim(), url: parts.slice(1).join("::").trim() };
-                })
-                .filter((item: any) => validateUrl(item.url));
+          const { executeJs } = await import("../engine/rule-parser/js.js");
+          const jsMatch = exploreUrl.match(/<js>([\s\S]*?)<\/js>/);
+          if (jsMatch) {
+            const result = executeJs({}, jsMatch[1].trim(), { source });
+            if (result && typeof result === "string") {
+              processedExploreUrl = result;
             }
           }
-        } catch (err) {
-          console.warn("[Explore] 获取远程分类失败:", err);
+        } catch (e) {
+          console.warn("[Explore] <js> 执行失败:", e);
         }
       }
+      if (!exploreUrl) return safeClone([]);
 
-      return [];
-    } catch {
-      return [];
+      let processedUrl = exploreUrl;
+      if (processedUrl.includes("{{")) {
+        processedUrl = processedUrl
+          .replace(/\{\{key\}\}/g, "")
+          .replace(/\{\{page\}\}/g, "1")
+          .trim();
+      }
+
+      let result: any[] = [];
+
+      try {
+        if (processedUrl.startsWith("[")) {
+          result = JSON.parse(processedUrl);
+        } else if (processedUrl.includes("\n") && processedUrl.includes("::")) {
+          result = processedUrl
+            .split("\n")
+            .filter((line: string) => line.trim() && line.includes("::"))
+            .map((line: string) => {
+              const parts = line.split("::");
+              return { title: parts[0].trim(), url: parts.slice(1).join("::").trim() };
+            })
+            .filter((item: any) => validateUrl(item.url));
+        } else if (validateUrl(processedUrl)) {
+          try {
+            const response = await httpClient.request({
+              url: processedUrl,
+              method: "GET",
+              headers: source.header ? (await import("../engine/source-helper.js")).parseHeader(source.header) || {} : {},
+              timeout: 10000,
+            });
+
+            const data = response.data;
+            if (typeof data === "string") {
+              try {
+                const parsed = JSON.parse(data);
+                if (Array.isArray(parsed)) {
+                  result = parsed;
+                } else if (parsed.categories && Array.isArray(parsed.categories)) {
+                  result = parsed.categories;
+                }
+              } catch {
+                result = data
+                  .split("\n")
+                  .filter((line: string) => line.trim() && line.includes("::"))
+                  .map((line: string) => {
+                    const parts = line.split("::");
+                    return { title: parts[0].trim(), url: parts.slice(1).join("::").trim() };
+                  })
+                  .filter((item: any) => validateUrl(item.url));
+              }
+            }
+          } catch (err) {
+            console.warn("[Explore] 获取远程分类失败:", err);
+          }
+        }
+      } catch (err) {
+        console.warn("[Explore] 解析分类失败:", err);
+      }
+
+      return safeClone(result);
+    } catch (err: any) {
+      console.error("[Explore] get-explore-categories 错误:", err);
+      return safeClone([]);
     }
   });
 
@@ -804,35 +843,35 @@ export function setupIpcHandlers() {
 
     books.unshift(book);
     store.set("books", books);
+    
+    const chapters = getLocalBookChaptersSync(bookId);
+    await store.set(`local_chapters_${bookId}`, chapters);
+    
     return book;
   });
 
   ipcMain.handle("get-local-book-chapters", async (_event: any, bookId: string) => {
-    const cached = chapterCache.get(bookId);
-    if (cached && Date.now() - cached.timestamp < CACHE_TTL) {
-      return cached.chapters;
-    }
-
+    const cached = await store.get(`local_chapters_${bookId}`);
+    if (cached) return cached;
+    
     const chapters = getLocalBookChaptersSync(bookId);
-    chapterCache.set(bookId, { chapters, timestamp: Date.now() });
+    await store.set(`local_chapters_${bookId}`, chapters);
     return chapters;
   });
 
   ipcMain.handle("get-local-chapter-content", async (_event: any, bookId: string, chapterId: number) => {
-    const books: any[] = store.get("books") || [];
-    const book = books.find((b: any) => b.id === bookId || b.bookUrl === `local://${bookId}`);
-    if (!book || !book.content) return "";
-
-    const chapters = getLocalBookChaptersSync(bookId);
-    const chapter = chapters.find((c: any) => c.id === chapterId);
+    const chapters = await store.get(`local_chapters_${bookId}`);
+    if (!chapters) return "";
+    const chapter = chapters.find((c: any) => Number(c.id) === Number(chapterId));
     return chapter ? chapter.content : "";
   });
 
   // Engine handlers
   ipcMain.handle("engine-search", async (_event: any, source: any, keyword: string, page: number = 1) => {
     try {
-      const results = await search(source, keyword, { page });
-      return { success: true, data: results };
+      const cleanSource = safeClone(source);
+      const results = await search(cleanSource, keyword, { page });
+      return { success: true, data: safeClone(results) };
     } catch (error: any) {
       console.error("[Engine] Search error:", error);
       return { success: false, error: error.message };
@@ -841,53 +880,24 @@ export function setupIpcHandlers() {
 
   ipcMain.handle("engine-batch-search", async (_event: any, sources: any[], keyword: string, page: number = 1) => {
     try {
-      console.log("[Engine] batchSearch 开始, 书源数:", sources.length);
-      const results = await batchSearch(sources, keyword, { page });
-      console.log("[Engine] batchSearch 完成, 结果数:", results.size);
-
+      const cleanSources = safeClone(sources);
+      const results = await batchSearch(cleanSources, keyword, { page });
       const data: Record<string, any[]> = {};
       for (const [id, books] of results) {
-        console.log(`[Engine] 书源 ${id} 返回 ${books?.length || 0} 本书`);
-        if (!books || !Array.isArray(books)) {
-          console.warn(`[Engine] 书源 ${id} 返回的数据不是数组:`, typeof books);
-          data[id] = [];
-          continue;
-        }
-        data[id] = books.map((book) => ({
-          id: book.id,
-          sourceId: book.sourceId,
-          sourceName: book.sourceName,
-          name: book.name,
-          author: book.author,
-          coverUrl: book.coverUrl || null,
-          intro: book.intro || null,
-          kind: book.kind || null,
-          lastChapter: book.lastChapter || null,
-          bookUrl: book.bookUrl,
-          tocUrl: book.tocUrl || null,
-          createdAt: book.createdAt,
-          updatedAt: book.updatedAt,
-        }));
+        data[id] = safeClone(books || []);
       }
-      console.log("[Engine] 数据转换完成");
       return { success: true, data };
     } catch (error: any) {
       console.error("[Engine] Batch search error:", error);
-      let errorMsg = error.message || String(error);
-      if (error.stack) {
-        console.error("[Engine] Stack:", error.stack);
-      }
-      return { success: false, error: errorMsg };
+      return { success: false, error: error.message };
     }
   });
 
-  // 流式搜索
   ipcMain.handle("engine-batch-search-stream", async (event: any, sources: any[], keyword: string, page: number = 1) => {
     try {
       const total = sources.length;
       let completed = 0;
       const results: Record<string, any[]> = {};
-
       const concurrency = 5;
       const queue = [...sources];
       const promises: Promise<void>[] = [];
@@ -897,8 +907,9 @@ export function setupIpcHandlers() {
           const source = queue.shift();
           if (!source) break;
           try {
-            const books = await search(source, keyword, { page });
-            results[source.id] = books;
+            const cleanSource = safeClone(source);
+            const books = await search(cleanSource, keyword, { page });
+            results[source.id] = safeClone(books || []);
           } catch (error: any) {
             console.error(`[Search] ${source.name} 搜索失败:`, error.message);
             results[source.id] = [];
@@ -919,7 +930,7 @@ export function setupIpcHandlers() {
       }
 
       await Promise.all(promises);
-      return { success: true, data: results };
+      return { success: true, data: safeClone(results) };
     } catch (error: any) {
       console.error("[Engine] Batch search error:", error);
       return { success: false, error: error.message };
@@ -927,12 +938,20 @@ export function setupIpcHandlers() {
   });
 
   ipcMain.handle("engine-get-toc", async (_event: any, source: any, tocUrl: string) => {
-    console.log("[IPC] engine-get-toc 被调用, tocUrl:", tocUrl)
-    console.log("[IPC] source.id:", source?.id, "source.name:", source?.name)
     try {
-      const chapters = await getToc(source, tocUrl);
-            console.log("[IPC] engine-get-toc 返回章节数:", chapters?.length || 0)
-      return { success: true, data: chapters };
+      const cleanSource = safeClone(source);
+      const chapters = await getToc(cleanSource, tocUrl);
+      const safeChapters = chapters.map((ch: any) => ({
+        id: Number(ch.id),
+        title: String(ch.title || ''),
+        url: String(ch.url || ''),
+        index: Number(ch.index || 0),
+        isVip: !!ch.isVip,
+        isPay: !!ch.isPay,
+        content: ch.content ? String(ch.content) : null,
+        updateTime: ch.updateTime ? String(ch.updateTime) : undefined,
+      }));
+      return { success: true, data: safeClone(safeChapters) };
     } catch (error: any) {
       console.error("[Engine] Get TOC error:", error);
       return { success: false, error: error.message };
@@ -941,7 +960,8 @@ export function setupIpcHandlers() {
 
   ipcMain.handle("engine-get-content", async (_event: any, source: any, chapterUrl: string) => {
     try {
-      const content = await getContent(source, chapterUrl);
+      const cleanSource = safeClone(source);
+      const content = await getContent(cleanSource, chapterUrl);
       return { success: true, data: content };
     } catch (error: any) {
       console.error("[Engine] Get content error:", error);
@@ -951,8 +971,9 @@ export function setupIpcHandlers() {
 
   ipcMain.handle("engine-get-book-info", async (_event: any, source: any, bookUrl: string) => {
     try {
-      const book = await getBookInfo(source, bookUrl);
-      return { success: true, data: book };
+      const cleanSource = safeClone(source);
+      const book = await getBookInfo(cleanSource, bookUrl);
+      return { success: true, data: safeClone(book) };
     } catch (error: any) {
       console.error("[Engine] Get book info error:", error);
       return { success: false, error: error.message };
@@ -962,8 +983,9 @@ export function setupIpcHandlers() {
   // ===== 发现模块 =====
   ipcMain.handle("engine-get-explore-categories", async (_event: any, source: any) => {
     try {
-      const categories = getExploreCategories(source);
-      return { success: true, data: categories };
+      const cleanSource = safeClone(source);
+      const categories = getExploreCategories(cleanSource);
+      return { success: true, data: safeClone(categories || []) };
     } catch (error: any) {
       console.error("[Engine] Get explore categories error:", error);
       return { success: false, error: error.message };
@@ -972,11 +994,59 @@ export function setupIpcHandlers() {
 
   ipcMain.handle("engine-get-explore-books", async (_event: any, source: any, categoryUrl: string, page: number) => {
     try {
-      const books = await getExploreBooks(source, categoryUrl, page);
-      return { success: true, data: books };
+      const cleanSource = safeClone(source);
+      const books = await getExploreBooks(cleanSource, categoryUrl, page);
+      const safeBooks = books.map((book: any) => ({
+        id: String(book.id || ''),
+        sourceId: String(book.sourceId || ''),
+        sourceName: String(book.sourceName || ''),
+        name: String(book.name || ''),
+        author: String(book.author || ''),
+        coverUrl: book.coverUrl ? String(book.coverUrl) : null,
+        intro: book.intro ? String(book.intro) : null,
+        kind: book.kind ? String(book.kind) : null,
+        lastChapter: book.lastChapter ? String(book.lastChapter) : null,
+        bookUrl: String(book.bookUrl || ''),
+        tocUrl: book.tocUrl ? String(book.tocUrl) : null,
+        createdAt: book.createdAt || new Date().toISOString(),
+        updatedAt: book.updatedAt || new Date().toISOString(),
+      }));
+      return { success: true, data: safeBooks };
     } catch (error: any) {
       console.error("[Engine] Get explore books error:", error);
-      return { success: false, error: error.message };
+      return { success: false, data: [], error: error.message };
+    }
+  });
+
+  // ===== 发现 - 只传 sourceId，避免克隆问题 =====
+  ipcMain.handle("explore-books-by-id", async (_event: any, sourceId: string, categoryUrl: string, page: number) => {
+    try {
+      const sources: any[] = store.get("sources") || [];
+      const source = sources.find((s: any) => s.id === sourceId);
+      if (!source) {
+        return { success: false, data: [], error: "书源未找到" };
+      }
+      const cleanSource = safeClone(source);
+      const books = await getExploreBooks(cleanSource, categoryUrl, page);
+      const safeBooks = books.map((book: any) => ({
+        id: String(book.id || ''),
+        sourceId: String(book.sourceId || ''),
+        sourceName: String(book.sourceName || ''),
+        name: String(book.name || ''),
+        author: String(book.author || ''),
+        coverUrl: book.coverUrl ? String(book.coverUrl) : null,
+        intro: book.intro ? String(book.intro) : null,
+        kind: book.kind ? String(book.kind) : null,
+        lastChapter: book.lastChapter ? String(book.lastChapter) : null,
+        bookUrl: String(book.bookUrl || ''),
+        tocUrl: book.tocUrl ? String(book.tocUrl) : null,
+        createdAt: book.createdAt || new Date().toISOString(),
+        updatedAt: book.updatedAt || new Date().toISOString(),
+      }));
+      return { success: true, data: safeBooks };
+    } catch (error: any) {
+      console.error("[Engine] Get explore books error:", error);
+      return { success: false, data: [], error: error.message };
     }
   });
 
@@ -989,34 +1059,28 @@ export function setupIpcHandlers() {
       return { success: false, error: error.message };
     }
   });
-}
-
 
   // ===== 更新标题栏主题 =====
   ipcMain.handle("update-title-bar-overlay", async (_event: any, theme: string) => {
     try {
-      const win = BrowserWindow.getFocusedWindow() || getMainWindow()
+      const win = BrowserWindow.getFocusedWindow() || getMainWindow();
       if (win) {
-        const isDark = theme === 'dark' || (theme === 'system' && process.platform !== 'win32')
+        const isDark = theme === 'dark' || (theme === 'system' && process.platform !== 'win32');
         win.setTitleBarOverlay({
           color: isDark ? '#0d0d0d' : '#f0ede8',
           symbolColor: isDark ? '#e8e8e8' : '#1a1a1a',
           height: 36,
-        })
+        });
       }
-      return { success: true }
+      return { success: true };
     } catch (error: any) {
-      console.error('[Window] 更新标题栏失败:', error)
-      return { success: false, error: error.message }
+      console.error('[Window] 更新标题栏失败:', error);
+      return { success: false, error: error.message };
     }
-  })
+  });
+}
+
 export function clearChapterCache() {
   chapterCache.clear();
 }
-
-
-
-
-
-
 

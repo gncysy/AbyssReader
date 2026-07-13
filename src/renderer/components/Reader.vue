@@ -84,6 +84,7 @@ const emit = defineEmits<{ (e: 'close'): void }>()
 const message = useMessage()
 const readingStore = useReadingStore()
 
+// ===== 响应式状态 =====
 const fontSize = computed({
   get: () => readingStore.fontSize,
   set: (val: number) => readingStore.setFontSize(val),
@@ -108,10 +109,10 @@ const scrollPercent = ref(0)
 const showToc = ref(false)
 
 const themes = READER_THEMES
-
 const themeClass = computed(() => `reader-theme-${currentTheme.value}`)
 const currentChapter = computed(() => chapters.value[chapterIndex.value] || null)
 
+// ===== DOMPurify 配置 =====
 const sanitizedContent = computed(() => {
   if (!content.value) return ''
   return DOMPurify.sanitize(content.value, {
@@ -137,48 +138,58 @@ const sanitizedContent = computed(() => {
   })
 })
 
-const debouncedSaveScroll = debounce(saveScrollPosition, 300)
-
+// ===== 工具函数 =====
 function increaseFontSize() { readingStore.increaseFontSize() }
 function decreaseFontSize() { readingStore.decreaseFontSize() }
 function setTheme(value: string) { readingStore.setTheme(value) }
 
+// ===== 清理 source 对象 =====
+function cleanSource(source: any): any {
+  if (!source) return null
+  try {
+    return JSON.parse(JSON.stringify(source))
+  } catch {
+    return {
+      id: source.id || '',
+      name: source.name || '',
+      url: source.url || '',
+      searchUrl: source.searchUrl || '',
+      ruleToc: source.ruleToc || {},
+      ruleContent: source.ruleContent || {},
+      ruleBookInfo: source.ruleBookInfo || {},
+      ruleSearch: source.ruleSearch || {},
+      header: typeof source.header === 'string' ? source.header : null,
+      enabled: true,
+    }
+  }
+}
+
+// ===== 加载章节 =====
 async function loadChapters() {
   console.log('[Reader] loadChapters 被调用, book:', props.book)
-  console.log('[Reader] book.sourceId:', props.book?.sourceId)
-  console.log('[Reader] book.sourceId === "local":', props.book?.sourceId === 'local')
-  console.log('[Reader] String(book.sourceId) === "local":', String(props.book?.sourceId) === 'local')
-  
   if (!props.book) return
 
   try {
-    // ===== 本地书籍（使用 String() 强制转换） =====
-    if (String(props.book.sourceId) === 'local') {
-      console.log('[Reader] 本地书籍分支, bookId:', props.book.bookUrl)
+    const isLocal = props.book.bookUrl?.startsWith('local://') || props.book.sourceId === 'local'
+    if (isLocal) {
       const bookId = props.book.bookUrl.replace('local://', '')
-      console.log('[Reader] 解析 bookId:', bookId)
       const data = await readerApi.getLocalBookChapters(bookId)
-      console.log('[Reader] getLocalBookChapters 返回:', data)
-      
       if (!data || data.length === 0) {
-        console.warn('[Reader] 本地书籍目录为空')
         message.warning('该书没有章节')
         loadingContent.value = false
         return
       }
-      
       chapters.value = data.map((c: any, idx: number) => ({
-        id: c.id,
+        id: Number(c.id) || idx,
         title: c.title || `第${idx+1}章`,
         url: `local://${bookId}/${c.id}`,
         index: idx,
         content: c.content || '',
       }))
-      console.log('[Reader] 本地书籍章节数:', chapters.value.length)
 
       const progress = await readingStore.loadProgress(String(props.book.id))
       if (progress) {
-        const idx = chapters.value.findIndex(c => c.id === progress.chapterId)
+        const idx = chapters.value.findIndex(c => Number(c.id) === Number(progress.chapterId))
         if (idx !== -1) chapterIndex.value = idx
         if (progress.scrollPercent) scrollPercent.value = progress.scrollPercent / 100
       }
@@ -186,44 +197,20 @@ async function loadChapters() {
       return
     }
 
-    // ===== 网络书籍 =====
     if (!props.source) {
       message.warning('书源未找到')
       return
     }
 
-    let cleanSource = null
-    try {
-      cleanSource = JSON.parse(JSON.stringify(props.source))
-    } catch (e) {
-      console.warn('[Reader] source 不可序列化，使用最小对象')
-      cleanSource = {
-        id: props.source.id,
-        name: props.source.name,
-        url: props.source.url,
-        searchUrl: props.source.searchUrl || '',
-        ruleToc: props.source.ruleToc || {},
-        ruleContent: props.source.ruleContent || {},
-        ruleBookInfo: props.source.ruleBookInfo || {},
-        ruleSearch: props.source.ruleSearch || {},
-        header: props.source.header || null,
-        enabled: true,
-      }
-    }
-
+    const cleanSourceObj = cleanSource(props.source)
     const tocUrl = props.book.tocUrl || props.book.bookUrl
-    console.log('[Reader] 网络书籍 tocUrl:', tocUrl)
-    
-    const result = await window.electronAPI.engineGetToc(cleanSource, tocUrl)
-
-    console.log('[Reader] engineGetToc 返回:', result)
+    const result = await window.electronAPI.engineGetToc(cleanSourceObj, tocUrl)
 
     if (!result.success) {
       throw new Error(result.error)
     }
 
     chapters.value = result.data || []
-    console.log('[Reader] 网络书籍章节数:', chapters.value.length)
 
     const startIndex = (props.book as any).current_chapter_id
     if (typeof startIndex === 'number' && startIndex >= 0 && startIndex < chapters.value.length) {
@@ -231,7 +218,7 @@ async function loadChapters() {
     } else {
       const progress = await readingStore.loadProgress(String(props.book.id))
       if (progress) {
-        const idx = chapters.value.findIndex(c => c.id === progress.chapterId)
+        const idx = chapters.value.findIndex(c => Number(c.id) === Number(progress.chapterId))
         if (idx !== -1) chapterIndex.value = idx
         if (progress.scrollPercent) scrollPercent.value = progress.scrollPercent / 100
       }
@@ -246,6 +233,7 @@ async function loadChapters() {
   }
 }
 
+// ===== 预加载 =====
 async function preloadNextChapters() {
   if (!props.source) return
   const preloadRange = 3
@@ -260,6 +248,7 @@ async function preloadNextChapters() {
   }
   if (urls.length === 0) return
 
+  const cleanSourceObj = cleanSource(props.source)
   const concurrency = 2
   const queue = [...urls]
   const promises: Promise<void>[] = []
@@ -269,7 +258,7 @@ async function preloadNextChapters() {
       const url = queue.shift()
       if (!url) break
       try {
-        await window.electronAPI.engineGetContent(props.source!, url)
+        await window.electronAPI.engineGetContent(cleanSourceObj, url)
       } catch {}
     }
   }
@@ -280,21 +269,20 @@ async function preloadNextChapters() {
   await Promise.allSettled(promises)
 }
 
+// ===== 加载正文 =====
 async function loadContent() {
   if (!currentChapter.value) {
     console.warn('[Reader] loadContent: currentChapter 为空')
     return
   }
   
-  console.log('[Reader] loadContent 被调用, chapter:', currentChapter.value)
   loadingContent.value = true
 
   try {
-    if (String(props.book.sourceId) === 'local') {
+    const isLocal = props.book.bookUrl?.startsWith('local://') || props.book.sourceId === 'local'
+    if (isLocal) {
       const bookId = props.book.bookUrl.replace('local://', '')
-      console.log('[Reader] 加载本地章节, bookId:', bookId, 'chapterId:', currentChapter.value.id)
       content.value = await readerApi.getLocalChapterContent(bookId, currentChapter.value.id)
-      console.log('[Reader] 本地章节内容长度:', content.value?.length || 0)
       await nextTick()
       restoreScrollPosition()
       return
@@ -305,9 +293,8 @@ async function loadContent() {
       return
     }
 
-    const result = await window.electronAPI.engineGetContent(props.source, currentChapter.value.url)
-
-    console.log('[Reader] engineGetContent 返回:', result)
+    const cleanSourceObj = cleanSource(props.source)
+    const result = await window.electronAPI.engineGetContent(cleanSourceObj, currentChapter.value.url)
 
     if (!result.success) {
       throw new Error(result.error)
@@ -331,6 +318,9 @@ async function loadContent() {
     loadingContent.value = false
   }
 }
+
+// ===== 滚动位置 =====
+const debouncedSaveScroll = debounce(saveScrollPosition, 300)
 
 async function restoreScrollPosition() {
   if (!contentRef.value) return
@@ -376,6 +366,7 @@ function handleScroll() {
   debouncedSaveScroll()
 }
 
+// ===== 章节切换 =====
 async function goToChapter(index: number) {
   if (index === chapterIndex.value) { showToc.value = false; return }
   if (index < 0 || index >= chapters.value.length) return
@@ -404,11 +395,29 @@ async function nextChapter() {
   }
 }
 
+// ===== 关闭 =====
 function handleClose() {
+  console.log('[Reader] 关闭阅读器，保存进度')
+  forceSaveProgress()
   saveScrollPosition()
   emit('close')
 }
 
+async function forceSaveProgress() {
+  if (!props.book || !currentChapter.value) return
+  try {
+    await readingStore.saveProgress(
+      String(props.book.id),
+      currentChapter.value.id,
+      currentChapter.value.title,
+      Math.round(scrollPercent.value * 100)
+    )
+  } catch (err) {
+    console.error('[Reader] 强制保存进度失败:', err)
+  }
+}
+
+// ===== 键盘事件 =====
 function handleKeydown(e: KeyboardEvent) {
   const target = e.target as HTMLElement
   if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable) return
@@ -419,6 +428,7 @@ function handleKeydown(e: KeyboardEvent) {
   if (e.key === 't' || e.key === 'T') { e.preventDefault(); showToc.value = !showToc.value }
 }
 
+// ===== 生命周期 =====
 onMounted(() => {
   readingStore.loadSettings()
   loadChapters()
@@ -427,6 +437,7 @@ onMounted(() => {
 
 onUnmounted(() => {
   window.removeEventListener('keydown', handleKeydown)
+  forceSaveProgress()
   saveScrollPosition()
   debouncedSaveScroll.cancel?.()
 })

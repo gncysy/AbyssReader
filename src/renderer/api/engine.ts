@@ -13,6 +13,36 @@ export const engine = {
     ipcInvoke('engine-get-book-info', source, bookUrl),
   getExploreCategories: (source: any) =>
     ipcInvoke('engine-get-explore-categories', source),
-  getExploreBooks: (source: any, categoryUrl: string, page: number) =>
-    ipcInvoke('engine-get-explore-books', source, categoryUrl, page),
+  getExploreBooks: (source: any, categoryUrl: string, page: number) => {
+    // 清理 source，只保留可序列化的字段
+    const cleanSource = {
+      id: source.id,
+      name: source.name,
+      url: source.url,
+      searchUrl: source.searchUrl || '',
+      ruleSearch: source.ruleSearch || {},
+      ruleBookInfo: source.ruleBookInfo || {},
+      ruleToc: source.ruleToc || {},
+      ruleContent: source.ruleContent || {},
+      ruleExplore: source.ruleExplore || {},
+      exploreUrl: source.exploreUrl || '',
+      enabled: source.enabled !== undefined ? source.enabled : true,
+      group: source.group || null,
+      comment: source.comment || null,
+      weight: source.weight || 0,
+      header: typeof source.header === 'string' ? source.header : null,
+      enabledCookieJar: source.enabledCookieJar || false,
+      jsLib: source.jsLib || null,
+      loginUrl: source.loginUrl || null,
+      loginUi: source.loginUi || null,
+      respondTime: source.respondTime || 0,
+      lastUpdateTime: source.lastUpdateTime || Date.now(),
+      bookUrlPattern: source.bookUrlPattern || null,
+      code: source.code || null,
+      _legado: !!source.code,
+      _desktop: true,
+    }
+    return ipcInvoke('engine-get-explore-books', cleanSource, categoryUrl, page)
+  },
 }
+

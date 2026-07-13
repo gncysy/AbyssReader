@@ -19,7 +19,8 @@
         <div class="detail-info">
           <div class="info-row"><span class="label">作者</span><span>{{ book.author || '未知' }}</span></div>
           <div class="info-row"><span class="label">分类</span><span>{{ book.kind || '未分类' }}</span></div>
-          <div class="info-row"><span class="label">字数</span><span>{{ book.wordCount || '未知' }}</span></div>
+          <div class="info-row"><span class="label">来源</span><span>{{ book.sourceId === 'local' ? '📁 本地文件' : (source?.name || '未知') }}</span></div>
+          <div class="info-row"><span class="label">进度</span><span>{{ progressText }}</span></div>
           <div class="info-row intro-row">
             <span class="label">简介</span>
             <p class="intro-text">{{ book.intro || '暂无简介' }}</p>
@@ -34,18 +35,21 @@
             v-for="ch in displayChapters"
             :key="ch.id"
             class="toc-item"
+            :class="{ active: ch.id === currentChapterId }"
             @click="handleChapterClick(ch)"
           >
             <span>{{ ch.title }}</span>
             <span v-if="ch.isVip" class="badge-vip">VIP</span>
+            <span v-if="ch.id === currentChapterId" class="badge-current">当前</span>
           </div>
-          <div v-if="chapters.length === 0" class="toc-empty">暂无目录</div>
+          <div v-if="chapters.length === 0 && !loadingToc" class="toc-empty">暂无目录</div>
         </div>
         <div v-else class="toc-loading">加载目录中...</div>
       </div>
 
       <footer class="detail-footer">
-        <button class="btn-primary" @click="handleRead">📖 阅读</button>
+        <button class="btn-danger" @click="handleRemoveFromShelf">移出书架</button>
+        <button class="btn-primary" @click="handleRead">📖 继续阅读</button>
         <button class="btn-secondary" @click="handleAddToShelf">
           {{ isInShelf ? '✅ 已在书架' : '➕ 添加到书架' }}
         </button>
@@ -56,9 +60,9 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from 'vue'
-import { useMessage } from 'naive-ui'
-import { useBookshelfStore } from '@/store'
-import { engine as engineApi } from '@/api'
+import { useMessage, useDialog } from 'naive-ui'
+import { useBookshelfStore, useReadingStore } from '@/store'
+import { engine as engineApi, reader as readerApi } from '@/api'
 import type { Book, BookSource, Chapter } from '@shared/types'
 
 const props = defineProps<{
@@ -69,17 +73,55 @@ const props = defineProps<{
 const emit = defineEmits<{ (e: 'close'): void }>()
 
 const message = useMessage()
+const dialog = useDialog()
 const bookshelfStore = useBookshelfStore()
+const readingStore = useReadingStore()
 
 const chapters = ref<Chapter[]>([])
 const loadingToc = ref(false)
+const currentChapterId = ref(0)
 const isInShelf = computed(() => bookshelfStore.hasBook(props.book?.bookUrl || ''))
 
 const displayChapters = computed(() => chapters.value.slice(0, 50))
 
+const progressText = computed(() => {
+  if (!props.book) return '未开始'
+  if (chapters.value.length === 0) return '加载中...'
+  const idx = chapters.value.findIndex(c => c.id === currentChapterId.value)
+  if (idx === -1) return '未开始'
+  return `第 ${idx + 1}/${chapters.value.length} 章`
+})
+
 async function loadToc() {
-  if (!props.book || !props.source) return
-  if (loadingToc.value) return
+  if (!props.book || loadingToc.value) return
+  
+  if (props.book.sourceId === 'local') {
+    try {
+      const bookId = props.book.bookUrl.replace('local://', '')
+      const data = await readerApi.getLocalBookChapters(bookId)
+      if (data && data.length > 0) {
+        chapters.value = data.map((c: any, idx: number) => ({
+          id: Number(c.id) || idx,
+          title: c.title || `第${idx+1}章`,
+          url: `local://${bookId}/${c.id}`,
+          index: idx,
+          content: c.content || '',
+        }))
+      } else {
+        chapters.value = [{ id: 0, title: '正文', url: props.book.bookUrl, index: 0, content: props.book.content || '' }]
+      }
+    } catch (err: any) {
+      console.error('[BookDetail] 加载本地目录失败:', err)
+      message.error('加载目录失败')
+    }
+    await restoreProgress()
+    return
+  }
+
+  if (!props.source) {
+    console.warn('[BookDetail] 网络书籍但 source 为空')
+    return
+  }
 
   loadingToc.value = true
   try {
@@ -89,7 +131,6 @@ async function loadToc() {
     try {
       cleanSource = JSON.parse(JSON.stringify(props.source))
     } catch (e) {
-      console.warn('[BookDetail] source 不可序列化，使用最小对象')
       cleanSource = {
         id: props.source.id,
         name: props.source.name,
@@ -104,38 +145,7 @@ async function loadToc() {
       }
     }
 
-    // 如果 tocUrl 是 book_ 占位符，尝试重新搜索获取正确的 bookUrl
-    if (tocUrl && tocUrl.startsWith('book_')) {
-      console.log('[BookDetail] tocUrl 是占位符，尝试重新搜索获取正确 URL')
-      try {
-        const searchResult = await window.electronAPI.engineSearch(cleanSource, props.book.name, 1)
-        if (searchResult.success && searchResult.data && searchResult.data.length > 0) {
-          const found = searchResult.data.find((b: any) => b.name === props.book.name)
-          if (found && found.bookUrl && found.bookUrl.startsWith('http')) {
-            console.log('[BookDetail] 重新搜索找到正确 bookUrl:', found.bookUrl)
-            const bookInfoResult = await window.electronAPI.engineGetBookInfo(cleanSource, found.bookUrl)
-            if (bookInfoResult.success && bookInfoResult.data) {
-              const data = bookInfoResult.data
-              if (data.tocUrl && data.tocUrl.startsWith('http')) {
-                tocUrl = data.tocUrl
-                console.log('[BookDetail] 重新获取到 tocUrl:', tocUrl)
-              }
-              // 更新书籍信息到 store
-              if (data.name) props.book.name = data.name
-              if (data.author) props.book.author = data.author
-              if (data.coverUrl) props.book.coverUrl = data.coverUrl
-              if (data.intro) props.book.intro = data.intro
-            }
-          }
-        }
-      } catch (e) {
-        console.warn('[BookDetail] 重新搜索失败:', e)
-      }
-    }
-
-    console.log('[BookDetail] 最终 tocUrl:', tocUrl)
     const result = await window.electronAPI.engineGetToc(cleanSource, tocUrl)
-    console.log('[BookDetail] engineGetToc 返回:', result)
 
     if (result.success) {
       chapters.value = result.data || []
@@ -147,22 +157,100 @@ async function loadToc() {
     message.error('加载目录失败')
   } finally {
     loadingToc.value = false
+    await restoreProgress()
+  }
+}
+
+async function restoreProgress() {
+  if (!props.book || chapters.value.length === 0) return
+  
+  try {
+    let targetChapterId = (props.book as any).current_chapter_id
+    
+    if (targetChapterId === undefined || targetChapterId === null) {
+      const progress = await readingStore.loadProgress(String(props.book.id))
+      if (progress) {
+        targetChapterId = progress.chapterId
+      }
+    }
+    
+    if (targetChapterId !== undefined && targetChapterId !== null) {
+      const found = chapters.value.find(c => Number(c.id) === Number(targetChapterId))
+      if (found) {
+        currentChapterId.value = found.id
+      } else {
+        currentChapterId.value = chapters.value[0]?.id || 0
+      }
+    } else {
+      currentChapterId.value = chapters.value[0]?.id || 0
+    }
+  } catch (err) {
+    console.warn('[BookDetail] 恢复进度失败:', err)
+    currentChapterId.value = chapters.value[0]?.id || 0
   }
 }
 
 function handleChapterClick(ch: Chapter) {
-  if (!props.book || !props.source) return
+  if (!props.book) return
+  
   const idx = chapters.value.findIndex(c => c.id === ch.id)
   if (idx === -1) return
+  
+  currentChapterId.value = ch.id
+  
   const bookWithProgress = { ...props.book, current_chapter_id: idx }
   bookshelfStore.closeDetail()
-  bookshelfStore.openReader(bookWithProgress, props.source)
+  
+  const source = props.book.sourceId === 'local' ? null : props.source
+  bookshelfStore.openReader(bookWithProgress, source)
 }
 
 function handleRead() {
-  if (!props.book || !props.source) return
+  if (!props.book) {
+    message.error('书籍信息为空')
+    return
+  }
+  
+  let chapterIndex = 0
+  if (currentChapterId.value !== undefined && currentChapterId.value !== null) {
+    const found = chapters.value.findIndex(c => c.id === currentChapterId.value)
+    if (found !== -1) chapterIndex = found
+  }
+  
+  if (props.book.sourceId === 'local') {
+    const bookWithProgress = { ...props.book, current_chapter_id: chapterIndex }
+    bookshelfStore.closeDetail()
+    bookshelfStore.openReader(bookWithProgress, null)
+    return
+  }
+  
+  if (!props.source) {
+    message.error('书源未找到，请检查书源是否已导入')
+    return
+  }
+  
+  const bookWithProgress = { ...props.book, current_chapter_id: chapterIndex }
   bookshelfStore.closeDetail()
-  bookshelfStore.openReader(props.book, props.source)
+        // 清理 source
+      let cleanSource = null
+      if (props.source) {
+        try {
+          cleanSource = JSON.parse(JSON.stringify(props.source))
+        } catch {
+          cleanSource = {
+            id: props.source.id || '',
+            name: props.source.name || '',
+            url: props.source.url || '',
+            ruleToc: props.source.ruleToc || {},
+            ruleContent: props.source.ruleContent || {},
+            ruleBookInfo: props.source.ruleBookInfo || {},
+            ruleSearch: props.source.ruleSearch || {},
+            header: typeof props.source.header === 'string' ? props.source.header : null,
+            enabled: true,
+          }
+        }
+      }
+      bookshelfStore.openReader(bookWithProgress, cleanSource)
 }
 
 async function handleAddToShelf() {
@@ -177,6 +265,21 @@ async function handleAddToShelf() {
   } else {
     message.warning('添加失败，可能已存在')
   }
+}
+
+async function handleRemoveFromShelf() {
+  if (!props.book) return
+  dialog.warning({
+    title: '确认移出',
+    content: `确定将《${props.book.name}》移出书架？`,
+    positiveText: '移出',
+    negativeText: '取消',
+    onPositiveClick: async () => {
+      await bookshelfStore.removeBook(props.book.id)
+      message.success(`已移出《${props.book.name}》`)
+      handleClose()
+    },
+  })
 }
 
 function handleClose() {
@@ -285,11 +388,7 @@ watch(() => props.book, () => {
   border-radius: 8px;
   overflow: hidden;
 }
-.detail-cover img {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-}
+.detail-cover img { width: 100%; height: 100%; object-fit: cover; }
 .cover-placeholder {
   width: 100%;
   height: 100%;
@@ -324,9 +423,7 @@ watch(() => props.book, () => {
   flex-direction: column;
   gap: 2px;
 }
-.intro-row .label {
-  width: auto;
-}
+.intro-row .label { width: auto; }
 .intro-text {
   margin: 0;
   font-size: 13px;
@@ -371,15 +468,27 @@ watch(() => props.book, () => {
   cursor: pointer;
   border-radius: 4px;
   transition: background 0.15s;
+  gap: 8px;
 }
 .toc-item:hover {
   background: var(--bg-hover);
   color: var(--text-primary);
 }
+.toc-item.active {
+  color: var(--brand);
+  background: var(--bg-active);
+}
 .badge-vip {
   font-size: 10px;
   color: #d4a017;
   background: rgba(212, 160, 23, 0.12);
+  padding: 1px 8px;
+  border-radius: 4px;
+}
+.badge-current {
+  font-size: 10px;
+  color: #4caf50;
+  background: rgba(76, 175, 80, 0.12);
   padding: 1px 8px;
   border-radius: 4px;
 }
@@ -430,4 +539,21 @@ watch(() => props.book, () => {
   color: var(--text-primary);
   border-color: var(--brand);
 }
+
+.btn-danger {
+  padding: 8px 20px;
+  font-size: 14px;
+  font-weight: 500;
+  color: #c0392b;
+  background: rgba(192, 57, 43, 0.10);
+  border: 1px solid rgba(192, 57, 43, 0.20);
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+.btn-danger:hover {
+  background: #c0392b;
+  color: white;
+}
 </style>
+
