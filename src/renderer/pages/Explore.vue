@@ -9,7 +9,7 @@
       <select v-model="selectedSourceId" class="select-source" @change="onSourceChange">
         <option value="">选择书源...</option>
         <option v-for="source in sources" :key="source.id" :value="source.id">
-          {{ source.name }}
+          {{ source.bookSourceName || source.name }}
         </option>
       </select>
 
@@ -86,7 +86,9 @@ const loading = ref(false)
 function cleanSource(source: BookSource): any {
   return {
     id: String(source.id || ''),
-    name: String(source.name || ''),
+    name: String(source.bookSourceName || source.name || ''),
+    bookSourceName: String(source.bookSourceName || source.name || ''),
+    bookSourceUrl: String(source.bookSourceUrl || source.url || ''),
     url: String(source.url || ''),
     searchUrl: String(source.searchUrl || ''),
     ruleSearch: source.ruleSearch || {},
@@ -170,10 +172,11 @@ async function exploreCategory(cat: { title: string; url: string }) {
   }
 
   try {
-    // 完全手动构建干净对象，避免任何不可序列化的内容
     const cleanSource = {
       id: String(source.id || ''),
-      name: String(source.name || ''),
+      name: String(source.bookSourceName || source.name || ''),
+      bookSourceName: String(source.bookSourceName || source.name || ''),
+      bookSourceUrl: String(source.bookSourceUrl || source.url || ''),
       url: String(source.url || ''),
       searchUrl: String(source.searchUrl || ''),
       exploreUrl: String(source.exploreUrl || ''),
@@ -200,10 +203,10 @@ async function exploreCategory(cat: { title: string; url: string }) {
     if (categoryUrl && categoryUrl.includes('{{page}}')) {
       categoryUrl = categoryUrl.replace(/\{\{page\}\}/g, '1')
     }
-    console.log('[Explore] 调用 engine-get-explore-books:', { source: cleanSource.name, categoryUrl })
-        const result = await window.electronAPI.invoke('explore-books-by-id', source.id, categoryUrl, 1)
+    console.log('[Explore] 调用 explore-books-by-id:', { source: cleanSource.name, categoryUrl })
+    const result = await window.electronAPI.invoke('explore-books-by-id', source.id, categoryUrl, 1)
     console.log('[Explore] 返回结果:', result)
-    
+
     if (result && result.success && Array.isArray(result.data)) {
       books.value = result.data
     } else if (result && Array.isArray(result)) {
@@ -238,11 +241,11 @@ async function addToShelf(book: Book) {
       return
     }
 
-    const newBook: Book = {
+    const newBook = {
       ...book,
       id: `${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
-      sourceId: source.id,
-      sourceName: source.name,
+      origin: source.bookSourceUrl || source.url || '',
+      originName: source.bookSourceName || source.name || '',
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     }
@@ -350,6 +353,3 @@ onMounted(() => {
 .book-card-skeleton .skeleton { background: var(--bg-card); border-radius: 4px; animation: shimmer 1.5s infinite; }
 @keyframes shimmer { 0%, 100% { opacity: 0.4; } 50% { opacity: 0.7; } }
 </style>
-
-
-

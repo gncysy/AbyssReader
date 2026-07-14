@@ -23,7 +23,7 @@
             <div class="app-body">
               <nav class="app-sidebar">
                 <div class="sidebar-logo">
-                  <span class="logo-icon">墨</span>
+                  <img src="/icons/icon.svg" alt="墨阅" class="logo-icon" />
                   <span class="logo-text">墨阅</span>
                 </div>
 
@@ -102,7 +102,6 @@ const bookshelfStore = useBookshelfStore()
 const readingStore = useReadingStore()
 const currentRoute = computed(() => route.name)
 
-// ===== 从 Pinia 获取主题 =====
 const currentTheme = computed({
   get: () => readingStore.theme,
   set: (val: string) => readingStore.setTheme(val),
@@ -110,7 +109,6 @@ const currentTheme = computed({
 
 const appVersion = APP_VERSION
 
-// ===== 应用主题到 DOM =====
 function applyThemeToDOM(theme: string) {
   const root = document.documentElement
   if (theme === 'system') {
@@ -127,7 +125,6 @@ function setTheme(theme: string) {
   updateTitleBar(theme)
 }
 
-// ===== 更新标题栏颜色 =====
 function updateTitleBar(theme: string) {
   try {
     const api = window.electronAPI
@@ -144,7 +141,6 @@ provide('theme', {
   set: setTheme,
 })
 
-// ===== Naive UI 主题 =====
 const theme = computed(() => {
   if (currentTheme.value === 'dark' || currentTheme.value === 'system') {
     return darkTheme
@@ -199,23 +195,13 @@ function handleSystemThemeChange(e: MediaQueryListEvent) {
 
 let mediaListener: ((e: MediaQueryListEvent) => void) | null = null
 
-// ===== 初始化 =====
 async function initializeApp() {
-  // 1. 加载设置
   await readingStore.loadSettings()
-  
-  // 2. 应用主题到 DOM
   applyThemeToDOM(currentTheme.value)
-  
-  // 3. 等待 DOM 渲染完成
   await nextTick()
-  
-  // 4. 延迟更新标题栏（确保 electronAPI 就绪）
   setTimeout(() => {
     updateTitleBar(currentTheme.value)
   }, 100)
-  
-  // 5. 再次延迟确保生效
   setTimeout(() => {
     updateTitleBar(currentTheme.value)
   }, 300)
@@ -223,7 +209,6 @@ async function initializeApp() {
 
 onMounted(() => {
   initializeApp()
-
   const media = window.matchMedia('(prefers-color-scheme: dark)')
   mediaListener = handleSystemThemeChange
   media.addEventListener('change', mediaListener)
@@ -347,9 +332,10 @@ watch(currentTheme, (val) => {
 }
 
 .logo-icon {
-  font-size: 20px;
-  font-weight: 700;
-  color: var(--brand);
+  width: 28px;
+  height: 28px;
+  display: block;
+  flex-shrink: 0;
 }
 .logo-text {
   font-size: 16px;

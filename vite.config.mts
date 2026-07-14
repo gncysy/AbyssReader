@@ -32,7 +32,6 @@ export default defineConfig({
         "node:util",
         "node:events",
         "node:buffer",
-        "node:crypto",
         "node:fs/promises",
         "fs/promises",
       ],
@@ -43,7 +42,6 @@ export default defineConfig({
       "@": path.join(__dirname, "src/renderer"),
       "@engine": path.join(__dirname, "src/engine"),
       "@shared": path.join(__dirname, "src/shared"),
-      // 关键：将 node:vm 重定向到浏览器空实现
       "node:vm": path.join(__dirname, "src/engine/utils/js-source.browser.js"),
     },
   },
@@ -82,7 +80,6 @@ export default defineConfig({
       "node:vm",
       "node:fs",
       "node:path",
-      "node:crypto",
       "node:fs/promises",
       "fs/promises",
     ],

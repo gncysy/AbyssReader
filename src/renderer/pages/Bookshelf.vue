@@ -14,15 +14,15 @@
             class="input-search"
           />
         </div>
-        <button class="btn-primary" @click="showAddUrlModal = true">添加网址</button>
-        <button class="btn-primary" @click="triggerImport">导入 TXT</button>
+        <button class="btn-secondary" @click="showAddUrlModal = true">添加网址</button>
+        <button class="btn-secondary" @click="triggerImport">导入 TXT</button>
+        <button class="btn-secondary" @click="fixBookSources">修复关联</button>
         <button class="btn-secondary" @click="refreshBooks">刷新</button>
       </div>
     </header>
 
     <input ref="fileInput" type="file" accept=".txt" class="hidden" @change="onImport" />
 
-    <!-- 添加网址对话框 -->
     <n-modal v-model:show="showAddUrlModal" preset="dialog" title="添加网址" positive-text="添加" @positive-click="addUrlBook">
       <div class="add-url-form">
         <div class="form-group">
@@ -32,22 +32,54 @@
         <div class="form-group">
           <label>书籍变量（可选）</label>
           <n-input v-model:value="addUrlVariables" placeholder="如: 全、跳、[目录url]、单、录..." />
-          <div class="form-hint">
-            可用指令：单、直、跳、全、逆、原、图、字、动、静
-          </div>
+          <div class="form-hint">可用指令：单、直、跳、全、逆、原、图、字、动、静</div>
         </div>
         <div class="form-group">
           <label>选择书源</label>
           <select v-model="addUrlSourceId" class="form-select">
             <option v-for="source in sources" :key="source.id" :value="source.id">
-              {{ source.name }}
+              {{ source.bookSourceName || '未命名' }}
             </option>
           </select>
         </div>
       </div>
     </n-modal>
 
-    <!-- 书籍列表 -->
+    <n-modal
+      v-model:show="showFixModal"
+      preset="dialog"
+      title="修复书源关联"
+      positive-text="确认修复"
+      negative-text="取消"
+      @positive-click="confirmFix"
+      @negative-click="showFixModal = false"
+    >
+      <div class="fix-modal">
+        <p>发现 <strong>{{ fixCandidates.length }}</strong> 本书未关联书源</p>
+        <div v-if="fixCandidates.length > 0" class="fix-book-list">
+          <div
+            v-for="book in fixCandidates"
+            :key="book.bookUrl"
+            class="fix-book-item"
+          >
+            <span class="fix-book-name">{{ book.name }}</span>
+            <span class="fix-book-origin">{{ book.originName || '未知来源' }}</span>
+            <select v-model="book._selectedSourceId" class="fix-select">
+              <option value="">选择书源...</option>
+              <option
+                v-for="source in sources"
+                :key="source.id"
+                :value="source.id"
+              >
+                {{ source.bookSourceName || '未命名' }}
+              </option>
+            </select>
+          </div>
+        </div>
+        <div v-else class="fix-empty"><p>所有书籍都已关联书源</p></div>
+      </div>
+    </n-modal>
+
     <div v-if="bookshelfStore.loading" class="books-grid">
       <div v-for="i in 8" :key="i" class="book-card-skeleton">
         <div class="skeleton" style="aspect-ratio:2/3;border-radius:12px;"></div>
@@ -61,6 +93,7 @@
         v-for="book in bookshelfStore.filteredBooks"
         :key="book.id"
         class="book-card"
+        :class="{ 'no-source': !book.originName }"
         @click="openBook(book)"
       >
         <div class="book-cover">
@@ -74,6 +107,7 @@
           <div v-else class="book-cover-placeholder">
             <span>{{ book.name?.charAt(0) || '?' }}</span>
           </div>
+          <div v-if="!book.originName" class="badge-no-source">未关联</div>
         </div>
         <div class="book-info">
           <h3 class="book-title">{{ book.name || '未命名' }}</h3>
@@ -114,6 +148,9 @@ const addUrl = ref('')
 const addUrlVariables = ref('')
 const addUrlSourceId = ref('')
 
+const showFixModal = ref(false)
+const fixCandidates = ref<any[]>([])
+
 watch(searchText, (val) => {
   bookshelfStore.setFilter(val)
 })
@@ -132,6 +169,7 @@ async function loadSources() {
 
 async function refreshBooks() {
   await bookshelfStore.loadBooks()
+  await loadSources()
   message.success('已刷新')
 }
 
@@ -184,17 +222,47 @@ async function addUrlBook() {
   }
 
   try {
-    const result = await window.electronAPI.engineGetBookInfo(source, bookUrl)
+    const cleanSource = {
+      id: source.id,
+      bookSourceName: source.bookSourceName || '',
+      bookSourceUrl: source.bookSourceUrl || source.url || '',
+      name: source.bookSourceName || '',
+      url: source.url || '',
+      searchUrl: source.searchUrl || '',
+      ruleSearch: source.ruleSearch || {},
+      ruleBookInfo: source.ruleBookInfo || {},
+      ruleToc: source.ruleToc || {},
+      ruleContent: source.ruleContent || {},
+      ruleExplore: source.ruleExplore || {},
+      exploreUrl: source.exploreUrl || '',
+      enabled: true,
+      group: source.group || null,
+      comment: source.comment || null,
+      weight: source.weight || 0,
+      header: typeof source.header === 'string' ? source.header : null,
+      enabledCookieJar: source.enabledCookieJar || false,
+      jsLib: source.jsLib || null,
+      loginUrl: source.loginUrl || null,
+      loginUi: source.loginUi || null,
+      respondTime: source.respondTime || 0,
+      lastUpdateTime: source.lastUpdateTime || Date.now(),
+      bookUrlPattern: source.bookUrlPattern || null,
+      code: source.code || null,
+      _legado: !!source.code,
+      _desktop: true,
+    }
+
+    const result = await window.electronAPI.engineGetBookInfo(cleanSource, bookUrl)
     if (!result.success || !result.data) {
       throw new Error(result.error || '获取书籍信息失败')
     }
 
     const bookData = result.data
-    const newBook: Book = {
+    const newBook = {
       ...bookData,
       id: `${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
-      sourceId: source.id,
-      sourceName: source.name,
+      origin: source.bookSourceUrl || source.url || '',
+      originName: source.bookSourceName || source.name || '',
       _custom: addUrlVariables.value.trim() || '',
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
@@ -214,15 +282,77 @@ async function addUrlBook() {
   }
 }
 
-// ===== 点击书籍：打开详情页 =====
+async function fixBookSources() {
+  await loadSources()
+  const books = await store.get('books') || []
+  const candidates = books.filter((b: any) => !b.originName)
+
+  if (candidates.length === 0) {
+    message.success('所有书籍都已关联书源')
+    return
+  }
+
+  fixCandidates.value = candidates.map((b: any) => ({
+    ...b,
+    _selectedSourceId: ''
+  }))
+
+  showFixModal.value = true
+}
+
+async function confirmFix() {
+  const selected = fixCandidates.value.filter(b => b._selectedSourceId)
+
+  if (selected.length === 0) {
+    message.warning('请至少为一本书选择书源')
+    return
+  }
+
+  const books = await store.get('books') || []
+
+  selected.forEach(fixBook => {
+    const source = sources.value.find(s => s.id === fixBook._selectedSourceId)
+    if (source) {
+      const target = books.find((b: any) => b.bookUrl === fixBook.bookUrl)
+      if (target) {
+        target.origin = source.bookSourceUrl || source.url || ''
+        target.originName = source.bookSourceName || source.name || ''
+        console.log(`修复: ${target.name} -> ${target.originName}`)
+      }
+    }
+  })
+
+  await store.set('books', books)
+  await bookshelfStore.loadBooks()
+
+  message.success(`已修复 ${selected.length} 本书的关联`)
+  showFixModal.value = false
+  fixCandidates.value = []
+}
+
 function cleanSource(source: any): any {
   if (!source) return null
   try {
-    return JSON.parse(JSON.stringify(source))
+    return JSON.parse(JSON.stringify({
+      id: source.id,
+      bookSourceName: source.bookSourceName || '',
+      bookSourceUrl: source.bookSourceUrl || source.url || '',
+      name: source.bookSourceName || '',
+      url: source.url || '',
+      searchUrl: source.searchUrl || '',
+      ruleToc: source.ruleToc || {},
+      ruleContent: source.ruleContent || {},
+      ruleBookInfo: source.ruleBookInfo || {},
+      ruleSearch: source.ruleSearch || {},
+      header: typeof source.header === 'string' ? source.header : null,
+      enabled: true,
+    }))
   } catch {
     return {
       id: source.id || '',
-      name: source.name || '',
+      bookSourceName: source.bookSourceName || '',
+      bookSourceUrl: source.bookSourceUrl || source.url || '',
+      name: source.bookSourceName || '',
       url: source.url || '',
       searchUrl: source.searchUrl || '',
       ruleToc: source.ruleToc || {},
@@ -236,7 +366,7 @@ function cleanSource(source: any): any {
 }
 
 function openBook(book: Book) {
-  const rawSource = sources.value.find(s => s.id === book.sourceId)
+  const rawSource = sources.value.find(s => s.bookSourceName === book.originName)
   const source = cleanSource(rawSource)
   bookshelfStore.openDetail(book, source)
 }
@@ -305,6 +435,9 @@ onMounted(() => {
   box-shadow: 0 8px 24px rgba(0,0,0,0.2);
   border-color: var(--brand);
 }
+.book-card.no-source {
+  border-color: rgba(231, 76, 60, 0.3);
+}
 
 .book-cover {
   aspect-ratio: 2/3;
@@ -322,6 +455,18 @@ onMounted(() => {
   font-size: 40px;
   color: var(--brand);
   background: var(--bg-hover);
+}
+
+.badge-no-source {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  background: rgba(231, 76, 60, 0.85);
+  color: #fff;
+  font-size: 10px;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-weight: 500;
 }
 
 .book-info { padding: 8px 10px; }
@@ -343,6 +488,49 @@ onMounted(() => {
   font-size: 10px;
   color: var(--brand);
   margin: 2px 0 0;
+}
+
+.fix-modal { padding: 8px 0; }
+.fix-book-list {
+  max-height: 400px;
+  overflow-y: auto;
+  margin-top: 12px;
+}
+.fix-book-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border-color);
+}
+.fix-book-item:hover { background: var(--bg-hover); }
+.fix-book-name {
+  flex: 1;
+  font-size: 14px;
+  color: var(--text-primary);
+}
+.fix-book-origin {
+  font-size: 12px;
+  color: var(--text-muted);
+  max-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.fix-select {
+  padding: 4px 8px;
+  font-size: 12px;
+  border-radius: 4px;
+  border: 1px solid var(--border-color);
+  background: var(--bg-card);
+  color: var(--text-primary);
+  min-width: 120px;
+}
+.fix-select:focus { border-color: var(--brand); outline: none; }
+.fix-empty {
+  text-align: center;
+  padding: 32px 0;
+  color: var(--text-muted);
 }
 
 .empty-state {
@@ -426,4 +614,5 @@ onMounted(() => {
   border-color: var(--brand);
 }
 </style>
+
 

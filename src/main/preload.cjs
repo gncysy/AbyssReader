@@ -13,6 +13,7 @@ const validChannels = [
   'close-window',
   // 网络和文件
   'fetch',
+  'download-binary',
   'read-file',
   'write-file',
   'show-open-dialog',
@@ -44,6 +45,18 @@ const validChannels = [
   'engine-get-explore-books',
   'explore-books-by-id',
   'parse-rule',
+  // UI
+  'ui:toast',
+  'ui:longToast',
+  'ui:startBrowserAwait',
+  // WebView
+  'webview:open',
+  'webview:init',
+  'webview:refresh',
+  // Crypto
+  'crypto:rsaEncrypt',
+  'crypto:rsaDecrypt',
+  'crypto:randomUUID',
   // 事件监听
   'verification-complete',
   'verification-cancel',

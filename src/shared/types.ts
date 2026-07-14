@@ -4,8 +4,8 @@
 
 export interface Book {
   id: string | number
-  sourceId: string
-  sourceName: string
+  origin?: string          // 书源 URL (bookSourceUrl)
+  originName?: string      // 书源名称 (bookSourceName)
   name: string
   author: string
   coverUrl?: string | null
@@ -27,8 +27,6 @@ export interface BookWithProgress extends Book {
   current_chapter_id?: number
   current_chapter_title?: string
 }
-
-// ===== 书源规则类型 =====
 
 export interface SearchRule {
   bookList?: string | null
@@ -93,6 +91,8 @@ export interface ExploreRule {
 export interface BookSource {
   id: string
   name: string
+  bookSourceName?: string
+  bookSourceUrl?: string
   url: string
   searchUrl: string
   ruleSearch: SearchRule
@@ -152,13 +152,12 @@ export interface ParsedRule {
   original: string
 }
 
-// ========== 工厂函数 ==========
 export function createBook(data: Partial<Book> = {}): Book {
   const now = new Date().toISOString()
   return {
     id: data.id ?? Date.now(),
-    sourceId: data.sourceId ?? '',
-    sourceName: data.sourceName ?? '',
+    origin: data.origin ?? undefined,
+    originName: data.originName ?? undefined,
     name: data.name ?? '未命名',
     author: data.author ?? '未知作者',
     coverUrl: data.coverUrl ?? null,
@@ -178,6 +177,8 @@ export function createSource(data: Partial<BookSource> = {}): BookSource {
   return {
     id: data.id ?? `source_${now}`,
     name: data.name ?? '未命名书源',
+    bookSourceName: data.bookSourceName ?? data.name ?? '未命名书源',
+    bookSourceUrl: data.bookSourceUrl ?? data.url ?? '',
     url: data.url ?? '',
     searchUrl: data.searchUrl ?? '',
     ruleSearch: data.ruleSearch ?? {},
@@ -232,7 +233,6 @@ export function createReadingProgress(data: Partial<ReadingProgress> = {}): Read
   }
 }
 
-// ========== 验证函数 ==========
 export function isValidBook(obj: any): obj is Book {
   return obj && typeof obj === 'object' &&
     typeof obj.name === 'string' &&
@@ -256,3 +256,4 @@ export function isValidReadingProgress(obj: any): obj is ReadingProgress {
     obj.bookId !== undefined &&
     obj.chapterId !== undefined
 }
+

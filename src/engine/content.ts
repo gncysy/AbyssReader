@@ -6,6 +6,7 @@
  * - 支持 nextContentUrl 翻页（单页顺序 + 多页并发）
  * - 支持 replaceRegex 清理
  * - 支持 HTML 格式化（保留图片）
+ * - 支持后台刷新缓存
  */
 
 import { getGlobalHttpClient } from './network/client.js'
@@ -22,6 +23,8 @@ export interface ContentOptions {
   cachedHtml?: string
   nextChapterUrl?: string
   debugLog?: (msg: string) => void
+  bookKind?: string
+  _background?: boolean
 }
 
 // ============================================================
@@ -32,71 +35,128 @@ const contentCache = new Map<string, { content: string; timestamp: number }>()
 const CACHE_TTL = 30 * 60 * 1000
 
 // ============================================================
-// 主函数
+// 辅助：解析请求配置
 // ============================================================
 
-export async function getContent(
+function parseRequestConfig(
+  url: string,
+  defaultHeaders: Record<string, string>
+): { url: string; method: string; headers: Record<string, string>; body: any } {
+  let result = {
+    url: url,
+    method: 'GET' as string,
+    headers: { ...defaultHeaders },
+    body: null as any,
+  }
+
+  const jsonMatch = url.match(/,\s*(\{[\s\S]*\})$/)
+  if (jsonMatch) {
+    try {
+      let configStr = jsonMatch[1].trim()
+      configStr = configStr.replace(/'/g, '"')
+      configStr = configStr.replace(/,(\s*})/g, '$1')
+      const config = JSON.parse(configStr)
+
+      result.url = url.substring(0, url.lastIndexOf(',')).trim()
+      if (config.method) result.method = config.method.toUpperCase()
+      if (config.headers) {
+        result.headers = { ...defaultHeaders, ...config.headers }
+      }
+      if (config.body) result.body = config.body
+    } catch {
+      // 解析失败，使用默认配置
+    }
+  }
+
+  return result
+}
+
+// ============================================================
+// 辅助：使用 electronAPI.fetch 发送请求
+// ============================================================
+
+async function fetchWithElectronAPI(url: string, options: any): Promise<any> {
+  const api = (globalThis as any).electronAPI
+  if (!api || typeof api.fetch !== 'function') {
+    const httpClient = getGlobalHttpClient()
+    return httpClient.request({
+      url,
+      method: options.method,
+      headers: options.headers,
+      body: options.body,
+      timeout: options.timeout || 30000,
+    })
+  }
+  return api.fetch(url, options)
+}
+
+// ============================================================
+// 核心：实际请求正文
+// ============================================================
+
+async function fetchContent(
   source: BookSource,
   chapterUrl: string,
-  options: ContentOptions = {}
+  options: ContentOptions
 ): Promise<string> {
-  if (!chapterUrl || typeof chapterUrl !== 'string' || !chapterUrl.trim()) {
-    console.warn('[Content] chapterUrl 无效')
-    return '章节链接无效'
-  }
-
-  const httpClient = getGlobalHttpClient()
   const rule = source.ruleContent
+  const { redirectUrl = chapterUrl, cachedHtml, nextChapterUrl, debugLog, bookKind } = options
 
-  if (!rule || !rule.content) {
-    console.warn('[Content] 书源缺少 ruleContent.content')
-    return '书源缺少正文规则'
-  }
-
-  const { redirectUrl = chapterUrl, cachedHtml, nextChapterUrl, debugLog } = options
-
-  // ===== 检查缓存 =====
-  const cacheKey = chapterUrl
-  const cached = contentCache.get(cacheKey)
-  if (cached && Date.now() - cached.timestamp < CACHE_TTL) {
-    debugLog?.(`[Content] 缓存命中: ${chapterUrl}`)
-    return cached.content
-  }
-
-  // ===== 1. 获取 HTML =====
   let html = cachedHtml
   let finalRedirectUrl = redirectUrl
 
   if (!html) {
-    try {
-      const headers = source.header ? JSON.parse(source.header) : {}
-      const response = await httpClient.request({
-        url: chapterUrl,
-        method: 'GET',
-        headers,
-        timeout: 30000,
-      })
-
-      if (response.status < 200 || response.status >= 300) {
-        console.warn('[Content] HTTP 失败:', response.status)
-        return `HTTP ${response.status}`
+    const headers = source.header ? JSON.parse(source.header) : {}
+    
+    let reqConfig = parseRequestConfig(chapterUrl, headers)
+    
+    if (reqConfig.url && reqConfig.url.includes(',{"method"')) {
+      const cleanMatch = reqConfig.url.match(/^(https?:\/\/[^,]+)/)
+      if (cleanMatch) {
+        reqConfig.url = cleanMatch[1]
       }
-
-      html = response.data
-      if (response.url && response.url !== chapterUrl) {
-        finalRedirectUrl = response.url
+    }
+    
+    if (reqConfig.body && typeof reqConfig.body === 'string') {
+      try {
+        const bodyObj = JSON.parse(reqConfig.body)
+        if (bodyObj.ContentAnchorBatch && bodyObj.ContentAnchorBatch.length > 0) {
+          // 从 options 获取 bookKind，不再硬编码
+          if (!bodyObj.ContentAnchorBatch[0].BookID || bodyObj.ContentAnchorBatch[0].BookID === '') {
+            if (!bookKind) {
+              throw new Error('缺少 bookKind，无法填充 BookID')
+            }
+            bodyObj.ContentAnchorBatch[0].BookID = bookKind
+            reqConfig.body = JSON.stringify(bodyObj)
+            console.log('[Content] 填充 BookID:', bookKind)
+          }
+        }
+      } catch (e) {
+        // 忽略
       }
-    } catch (err: any) {
-      console.warn('[Content] 请求失败:', err.message)
-      return `请求失败: ${err.message}`
+    }
+    
+    const response = await fetchWithElectronAPI(reqConfig.url, {
+      method: reqConfig.method,
+      headers: reqConfig.headers,
+      body: reqConfig.body,
+      timeout: 30000,
+    })
+
+    if (response.status < 200 || response.status >= 300) {
+      throw new Error(`HTTP ${response.status}`)
+    }
+
+    html = response.data
+    if (response.url && response.url !== chapterUrl) {
+      finalRedirectUrl = response.url
     }
   }
 
   if (!html || typeof html !== 'string') {
-    return '内容为空'
+    throw new Error('内容为空')
   }
 
-  // ===== 2. 构建上下文 =====
   const baseContext = {
     source,
     baseUrl: source.url,
@@ -107,7 +167,6 @@ export async function getContent(
     nextChapterUrl,
   }
 
-  // ===== 3. 获取正文（支持翻页） =====
   let allContent: string[] = []
   let nextUrls: string[] = [chapterUrl]
   let visitedUrls = new Set<string>()
@@ -121,32 +180,49 @@ export async function getContent(
     if (visitedUrls.has(currentUrl)) continue
     visitedUrls.add(currentUrl)
 
-    // 获取当前页 HTML
     let pageHtml = html
     let pageRedirectUrl = finalRedirectUrl
 
     if (currentUrl !== chapterUrl) {
-      try {
-        const headers = source.header ? JSON.parse(source.header) : {}
-        const response = await httpClient.request({
-          url: currentUrl,
-          method: 'GET',
-          headers,
-          timeout: 30000,
-        })
-        if (response.status >= 200 && response.status < 300) {
-          pageHtml = response.data
-          pageRedirectUrl = response.url || currentUrl
-        } else {
-          continue
+      const headers = source.header ? JSON.parse(source.header) : {}
+      let reqConfig = parseRequestConfig(currentUrl, headers)
+      
+      if (reqConfig.url && reqConfig.url.includes(',{"method"')) {
+        const cleanMatch = reqConfig.url.match(/^(https?:\/\/[^,]+)/)
+        if (cleanMatch) {
+          reqConfig.url = cleanMatch[1]
         }
-      } catch (err) {
-        console.warn('[Content] 翻页请求失败:', currentUrl, err)
+      }
+      
+      if (reqConfig.body && typeof reqConfig.body === 'string') {
+        try {
+          const bodyObj = JSON.parse(reqConfig.body)
+          if (bodyObj.ContentAnchorBatch && bodyObj.ContentAnchorBatch.length > 0) {
+            if (!bodyObj.ContentAnchorBatch[0].BookID || bodyObj.ContentAnchorBatch[0].BookID === '') {
+              if (!bookKind) {
+                throw new Error('缺少 bookKind，无法填充 BookID')
+              }
+              bodyObj.ContentAnchorBatch[0].BookID = bookKind
+              reqConfig.body = JSON.stringify(bodyObj)
+            }
+          }
+        } catch (e) {}
+      }
+      
+      const response = await fetchWithElectronAPI(reqConfig.url, {
+        method: reqConfig.method,
+        headers: reqConfig.headers,
+        body: reqConfig.body,
+        timeout: 30000,
+      })
+      if (response.status >= 200 && response.status < 300) {
+        pageHtml = response.data
+        pageRedirectUrl = response.url || currentUrl
+      } else {
         continue
       }
     }
 
-    // 解析正文
     const context = {
       ...baseContext,
       result: pageHtml,
@@ -156,17 +232,19 @@ export async function getContent(
 
     let content = executeRule(pageHtml, rule.content, context)
     
+    if (Array.isArray(content)) {
+      content = content.filter(item => item !== null && item !== undefined && item !== '').join('\n\n')
+    }
+    
     if (content === null || content === undefined || content === '') {
-      // 尝试用 parseAndExecute
       content = parseAndExecute(pageHtml, rule.content, context)
     }
 
     if (content && typeof content === 'string' && content.trim()) {
       allContent.push(content.trim())
-      debugLog?.(`[Content] 页 ${pageCount} 获取到 ${content.length} 字符`)
+      debugLog?.(`[Content] 获取到 ${content.length} 字符`)
     }
 
-    // 获取下一页 URL
     if (rule.nextContentUrl && pageCount < maxPages) {
       const nextResult = parseAndExecute(pageHtml, rule.nextContentUrl, context)
       if (nextResult) {
@@ -175,7 +253,6 @@ export async function getContent(
           if (u && typeof u === 'string' && u.trim()) {
             const absUrl = resolveUrl(u.trim(), pageRedirectUrl)
             if (absUrl && !visitedUrls.has(absUrl) && absUrl !== currentUrl) {
-              // 检查是否与下一章 URL 相同
               if (nextChapterUrl && absUrl === resolveUrl(nextChapterUrl, pageRedirectUrl)) {
                 continue
               }
@@ -187,15 +264,12 @@ export async function getContent(
     }
   }
 
-  // ===== 4. 合并正文 =====
   let finalContent = allContent.join('\n\n')
 
   if (!finalContent || !finalContent.trim()) {
-    debugLog?.(`[Content] 正文为空`)
-    return '正文内容为空'
+    throw new Error('正文为空')
   }
 
-  // ===== 5. 应用 replaceRegex 清理 =====
   if (rule.replaceRegex) {
     const context = {
       ...baseContext,
@@ -208,19 +282,64 @@ export async function getContent(
     }
   }
 
-  // ===== 6. 简单格式化 =====
   finalContent = finalContent
     .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
     .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')
-    .replace(/<[^>]+>/g, '') // 移除 HTML 标签
+    .replace(/<[^>]+>/g, '')
     .replace(/\s+/g, ' ')
     .trim()
 
-  // ===== 7. 缓存 =====
-  contentCache.set(cacheKey, { content: finalContent, timestamp: Date.now() })
-
-  debugLog?.(`[Content] 最终内容长度: ${finalContent.length}`)
   return finalContent
+}
+
+// ============================================================
+// 主函数（带缓存 + 后台更新）
+// ============================================================
+
+export async function getContent(
+  source: BookSource,
+  chapterUrl: string,
+  options: ContentOptions = {}
+): Promise<string> {
+  if (!chapterUrl || typeof chapterUrl !== 'string' || !chapterUrl.trim()) {
+    console.warn('[Content] chapterUrl 无效')
+    return '章节链接无效'
+  }
+
+  const rule = source.ruleContent
+
+  if (!rule || !rule.content) {
+    console.warn('[Content] 书源缺少 ruleContent.content')
+    return '书源缺少正文规则'
+  }
+
+  const cacheKey = chapterUrl
+  const cached = contentCache.get(cacheKey)
+
+  if (cached && Date.now() - cached.timestamp < CACHE_TTL) {
+    if (!options._background) {
+      const bgOptions = { ...options, _background: true }
+      fetchContent(source, chapterUrl, bgOptions)
+        .then(newContent => {
+          if (newContent && newContent !== cached.content) {
+            contentCache.set(cacheKey, { content: newContent, timestamp: Date.now() })
+            console.log('[Content] 后台更新成功:', chapterUrl)
+          }
+        })
+        .catch(() => {})
+    }
+    return cached.content
+  }
+
+  try {
+    const content = await fetchContent(source, chapterUrl, options)
+    contentCache.set(cacheKey, { content, timestamp: Date.now() })
+    console.log('[Content] 缓存已更新:', chapterUrl)
+    return content
+  } catch (err: any) {
+    console.warn('[Content] 请求失败:', err.message)
+    return `请求失败: ${err.message}`
+  }
 }
 
 // ============================================================
@@ -291,4 +410,5 @@ export function cleanExpiredCache(): number {
 
 export function clearContentCache(): void {
   contentCache.clear()
+  console.log('[Content] 缓存已清空')
 }

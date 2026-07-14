@@ -8,7 +8,6 @@ export * from "./modules/crypto.js";
 export * from "./modules/dom.js";
 export * from "./modules/storage.js";
 export * from "./modules/ui.js";
-export * from "./modules/webview.js";
 export * from "./modules/context.js";
 export * from "./modules/utils.js";
 

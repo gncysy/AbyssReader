@@ -42,7 +42,37 @@ const routes: RouteRecordRaw[] = [
     component: () => import('@/pages/Settings.vue'),
     meta: { title: '设置' },
   },
-  // 404 路由
+  // 设置子页面
+  {
+    path: '/settings/appearance',
+    name: 'settings-appearance',
+    component: () => import('@/pages/settings/Appearance.vue'),
+    meta: { title: '外观' },
+  },
+  {
+    path: '/settings/reading',
+    name: 'settings-reading',
+    component: () => import('@/pages/settings/Reading.vue'),
+    meta: { title: '阅读' },
+  },
+  {
+    path: '/settings/data',
+    name: 'settings-data',
+    component: () => import('@/pages/settings/Data.vue'),
+    meta: { title: '数据' },
+  },
+  {
+    path: '/settings/webdav',
+    name: 'settings-webdav',
+    component: () => import('@/pages/settings/WebDAV.vue'),
+    meta: { title: 'WebDAV' },
+  },
+  {
+    path: '/settings/about',
+    name: 'settings-about',
+    component: () => import('@/pages/settings/About.vue'),
+    meta: { title: '关于' },
+  },
   {
     path: '/:pathMatch(.*)*',
     name: 'not-found',
@@ -62,10 +92,6 @@ router.beforeEach((to, from, next) => {
   const title = to.meta?.title || '墨阅'
   document.title = `墨阅 · ${title}`
   next()
-})
-
-router.onError((error) => {
-  console.error('[Router] 路由错误:', error)
 })
 
 export default router

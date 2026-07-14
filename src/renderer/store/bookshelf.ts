@@ -47,6 +47,10 @@ export const useBookshelfStore = defineStore('bookshelf', {
 
     // 添加书籍
     async addBook(book: Book) {
+    if (!book.sourceId) {
+      console.warn('[BookshelfStore] 书籍缺少 sourceId，无法添加:', book.name)
+      return false
+    }
       const exists = this.books.find((b) => b.bookUrl === book.bookUrl)
       if (exists) return false
 
@@ -164,3 +168,4 @@ export const useBookshelfStore = defineStore('bookshelf', {
     },
   },
 })
+

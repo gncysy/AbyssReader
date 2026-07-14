@@ -86,6 +86,7 @@ export class HttpClient {
 
     const startTime = Date.now()
     const axiosConfig: AxiosRequestConfig = {
+      responseType: (config.responseType === 'arraybuffer' ? 'arraybuffer' : 'text') as any,
       url: config.url,
       method: config.method || 'GET',
       headers: { ...this.defaultHeaders, ...finalHeaders,
@@ -278,5 +279,6 @@ export function createHttpClientForSource(sourceId: string): HttpClient {
     },
   })
 }
+
 
 

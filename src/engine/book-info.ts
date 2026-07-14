@@ -200,8 +200,6 @@ export async function getBookInfo(
   // ===== 5. 返回结果 =====
   return {
     id: bookUrl,
-    sourceId: source.id,
-    sourceName: source.name,
     name: String(name),
     author: String(author),
     coverUrl: coverUrl || null,
@@ -214,4 +212,3 @@ export async function getBookInfo(
     updatedAt: new Date().toISOString(),
   }
 }
-

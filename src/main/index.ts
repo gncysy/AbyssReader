@@ -1,3 +1,5 @@
+import { setupCryptoHandlers } from './crypto-handler.js'
+import { setupWebViewHandlers } from './webview-handler.js'
 // ============================================================
 // File/Blob/FormData polyfill - 必须在所有 import 之前！
 // ============================================================
@@ -49,6 +51,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { createWindow } from './window-manager.js';
 import { setupIpcHandlers } from './ipc-handlers.js';
+import { setupUIHandlers } from './ui-handler.js';
 import { setPlatformAdapter } from '../engine/platform/adapter.js';
 
 console.log('[Main] 主进程启动');
@@ -92,6 +95,9 @@ if (!gotTheLock) {
 
 // ===== 初始化 IPC =====
 setupIpcHandlers();
+  setupUIHandlers();
+setupCryptoHandlers();
+setupWebViewHandlers();
 console.log('[Main] IPC 处理器已注册');
 
 // ===== Windows 任务栏 =====
@@ -198,3 +204,7 @@ app.on('window-all-closed', () => {
 });
 
 console.log('[Main] 启动完成，等待 app.whenReady()');
+
+
+
+

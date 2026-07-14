@@ -1,38 +1,69 @@
 import CryptoJS from 'crypto-js'
-import * as nodeCrypto from 'crypto'
+
+// ============================================================
+// 纯 JS 加密模块（不依赖 node:crypto）
+// AES/DES/MD5/SHA/Base64 全部用 crypto-js 实现
+// RSA 通过 IPC 调用主进程
+// ============================================================
 
 export const cryptoApi = {
   base64Encode(str: string): string {
-    return Buffer.from(str, 'utf-8').toString('base64')
+    return CryptoJS.enc.Base64.stringify(CryptoJS.enc.Utf8.parse(str))
   },
 
   base64Decode(str: string): string {
-    return Buffer.from(str, 'base64').toString('utf-8')
+    const parsed = CryptoJS.enc.Base64.parse(str)
+    return CryptoJS.enc.Utf8.stringify(parsed)
   },
 
   base64DecodeToByteArray(str: string): Uint8Array {
-    return new Uint8Array(Buffer.from(str, 'base64'))
+    const parsed = CryptoJS.enc.Base64.parse(str)
+    const words = parsed.words
+    const byteArray = new Uint8Array(words.length * 4)
+    for (let i = 0; i < words.length; i++) {
+      const word = words[i]
+      byteArray[i * 4] = (word >> 24) & 0xFF
+      byteArray[i * 4 + 1] = (word >> 16) & 0xFF
+      byteArray[i * 4 + 2] = (word >> 8) & 0xFF
+      byteArray[i * 4 + 3] = word & 0xFF
+    }
+    return byteArray
   },
 
   getByteArray(data: any): Uint8Array {
     if (typeof data === 'string') {
       return new TextEncoder().encode(data)
     }
-    if (Buffer.isBuffer(data)) {
-      return new Uint8Array(data)
-    }
     if (data instanceof Uint8Array) {
       return data
+    }
+    if (data && typeof data === 'object' && data.words) {
+      // CryptoJS WordArray
+      const words = data.words
+      const byteArray = new Uint8Array(words.length * 4)
+      for (let i = 0; i < words.length; i++) {
+        const word = words[i]
+        byteArray[i * 4] = (word >> 24) & 0xFF
+        byteArray[i * 4 + 1] = (word >> 16) & 0xFF
+        byteArray[i * 4 + 2] = (word >> 8) & 0xFF
+        byteArray[i * 4 + 3] = word & 0xFF
+      }
+      return byteArray
     }
     return new Uint8Array()
   },
 
   hexDecodeToString(hex: string): string {
-    return Buffer.from(hex, 'hex').toString('utf-8')
+    const bytes = new Uint8Array(hex.length / 2)
+    for (let i = 0; i < hex.length; i += 2) {
+      bytes[i / 2] = parseInt(hex.substring(i, i + 2), 16)
+    }
+    return new TextDecoder().decode(bytes)
   },
 
   hexEncode(str: string): string {
-    return Buffer.from(str).toString('hex')
+    const bytes = new TextEncoder().encode(str)
+    return Array.from(bytes).map(b => b.toString(16).padStart(2, '0')).join('')
   },
 
   md5Encode(str: string): string {
@@ -129,6 +160,9 @@ export const cryptoApi = {
     }
   },
 
+  // ============================================================
+  // RSA：通过 IPC 调用主进程
+  // ============================================================
   createAsymmetricCrypto(type: string = 'RSA'): {
     setPublicKey: (key: string) => void
     setPrivateKey: (key: string) => void
@@ -137,6 +171,8 @@ export const cryptoApi = {
   } {
     let publicKey: string | null = null
     let privateKey: string | null = null
+
+    const api = (window as any).electronAPI
 
     return {
       setPublicKey: (key: string) => {
@@ -149,35 +185,46 @@ export const cryptoApi = {
         if (!publicKey) {
           throw new Error('RSA 公钥未设置')
         }
-        const buffer = Buffer.from(data, 'utf-8')
-        const encrypted = nodeCrypto.publicEncrypt(
-          {
-            key: publicKey,
-            padding: nodeCrypto.constants.RSA_PKCS1_PADDING,
-          },
-          buffer
-        )
-        return encrypted.toString('base64')
+        if (!api || typeof api.invoke !== 'function') {
+          throw new Error('electronAPI 不可用，RSA 加密无法执行')
+        }
+        // 同步转异步：返回 Promise，但书源期望同步返回
+        // 这里使用一个技巧：通过 ipcRenderer.sendSync 实现同步 IPC
+        try {
+          const result = api.invokeSync('crypto:rsaEncrypt', publicKey, data)
+          return result
+        } catch (err: any) {
+          throw new Error(`RSA 加密失败: ${err.message}`)
+        }
       },
       decryptStr: (data: string): string => {
         if (!privateKey) {
           throw new Error('RSA 私钥未设置')
         }
-        const buffer = Buffer.from(data, 'base64')
-        const decrypted = nodeCrypto.privateDecrypt(
-          {
-            key: privateKey,
-            padding: nodeCrypto.constants.RSA_PKCS1_PADDING,
-          },
-          buffer
-        )
-        return decrypted.toString('utf-8')
+        if (!api || typeof api.invoke !== 'function') {
+          throw new Error('electronAPI 不可用，RSA 解密无法执行')
+        }
+        try {
+          const result = api.invokeSync('crypto:rsaDecrypt', privateKey, data)
+          return result
+        } catch (err: any) {
+          throw new Error(`RSA 解密失败: ${err.message}`)
+        }
       },
     }
   },
 
   randomUUID(): string {
-    return nodeCrypto.randomUUID?.() || CryptoJS.lib.WordArray.random(16).toString()
+    const api = (window as any).electronAPI
+    if (api && typeof api.invoke === 'function') {
+      try {
+        const result = api.invokeSync('crypto:randomUUID')
+        return result
+      } catch {
+        // 降级
+      }
+    }
+    return Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15)
   },
 }
 

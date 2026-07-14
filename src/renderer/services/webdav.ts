@@ -89,7 +89,7 @@ export async function webdavRequest(
   path: string,
   body?: string | ArrayBuffer | null,
   extraHeaders: Record<string, string> = {}
-): Promise<{ status: number; data: string; headers: Record<string, string> }> {
+): Promise<{ status: number; data: any; headers: Record<string, string> }> {
   const baseUrl = config.server.replace(/\/+$/, '')
   const folder = config.folder.replace(/^\/+/, '').replace(/\/+$/, '')
   const url = `${baseUrl}/${folder}/${path.replace(/^\/+/, '')}`
@@ -105,18 +105,16 @@ export async function webdavRequest(
     headers['Content-Type'] = 'application/octet-stream'
   }
 
-  const response = await fetch(url, {
+  const response = await window.electronAPI.fetch(url, {
     method,
     headers,
     body: body || undefined,
   })
 
-  const text = await response.text()
-
   return {
     status: response.status,
-    data: text,
-    headers: Object.fromEntries(response.headers.entries()),
+    data: response.data,
+    headers: response.headers || {},
   }
 }
 
@@ -156,10 +154,7 @@ export async function uploadFile(
 ): Promise<boolean> {
   try {
     const data = typeof content === 'string' ? content : JSON.stringify(content, null, 2)
-    const encoder = new TextEncoder()
-    const buffer = encoder.encode(data)
-
-    const response = await webdavRequest(config, 'PUT', remotePath, buffer)
+    const response = await webdavRequest(config, 'PUT', remotePath, data)
     return response.status === 201 || response.status === 204
   } catch {
     return false
@@ -169,13 +164,14 @@ export async function uploadFile(
 export async function downloadFile(
   config: WebDAVConfig,
   remotePath: string
-): Promise<string | ArrayBuffer | null> {
+): Promise<ArrayBuffer | null> {
   try {
     const baseUrl = config.server.replace(/\/+$/, '')
     const folder = config.folder.replace(/^\/+/, '').replace(/\/+$/, '')
     const url = `${baseUrl}/${folder}/${remotePath.replace(/^\/+/, '')}`
     const auth = btoa(`${config.username}:${config.password}`)
 
+    // 直接使用原生 fetch，不经过 IPC
     const response = await fetch(url, {
       method: 'GET',
       headers: {
@@ -184,16 +180,16 @@ export async function downloadFile(
       }
     })
 
-    if (response.status === 200) {
-      const contentType = response.headers.get('Content-Type') || ''
-      if (contentType.includes('zip') || remotePath.endsWith('.zip')) {
-        return await response.arrayBuffer()
-      }
-      return await response.text()
+    if (response.status !== 200) {
+      console.error('[WebDAV] downloadFile 状态码:', response.status)
+      return null
     }
-    if (response.status === 404) return null
-    return null
-  } catch {
+
+    const arrayBuffer = await response.arrayBuffer()
+    console.log('[WebDAV] 下载文件大小:', arrayBuffer.byteLength, '字节')
+    return arrayBuffer
+  } catch (err: any) {
+    console.error('[WebDAV] downloadFile 失败:', err)
     return null
   }
 }
@@ -320,3 +316,8 @@ export async function fullSync(
     return { success: false, message: `同步失败: ${err.message}` }
   }
 }
+
+
+
+
+

@@ -30,8 +30,6 @@ export async function search(
       if (result && Array.isArray(result)) {
         return result.map((item: any) => ({
           id: item.id || item.bookUrl || `js_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
-          sourceId: source.id,
-          sourceName: source.name,
           name: item.name || '未命名',
           author: item.author || '未知作者',
           coverUrl: item.coverUrl || null,
@@ -243,8 +241,6 @@ function parseBookItem(item: any, source: BookSource, rule: any): Book | null {
 
     return {
       id: resolvedBookUrl || `book_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
-      sourceId: source.id,
-      sourceName: source.name,
       name: finalName,
       author: finalAuthor,
       coverUrl: coverUrl ? resolveUrl(String(coverUrl), source.url) : null,
@@ -293,3 +289,4 @@ export async function batchSearch(
   await Promise.all(promises);
   return results;
 }
+

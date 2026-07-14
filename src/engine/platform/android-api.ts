@@ -8,7 +8,6 @@ import { cryptoApi } from './modules/crypto.js';
 import { dom } from './modules/dom.js';
 import { storage } from './modules/storage.js';
 import { ui } from './modules/ui.js';
-import { webview } from './modules/webview.js';
 import { context } from './modules/context.js';
 import { utils } from './modules/utils.js';
 import { getGlobalStore } from '../context/store.js';
@@ -80,13 +79,6 @@ export class AndroidApi {
   toast = ui.toast.bind(ui);
   longToast = ui.longToast.bind(ui);
   startBrowserAwait = ui.startBrowserAwait.bind(ui);
-
-  // ============================================================
-  // webview
-  // ============================================================
-  webView = webview.webView.bind(webview);
-  initUrl = webview.initUrl.bind(webview);
-  refreshBookUrl = webview.refreshBookUrl.bind(webview);
 
   // ============================================================
   // context

@@ -169,8 +169,6 @@ function parseExploreBooks(
 
     books.push({
       id: resolvedBookUrl || `book_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
-      sourceId: source.id,
-      sourceName: source.name,
       name: String(name).trim(),
       author: String(author).trim(),
       coverUrl: coverUrl ? resolveUrl(String(coverUrl), source.url) : null,
@@ -186,6 +184,7 @@ function parseExploreBooks(
 
   return books
 }
+
 
 
 

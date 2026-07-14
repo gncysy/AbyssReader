@@ -1,14 +1,18 @@
-import { BrowserWindow, session } from 'electron'
-import { getPlatformAdapter } from '../adapter.js'
-import { getGlobalHttpClient } from '../../network/client.js'
+import { BrowserWindow, ipcMain } from 'electron'
+import { getGlobalHttpClient } from '../engine/network/client.js'
 
-export const webview = {
-  async webView(headers: any, url: string, js?: string): Promise<string> {
+// ============================================================
+// 主进程 WebView 处理器
+// 渲染进程通过 IPC 调用，不直接访问 electron
+// ============================================================
+
+export function setupWebViewHandlers() {
+  ipcMain.handle('webview:open', async (event, url: string, headers?: Record<string, string>, js?: string) => {
     return new Promise((resolve, reject) => {
       const win = new BrowserWindow({
         width: 1024,
         height: 768,
-        show: false,  // 始终隐藏
+        show: false,
         webPreferences: {
           nodeIntegration: false,
           contextIsolation: true,
@@ -16,6 +20,7 @@ export const webview = {
         },
       })
 
+      // 注入 headers
       if (headers && typeof headers === 'object') {
         win.webContents.session.webRequest.onBeforeSendHeaders(
           { urls: ['*://*/*'] },
@@ -39,6 +44,7 @@ export const webview = {
             content = await win.webContents.executeJavaScript('document.documentElement.outerHTML')
           }
 
+          // 同步 Cookie 到引擎
           const cookies = await win.webContents.session.cookies.get({ url })
           if (cookies.length > 0) {
             const jar = getGlobalHttpClient().getCookieJar()
@@ -71,15 +77,18 @@ export const webview = {
         reject(new Error('WebView加载超时(30s)'))
       }, 30000)
 
-      // 🔥 删除 win.show()，保持隐藏
+      // 显示窗口（调试时可改为 true）
+      win.show()
     })
-  },
+  })
 
-  initUrl(): void {
-    console.warn('[WebView] initUrl 已调用')
-  },
+  ipcMain.handle('webview:init', () => {
+    console.log('[WebView] initUrl 已调用')
+    return null
+  })
 
-  refreshBookUrl(): void {
-    console.warn('[WebView] refreshBookUrl 已调用')
-  },
+  ipcMain.handle('webview:refresh', () => {
+    console.log('[WebView] refreshBookUrl 已调用')
+    return null
+  })
 }

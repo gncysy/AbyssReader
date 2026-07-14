@@ -28,6 +28,24 @@
       -moz-osx-font-smoothing: grayscale;
       background: #0d0d0d;
       color: #e8e8e8;
+      transition: background 0.3s, color 0.3s;
+    }
+
+    /* ===== 加载页面 - 使用 CSS 变量跟随主题 ===== */
+    :root {
+      --loading-bg: #0d0d0d;
+      --loading-text: #e8e8e8;
+      --loading-brand: #d4a017;
+    }
+
+    [data-theme="light"] {
+      --loading-bg: #f0ede8;
+      --loading-text: #1a1a1a;
+    }
+
+    [data-theme="sepia"] {
+      --loading-bg: #e8dcc8;
+      --loading-text: #3d2b1f;
     }
 
     ::-webkit-scrollbar {
@@ -48,34 +66,45 @@
     #app-loading {
       position: fixed;
       inset: 0;
-      background: #0d0d0d;
+      background: var(--loading-bg);
       display: flex;
       flex-direction: column;
       align-items: center;
       justify-content: center;
       z-index: 9999;
-      transition: opacity 0.6s ease;
+      transition: background 0.6s ease, opacity 0.6s ease;
     }
     #app-loading.hidden {
       opacity: 0;
       pointer-events: none;
     }
     .loading-logo {
-      font-size: 32px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 12px;
+    }
+    .loading-logo img {
+      width: 64px;
+      height: 64px;
+      display: block;
+    }
+    .loading-logo-text {
+      font-size: 28px;
       font-weight: 600;
-      color: #d4a017;
+      color: var(--loading-brand);
       letter-spacing: 0.12em;
-      margin-bottom: 24px;
       font-family: 'Lato', sans-serif;
     }
     .loading-dots {
       display: flex;
       gap: 8px;
+      margin-top: 16px;
     }
     .loading-dot {
       width: 6px;
       height: 6px;
-      background: #d4a017;
+      background: var(--loading-brand);
       border-radius: 50%;
       animation: pulse 1.4s infinite ease-in-out both;
     }
@@ -90,7 +119,10 @@
 </head>
 <body>
   <div id="app-loading">
-    <div class="loading-logo">墨阅</div>
+    <div class="loading-logo">
+      <img src="/icons/icon.svg" alt="墨阅" />
+      <div class="loading-logo-text">墨阅</div>
+    </div>
     <div class="loading-dots">
       <span class="loading-dot"></span>
       <span class="loading-dot"></span>

@@ -130,7 +130,7 @@ export function parseRule(ruleStr: string, context: RuleContext = { source: null
   return rules
 }
 
-export function executeRule(source: any, rule: string, context: RuleContext = { source: null }): string {
+export function executeRule(source: any, rule: string, context: RuleContext = { source: null }): any {
   if (!rule) return ''
   const rules = parseRule(rule, context)
   if (rules.length === 0) return ''
@@ -163,8 +163,8 @@ export function executeRule(source: any, rule: string, context: RuleContext = { 
   }
   
   if (result === null || result === undefined) return ''
-  if (typeof result === 'string') return result
-  if (Array.isArray(result)) return result.filter(item => item !== null && item !== undefined).join('\n')
+  if (Array.isArray(result)) return result
+  if (typeof result === 'object' && result !== null) return result
   return String(result)
 }
 

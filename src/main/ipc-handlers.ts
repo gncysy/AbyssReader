@@ -289,13 +289,13 @@ export function setupIpcHandlers() {
     return JSON.parse(JSON.stringify(data));
   });
 
-  // Fetch handler
+  // Fetch handler - 支持二进制数据
   ipcMain.handle("fetch", async (_event: any, url: string, options: any = {}) => {
     if (!validateUrl(url)) {
       throw new Error("无效的 URL");
     }
 
-    const { method = "GET", headers = {}, body, charset } = options;
+    const { method = "GET", headers = {}, body, charset, responseType } = options;
 
     try {
       const response = await httpClient.request({
@@ -304,9 +304,37 @@ export function setupIpcHandlers() {
         headers,
         body,
         timeout: 30000,
+        responseType: responseType || 'text',
       });
 
       let data = response.data;
+
+      // 处理二进制数据
+      if (responseType === 'arraybuffer' || options.binary === true) {
+        if (Buffer.isBuffer(data)) {
+          // 将 Buffer 转为 base64 字符串传输
+          data = data.toString('base64');
+          return { 
+            status: response.status, 
+            data, 
+            _binary: true, 
+            _encoding: 'base64',
+            headers: response.headers 
+          };
+        }
+        if (data instanceof ArrayBuffer) {
+          const buffer = Buffer.from(data);
+          data = buffer.toString('base64');
+          return { 
+            status: response.status, 
+            data, 
+            _binary: true, 
+            _encoding: 'base64',
+            headers: response.headers 
+          };
+        }
+      }
+
       if (charset && charset.toLowerCase() !== "utf-8") {
         try {
           const iconv = await import("iconv-lite");
@@ -317,7 +345,58 @@ export function setupIpcHandlers() {
         }
       }
 
-      return { status: response.status, data };
+      return { status: response.status, data, headers: response.headers };
+    } catch (error: any) {
+      if (error.response) {
+        return { status: error.response.status, data: error.response.data };
+      }
+      throw error;
+    }
+  });
+
+  // 专用的二进制下载 handler
+  ipcMain.handle("download-binary", async (_event: any, url: string, options: any = {}) => {
+    if (!validateUrl(url)) {
+      throw new Error("无效的 URL");
+    }
+
+    const { method = "GET", headers = {}, body } = options;
+
+    try {
+      const response = await httpClient.request({
+        url,
+        method,
+        headers,
+        body,
+        timeout: 30000,
+        responseType: 'arraybuffer',
+      });
+
+      let data = response.data;
+      
+      if (Buffer.isBuffer(data)) {
+        // 直接返回 Buffer 的 base64 编码
+        return {
+          status: response.status,
+          data: data.toString('base64'),
+          _binary: true,
+          _encoding: 'base64',
+          headers: response.headers,
+        };
+      }
+      
+      if (data instanceof ArrayBuffer) {
+        const buffer = Buffer.from(data);
+        return {
+          status: response.status,
+          data: buffer.toString('base64'),
+          _binary: true,
+          _encoding: 'base64',
+          headers: response.headers,
+        };
+      }
+
+      return { status: response.status, data, headers: response.headers };
     } catch (error: any) {
       if (error.response) {
         return { status: error.response.status, data: error.response.data };
@@ -728,7 +807,6 @@ export function setupIpcHandlers() {
       if (!source) return safeClone([]);
 
       const exploreUrl = source.exploreUrl || "";
-      // 如果 exploreUrl 包含 <js>，执行它
       let processedExploreUrl = exploreUrl;
       if (exploreUrl.includes("<js>")) {
         try {
@@ -1083,4 +1161,3 @@ export function setupIpcHandlers() {
 export function clearChapterCache() {
   chapterCache.clear();
 }
-

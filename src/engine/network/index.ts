@@ -14,6 +14,7 @@ export interface RequestConfig {
   followRedirect?: boolean
   proxy?: string
   webView?: boolean
+  responseType?: 'text' | 'arraybuffer' | 'blob' | 'json'
 }
 
 export interface ResponseData {

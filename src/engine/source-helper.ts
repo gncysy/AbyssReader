@@ -3,9 +3,14 @@ import { parseAndExecute } from './rule-parser/index.js'
 
 export function normalizeSource(source: any): BookSource {
   const now = Date.now()
+  const nameValue = source.bookSourceName || source.name || '未命名书源'
+  const urlValue = source.bookSourceUrl || source.url || ''
+
   return {
     id: source.id || source.bookSourceUrl || `source_${now}_${Math.random().toString(36).slice(2, 6)}`,
-    name: source.name || source.bookSourceName || '未命名书源',
+    name: nameValue,
+    bookSourceName: source.bookSourceName || source.name || '未命名书源',
+    bookSourceUrl: source.bookSourceUrl || source.url || '',
     url: source.url || source.bookSourceUrl || '',
     searchUrl: source.searchUrl || '',
     ruleSearch: source.ruleSearch || {},
@@ -26,20 +31,16 @@ export function normalizeSource(source: any): BookSource {
     respondTime: source.respondTime || 0,
     lastUpdateTime: source.lastUpdateTime || now,
     bookUrlPattern: source.bookUrlPattern || null,
-    code: source.code || source.jsCode || source.sourceCode || null,
+    code: source.code || null,
     _legado: !!(source.code || source.jsCode || source.sourceCode),
     _desktop: true,
   }
 }
 
-/**
- * 解析 header 字段，支持 @js: 动态生成
- */
 export function parseHeader(header: string | null | undefined, context: any = {}): Record<string, string> | null {
   if (!header) return null
   if (typeof header !== 'string') return header as any
 
-  // 如果 header 是 @js: 开头，执行 JS
   if (header.trim().startsWith('@js:')) {
     try {
       const result = parseAndExecute({}, header, { source: context.source || {}, ...context })
@@ -60,7 +61,6 @@ export function parseHeader(header: string | null | undefined, context: any = {}
     }
   }
 
-  // 尝试 JSON 解析
   try {
     return JSON.parse(header)
   } catch {

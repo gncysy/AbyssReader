@@ -3,7 +3,6 @@ import { cryptoApi } from './modules/crypto.js';
 import { dom } from './modules/dom.js';
 import { storage } from './modules/storage.js';
 import { ui } from './modules/ui.js';
-import { webview } from './modules/webview.js';
 import { context } from './modules/context.js';
 import { utils } from './modules/utils.js';
 import { getGlobalHttpClient } from '../network/client.js';
@@ -58,7 +57,6 @@ export function buildJavaAPI(): any {
     getLoginInfoMap: storage.getLoginInfoMap.bind(storage),
     putLoginHeader: storage.putLoginHeader.bind(storage),
     getLoginHeader: storage.getLoginHeader.bind(storage),
-    // Legado 书籍/章节变量
     putBookVariable: storage.putBookVariable.bind(storage),
     getBookVariable: storage.getBookVariable.bind(storage),
     putChapterVariable: storage.putChapterVariable.bind(storage),
@@ -75,11 +73,6 @@ export function buildJavaAPI(): any {
     toast: ui.toast.bind(ui),
     longToast: ui.longToast.bind(ui),
     startBrowserAwait: ui.startBrowserAwait.bind(ui),
-
-    // ===== WebView =====
-    webView: webview.webView.bind(webview),
-    initUrl: webview.initUrl.bind(webview),
-    refreshBookUrl: webview.refreshBookUrl.bind(webview),
 
     // ===== 时间 =====
     timeFormat: utils.timeFormat.bind(utils),
