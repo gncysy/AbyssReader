@@ -77,8 +77,8 @@ export function setupWebViewHandlers() {
         reject(new Error('WebView加载超时(30s)'))
       }, 30000)
 
-      // 显示窗口（调试时可改为 true）
-      win.show()
+      // 不显示窗口，静默加载
+      // win.show() 已移除
     })
   })
 

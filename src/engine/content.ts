@@ -230,14 +230,15 @@ async function fetchContent(
       redirectUrl: pageRedirectUrl,
     }
 
-    let content = executeRule(pageHtml, rule.content, context)
+        const contentRule = rule.content || ''
+    let content = executeRule(pageHtml, contentRule, context)
     
     if (Array.isArray(content)) {
       content = content.filter(item => item !== null && item !== undefined && item !== '').join('\n\n')
     }
     
     if (content === null || content === undefined || content === '') {
-      content = parseAndExecute(pageHtml, rule.content, context)
+            content = parseAndExecute(pageHtml, contentRule, context)
     }
 
     if (content && typeof content === 'string' && content.trim()) {
@@ -412,3 +413,5 @@ export function clearContentCache(): void {
   contentCache.clear()
   console.log('[Content] 缓存已清空')
 }
+
+

@@ -540,3 +540,4 @@ watch(() => props.book, () => loadToc())
 .toc-list::-webkit-scrollbar-thumb:hover { background: var(--text-muted); }
 </style>
 
+
