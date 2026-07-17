@@ -7,11 +7,9 @@ export const useBookshelfStore = defineStore('bookshelf', {
     books: [] as Book[],
     loading: false,
     filterText: '',
-    // 详情浮窗状态
     showDetail: false,
     detailBook: null as Book | null,
     detailSource: null as BookSource | null,
-    // 阅读器状态
     showReader: false,
     readerBook: null as Book | null,
     readerSource: null as BookSource | null,
@@ -31,7 +29,6 @@ export const useBookshelfStore = defineStore('bookshelf', {
   },
 
   actions: {
-    // 加载书架
     async loadBooks() {
       this.loading = true
       try {
@@ -39,18 +36,12 @@ export const useBookshelfStore = defineStore('bookshelf', {
         this.books = data || []
       } catch (error) {
         console.error('[BookshelfStore] 加载失败:', error)
-        throw error
       } finally {
         this.loading = false
       }
     },
 
-    // 添加书籍
     async addBook(book: Book) {
-    if (!book.sourceId) {
-      console.warn('[BookshelfStore] 书籍缺少 sourceId，无法添加:', book.name)
-      return false
-    }
       const exists = this.books.find((b) => b.bookUrl === book.bookUrl)
       if (exists) return false
 
@@ -66,19 +57,24 @@ export const useBookshelfStore = defineStore('bookshelf', {
       return true
     },
 
-    async removeBook(bookId: string | number) {
-      this.books = this.books.filter((b) => b.id !== bookId)
+    async removeBook(index: number) {
+      this.books.splice(index, 1)
       await this.saveBooks()
     },
 
-    async updateBook(bookId: string | number, updates: Partial<Book>) {
-      const idx = this.books.findIndex((b) => b.id === bookId)
-      if (idx === -1) return
-      this.books[idx] = {
-        ...this.books[idx],
+    async removeBookByUrl(bookUrl: string) {
+      this.books = this.books.filter((b) => b.bookUrl !== bookUrl)
+      await this.saveBooks()
+    },
+
+    async updateBook(index: number, updates: Partial<Book>) {
+      if (index < 0 || index >= this.books.length) return
+      this.books[index] = {
+        ...this.books[index],
         ...updates,
         updatedAt: new Date().toISOString(),
       }
+      this.books = [...this.books]
       await this.saveBooks()
     },
 
@@ -94,7 +90,6 @@ export const useBookshelfStore = defineStore('bookshelf', {
       this.filterText = ''
     },
 
-    // 批量添加
     async addBooks(bookList: Book[]) {
       let added = 0
       for (const book of bookList) {
@@ -120,18 +115,12 @@ export const useBookshelfStore = defineStore('bookshelf', {
       return this.books.some((b) => b.bookUrl === bookUrl)
     },
 
-    getBook(bookId: string | number): Book | undefined {
-      return this.books.find((b) => b.id === bookId)
+    getBook(index: number): Book | undefined {
+      return this.books[index]
     },
 
-    getBooksBySource(): Record<string, Book[]> {
-      const groups: Record<string, Book[]> = {}
-      for (const book of this.books) {
-        const key = book.sourceId || 'unknown'
-        if (!groups[key]) groups[key] = []
-        groups[key].push(book)
-      }
-      return groups
+    getBookByUrl(bookUrl: string): Book | undefined {
+      return this.books.find((b) => b.bookUrl === bookUrl)
     },
 
     async clearAll() {
@@ -139,7 +128,6 @@ export const useBookshelfStore = defineStore('bookshelf', {
       await this.saveBooks()
     },
 
-    // ===== 详情浮窗 =====
     openDetail(book: Book, source: BookSource | null) {
       this.detailBook = book
       this.detailSource = source
@@ -152,8 +140,7 @@ export const useBookshelfStore = defineStore('bookshelf', {
       this.detailSource = null
     },
 
-    // ===== 阅读器 =====
-    openReader(book: Book, source: BookSource | null) {
+    openReader(book: Book, source: BookSource | null, chapters?: any[]) {
       this.readerBook = book
       this.readerSource = source
       this.showReader = true
@@ -163,9 +150,7 @@ export const useBookshelfStore = defineStore('bookshelf', {
       this.showReader = false
       this.readerBook = null
       this.readerSource = null
-      // 刷新书架（可能更新进度）
       this.loadBooks()
     },
   },
 })
-

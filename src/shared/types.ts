@@ -3,9 +3,9 @@
 // ============================================
 
 export interface Book {
-  id: string | number
-  origin?: string          // 书源 URL (bookSourceUrl)
-  originName?: string      // 书源名称 (bookSourceName)
+  id?: string | number
+  origin?: string
+  originName?: string
   name: string
   author: string
   coverUrl?: string | null
@@ -17,15 +17,6 @@ export interface Book {
   content?: string | null
   createdAt: string
   updatedAt: string
-  read_progress?: number
-  current_chapter_id?: number
-  current_chapter_title?: string
-}
-
-export interface BookWithProgress extends Book {
-  read_progress?: number
-  current_chapter_id?: number
-  current_chapter_title?: string
 }
 
 export interface SearchRule {
@@ -134,22 +125,25 @@ export interface Chapter {
   updateTime?: string
 }
 
+export interface ReplaceRule {
+  id: string
+  name: string
+  pattern: string
+  replacement: string
+  isRegex: boolean
+  isEnabled: boolean
+  scope: 'title' | 'content'
+  bookName: string
+  bookOrigin: string
+  timeoutMs: number
+}
+
 export interface ReadingProgress {
-  bookId: string | number
+  bookUrl: string
   chapterId: number
   chapterTitle: string
   scrollPercent: number
   updatedAt: string
-}
-
-export interface ParsedRule {
-  type: 'css' | 'xpath' | 'json' | 'regex' | 'js' | 'text'
-  expression: string
-  attribute?: string | null
-  cleanPattern?: string | null
-  cleanReplacement?: string | null
-  flags?: string | null
-  original: string
 }
 
 export function createBook(data: Partial<Book> = {}): Book {
@@ -174,9 +168,10 @@ export function createBook(data: Partial<Book> = {}): Book {
 
 export function createSource(data: Partial<BookSource> = {}): BookSource {
   const now = Date.now()
+  const sourceUrl = data.bookSourceUrl || data.url || ''
   return {
-    id: data.id ?? `source_${now}`,
-    name: data.name ?? '未命名书源',
+    id: sourceUrl || `source_${now}`,
+    name: data.name ?? data.bookSourceName ?? '未命名书源',
     bookSourceName: data.bookSourceName ?? data.name ?? '未命名书源',
     bookSourceUrl: data.bookSourceUrl ?? data.url ?? '',
     url: data.url ?? '',
@@ -223,37 +218,11 @@ export function createChapter(data: Partial<Chapter> = {}, index = 0): Chapter {
   }
 }
 
-export function createReadingProgress(data: Partial<ReadingProgress> = {}): ReadingProgress {
-  return {
-    bookId: data.bookId ?? 0,
-    chapterId: data.chapterId ?? 0,
-    chapterTitle: data.chapterTitle ?? '',
-    scrollPercent: data.scrollPercent ?? 0,
-    updatedAt: data.updatedAt ?? new Date().toISOString(),
-  }
-}
-
 export function isValidBook(obj: any): obj is Book {
-  return obj && typeof obj === 'object' &&
-    typeof obj.name === 'string' &&
-    typeof obj.bookUrl === 'string'
+  return obj && typeof obj === 'object' && typeof obj.name === 'string' && typeof obj.bookUrl === 'string'
 }
 
 export function isValidSource(obj: any): obj is BookSource {
-  return obj && typeof obj === 'object' &&
-    typeof obj.id === 'string' &&
-    typeof obj.name === 'string'
-}
-
-export function isValidChapter(obj: any): obj is Chapter {
-  return obj && typeof obj === 'object' &&
-    typeof obj.title === 'string' &&
-    typeof obj.url === 'string'
-}
-
-export function isValidReadingProgress(obj: any): obj is ReadingProgress {
-  return obj && typeof obj === 'object' &&
-    obj.bookId !== undefined &&
-    obj.chapterId !== undefined
+  return obj && typeof obj === 'object' && (obj.bookSourceName || obj.name) && (obj.url || obj.bookSourceUrl)
 }
 

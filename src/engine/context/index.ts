@@ -50,3 +50,5 @@ export function mergeContext(
     temp: { ...base.temp, ...overrides.temp },
   }
 }
+
+export { putContext, getContext, clearContext } from './shared.js'

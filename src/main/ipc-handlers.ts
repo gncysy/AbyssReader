@@ -9,1155 +9,346 @@ import {
   getToc,
   getContent,
   getBookInfo,
-  batchSearch,
 } from "../engine/index.js";
 import { getExploreCategories, getExploreBooks } from "../engine/explore.js";
 import { getGlobalHttpClient } from "../engine/network/client.js";
 import { normalizeSource, parseSourcesFromJson } from "../engine/source-helper.js";
 
-interface BookSource {
-  id: string;
-  name: string;
-  url: string;
-  searchUrl: string;
-  ruleSearch: Record<string, any>;
-  ruleBookInfo: Record<string, any>;
-  ruleToc: Record<string, any>;
-  ruleContent: Record<string, any>;
-  ruleExplore?: Record<string, any>;
-  exploreUrl?: string;
-  enabled: boolean;
-  group?: string | null;
-  comment?: string | null;
-  weight: number;
-  header?: string | null;
-  enabledCookieJar: boolean;
-  jsLib?: string | null;
-  loginUrl?: string | null;
-  loginUi?: string | null;
-  respondTime: number;
-  lastUpdateTime: number;
-  bookUrlPattern?: string | null;
-  code?: string | null;
-  _legado: boolean;
-  _desktop: boolean;
-}
+const activeSearches = new Map<string, AbortController>();
 
 function safeClone<T>(obj: T): T {
-  try {
-    return JSON.parse(JSON.stringify(obj));
-  } catch {
-    if (Array.isArray(obj)) return [] as any;
-    if (obj && typeof obj === 'object') return {} as any;
-    return obj;
-  }
+  try { return JSON.parse(JSON.stringify(obj)) }
+  catch { return (Array.isArray(obj) ? [] : (obj && typeof obj === 'object' ? {} : obj)) as any }
 }
 
 function getEncryptionKey(): string {
-  if (process.env.STORE_ENCRYPTION_KEY) {
-    return process.env.STORE_ENCRYPTION_KEY;
-  }
+  if (process.env.STORE_ENCRYPTION_KEY) return process.env.STORE_ENCRYPTION_KEY;
   try {
     const os = require("os");
-    const hostname = os.hostname() || "unknown";
-    const salt = "abyss-reader-salt-2026";
-    const key = crypto.createHash("sha256").update(hostname + salt).digest("hex");
-    return key;
-  } catch {
-    console.warn("[Store] 使用默认加密密钥，数据安全性较低");
-    return "abyss-reader-fallback-key-2026";
-  }
+    return crypto.createHash("sha256").update((os.hostname() || "unknown") + "abyss-reader-salt-2026").digest("hex");
+  } catch { return "abyss-reader-fallback-key-2026" }
 }
 
 const store: any = new Store({
-  name: "abyssreader-data",
-  encryptionKey: getEncryptionKey(),
-  defaults: {
-    books: [],
-    sources: [],
-    readingProgress: {},
-    settings: {
-      theme: "system",
-      fontSize: 16,
-      lineHeight: 1.6,
-    },
-  },
+  name: "abyssreader-data", encryptionKey: getEncryptionKey(),
+  defaults: { books: [], sources: [], readingProgress: {}, settings: { theme: "system", fontSize: 16, lineHeight: 1.6 } },
 });
 
 const httpClient = getGlobalHttpClient();
 let verificationWindow: BrowserWindow | null = null;
-
 const chapterCache = new Map<string, { chapters: any[]; timestamp: number }>();
 const CACHE_TTL = 60000;
 
 function createSecureSandbox(context: any = {}): vm.Context {
-  const sandbox: any = {
-    Math: Math,
-    JSON: JSON,
-    Date: Date,
-    String: String,
-    Number: Number,
-    Boolean: Boolean,
-    Array: Array,
-    Object: Object,
-    trim: (s: any) => String(s).trim(),
-    encodeURI: encodeURIComponent,
-    decodeURI: decodeURIComponent,
-    parseInt: parseInt,
-    parseFloat: parseFloat,
-    isNaN: isNaN,
-    isFinite: isFinite,
-    console: {
-      log: (...args: any[]) => console.log("[Sandbox]", ...args),
-      error: (...args: any[]) => console.error("[Sandbox]", ...args),
-      warn: (...args: any[]) => console.warn("[Sandbox]", ...args),
-      info: (...args: any[]) => console.info("[Sandbox]", ...args),
-    },
-    context: JSON.parse(JSON.stringify(context || {})),
-  };
-
-  Object.freeze(sandbox.Math);
-  Object.freeze(sandbox.JSON);
-  Object.freeze(sandbox.Date);
-  Object.freeze(sandbox.String);
-  Object.freeze(sandbox.Number);
-  Object.freeze(sandbox.Boolean);
-  Object.freeze(sandbox.Array);
-  Object.freeze(sandbox.Object);
-  Object.freeze(sandbox);
-
+  const sandbox: any = { Math, JSON, Date, String, Number, Boolean, Array, Object, trim: (s: any) => String(s).trim(), encodeURI: encodeURIComponent, decodeURI: decodeURIComponent, parseInt, parseFloat, isNaN, isFinite, console: { log: (...args: any[]) => console.log("[Sandbox]", ...args), error: (...args: any[]) => console.error("[Sandbox]", ...args), warn: (...args: any[]) => console.warn("[Sandbox]", ...args), info: (...args: any[]) => console.info("[Sandbox]", ...args) }, context: JSON.parse(JSON.stringify(context || {})) };
+  Object.freeze(sandbox.Math); Object.freeze(sandbox.JSON); Object.freeze(sandbox.Date); Object.freeze(sandbox.String); Object.freeze(sandbox.Number); Object.freeze(sandbox.Boolean); Object.freeze(sandbox.Array); Object.freeze(sandbox.Object); Object.freeze(sandbox);
   return vm.createContext(sandbox);
 }
 
 function getLocalBookChaptersSync(bookId: string): any[] {
   const books: any[] = store.get("books") || [];
-  const book = books.find(
-    (b: any) => b.id === bookId || b.bookUrl === `local://${bookId}`
-  );
-  if (!book || !book.content) {
-    return [{ id: 0, title: "正文", content: "", index: 0 }];
-  }
-  const content = book.content;
-  const lines = content.split("\n");
-  const chapters: any[] = [];
-  let currentChapter = { id: 0, title: "正文", content: "", index: 0 };
-  let chapterIndex = 0;
-
-  const chapterPatterns = [
-    /^(第[零一二三四五六七八九十百千万]+章)/,
-    /^(第\d+章)/,
-    /^(第[零一二三四五六七八九十百千万]+节)/,
-    /^(第\d+节)/,
-    /^(第[零一二三四五六七八九十百千万]+回)/,
-    /^(第\d+回)/,
-    /^(卷[零一二三四五六七八九十百千万]+)/,
-    /^(卷\d+)/,
-    /^(序章|楔子|尾声|后记|番外|前言|引言|结语)/,
-    /^(Chapter\s+\d+)/i,
-  ];
-
-  let isFirstLine = true;
-  let currentVolume = "";
-
+  const book = books.find((b: any) => b.id === bookId || b.bookUrl === `local://${bookId}`);
+  if (!book || !book.content) return [{ id: 0, title: "正文", content: "", index: 0 }];
+  const content = book.content; const lines = content.split("\n");
+  const chapters: any[] = []; let currentChapter = { id: 0, title: "正文", content: "", index: 0 }; let chapterIndex = 0;
+  const patterns = [/^(第[零一二三四五六七八九十百千万]+章)/, /^(第\d+章)/, /^(第[零一二三四五六七八九十百千万]+节)/, /^(第\d+节)/, /^(第[零一二三四五六七八九十百千万]+回)/, /^(第\d+回)/, /^(卷[零一二三四五六七八九十百千万]+)/, /^(卷\d+)/, /^(序章|楔子|尾声|后记|番外|前言|引言|结语)/, /^(Chapter\s+\d+)/i];
+  let isFirstLine = true, currentVolume = "";
   for (const line of lines) {
     const trimmed = line.trim();
-    if (!trimmed) {
-      if (currentChapter.content) {
-        currentChapter.content += "\n";
-      }
-      continue;
-    }
-
-    const isVolume =
-      /^卷[零一二三四五六七八九十百千万]+$/.test(trimmed) ||
-      /^卷\d+$/.test(trimmed);
-
-    if (isVolume) {
-      currentVolume = trimmed;
-      if (currentChapter.content.trim()) {
-        chapters.push({ ...currentChapter });
-        chapterIndex++;
-        currentChapter = {
-          id: chapterIndex,
-          title: trimmed,
-          content: "",
-          index: chapterIndex,
-        };
-      } else {
-        currentChapter.title = trimmed;
-      }
-      continue;
-    }
-
-    let isChapter = false;
-    let matchedTitle = "";
-    for (const pattern of chapterPatterns) {
-      const match = trimmed.match(pattern);
-      if (match) {
-        isChapter = true;
-        matchedTitle = match[1] || match[0];
-        break;
-      }
-    }
-
-    if (currentVolume && !isChapter && currentChapter.content) {
-      currentChapter.content += (currentChapter.content ? "\n" : "") + line;
-      continue;
-    }
-
-    if (isChapter && currentChapter.content.length > 0) {
-      if (currentChapter.content.trim()) {
-        chapters.push({ ...currentChapter });
-      }
-      chapterIndex++;
-      const title = currentVolume
-        ? `${currentVolume} ${matchedTitle}`
-        : matchedTitle;
-      currentChapter = {
-        id: chapterIndex,
-        title: title,
-        content: "",
-        index: chapterIndex,
-      };
-    } else if (isChapter && isFirstLine) {
-      const title = currentVolume
-        ? `${currentVolume} ${matchedTitle}`
-        : matchedTitle;
-      currentChapter = {
-        id: chapterIndex,
-        title: title,
-        content: "",
-        index: chapterIndex,
-      };
-    } else {
-      currentChapter.content += (currentChapter.content ? "\n" : "") + line;
-    }
+    if (!trimmed) { if (currentChapter.content) currentChapter.content += "\n"; continue }
+    const isVolume = /^卷[零一二三四五六七八九十百千万]+$/.test(trimmed) || /^卷\d+$/.test(trimmed);
+    if (isVolume) { currentVolume = trimmed; if (currentChapter.content.trim()) { chapters.push({ ...currentChapter }); chapterIndex++; currentChapter = { id: chapterIndex, title: trimmed, content: "", index: chapterIndex } } else currentChapter.title = trimmed; continue }
+    let isChapter = false, matchedTitle = "";
+    for (const p of patterns) { const m = trimmed.match(p); if (m) { isChapter = true; matchedTitle = m[1] || m[0]; break } }
+    if (currentVolume && !isChapter && currentChapter.content) { currentChapter.content += (currentChapter.content ? "\n" : "") + line; continue }
+    if (isChapter && currentChapter.content.length > 0) { if (currentChapter.content.trim()) chapters.push({ ...currentChapter }); chapterIndex++; currentChapter = { id: chapterIndex, title: currentVolume ? currentVolume + " " + matchedTitle : matchedTitle, content: "", index: chapterIndex } }
+    else if (isChapter && isFirstLine) { currentChapter = { id: chapterIndex, title: currentVolume ? currentVolume + " " + matchedTitle : matchedTitle, content: "", index: chapterIndex } }
+    else { currentChapter.content += (currentChapter.content ? "\n" : "") + line }
     isFirstLine = false;
   }
-
-  if (currentChapter.content.trim()) {
-    chapters.push({ ...currentChapter });
-  }
-
-  if (chapters.length === 0) {
-    chapters.push({ id: 0, title: "正文", content: content, index: 0 });
-  }
-
+  if (currentChapter.content.trim()) chapters.push({ ...currentChapter });
+  if (chapters.length === 0) chapters.push({ id: 0, title: "正文", content, index: 0 });
   return chapters;
 }
 
 function validateUrl(url: string): boolean {
   if (!url || typeof url !== "string") return false;
-  try {
-    const parsed = new URL(url);
-    return parsed.protocol === "http:" || parsed.protocol === "https:";
-  } catch {
-    return false;
-  }
+  try { const p = new URL(url); return p.protocol === "http:" || p.protocol === "https:" } catch { return false }
 }
 
 function sanitizeSourceInput(source: any): any {
   if (!source || typeof source !== "object") return null;
-  const clean = JSON.parse(JSON.stringify(source));
-  delete clean.__proto__;
-  delete clean.constructor;
-  delete clean.prototype;
+  const clean = JSON.parse(JSON.stringify(source)); delete clean.__proto__; delete clean.constructor; delete clean.prototype;
   return clean;
 }
 
+async function runLoginCheck(source: any, responseBody: string): Promise<string> {
+  if (!source.loginCheckJs || typeof source.loginCheckJs !== 'string' || !source.loginCheckJs.trim()) return responseBody;
+  try {
+    const { executeJs } = await import("../engine/rule-parser/js.js");
+    const jsResult = executeJs(responseBody, source.loginCheckJs, { source, result: responseBody, src: responseBody });
+    if (jsResult && typeof jsResult === 'string' && jsResult.length > 0) return jsResult;
+  } catch (e) { console.warn("[loginCheck] 执行失败:", e) }
+  return responseBody;
+}
+
 export function setupIpcHandlers() {
-  // Store handlers
-  ipcMain.handle("store-get", (_event: any, key: string) => {
-    const value = store.get(key);
-    return value !== undefined ? JSON.parse(JSON.stringify(value)) : undefined;
-  });
+  try {
+    const jar = (httpClient as any).getCookieJar?.();
+    import('../engine/rule-parser/js.js').then(mod => { if (jar) mod.setCookieJar(jar); }).catch(() => {});
+  } catch {}
 
-  ipcMain.handle("store-set", (_event: any, key: string, value: any) => {
-    const size = JSON.stringify(value).length;
-    if (size > 50 * 1024 * 1024) {
-      throw new Error("数据过大，无法存储");
-    }
-    store.set(key, value);
-  });
+  ipcMain.handle("store-get", (_e: any, key: string) => { const v = store.get(key); return v !== undefined ? JSON.parse(JSON.stringify(v)) : undefined });
+  ipcMain.handle("store-set", (_e: any, key: string, value: any) => { if (JSON.stringify(value).length > 50*1024*1024) throw new Error("数据过大"); store.set(key, value) });
+  ipcMain.handle("store-delete", (_e: any, key: string) => { store.delete(key as any) });
+  ipcMain.handle("store-get-all", () => JSON.parse(JSON.stringify(store.store)));
 
-  ipcMain.handle("store-delete", (_event: any, key: string) => {
-    store.delete(key as any);
-  });
+  ipcMain.handle("search-abort", (_e: any, searchId: string) => { const c = activeSearches.get(searchId); if (c) { c.abort(); activeSearches.delete(searchId); return {success:true} } return {success:false,error:"未找到"} });
 
-  ipcMain.handle("store-get-all", () => {
-    const data = store.store;
-    return JSON.parse(JSON.stringify(data));
-  });
-
-  // Fetch handler - 支持二进制数据
-  ipcMain.handle("fetch", async (_event: any, url: string, options: any = {}) => {
-    if (!validateUrl(url)) {
-      throw new Error("无效的 URL");
-    }
-
+  ipcMain.handle("fetch", async (_e: any, url: string, options: any = {}) => {
+    if (!validateUrl(url)) throw new Error("无效的 URL");
     const { method = "GET", headers = {}, body, charset, responseType } = options;
-
     try {
-      const response = await httpClient.request({
-        url,
-        method,
-        headers,
-        body,
-        timeout: 30000,
-        responseType: responseType || 'text',
-      });
-
+      const response = await httpClient.request({ url, method, headers, body, timeout: 30000, responseType: responseType || 'text' });
       let data = response.data;
-
-      // 处理二进制数据
       if (responseType === 'arraybuffer' || options.binary === true) {
-        if (Buffer.isBuffer(data)) {
-          // 将 Buffer 转为 base64 字符串传输
-          data = data.toString('base64');
-          return { 
-            status: response.status, 
-            data, 
-            _binary: true, 
-            _encoding: 'base64',
-            headers: response.headers 
-          };
-        }
-        if (data instanceof ArrayBuffer) {
-          const buffer = Buffer.from(data);
-          data = buffer.toString('base64');
-          return { 
-            status: response.status, 
-            data, 
-            _binary: true, 
-            _encoding: 'base64',
-            headers: response.headers 
-          };
-        }
+        if (Buffer.isBuffer(data)) data = data.toString('base64');
+        else if (data instanceof ArrayBuffer) data = Buffer.from(data).toString('base64');
+        return { status: response.status, data, _binary: true, _encoding: 'base64', headers: response.headers };
       }
-
       if (charset && charset.toLowerCase() !== "utf-8") {
-        try {
-          const iconv = await import("iconv-lite");
-          const buffer = Buffer.from(response.data, "binary");
-          data = iconv.decode(buffer, charset);
-        } catch (err) {
-          console.warn("字符集转换失败:", err);
-        }
+        try { const iconv = await import("iconv-lite"); data = iconv.decode(Buffer.from(response.data, "binary"), charset) } catch {}
       }
-
       return { status: response.status, data, headers: response.headers };
-    } catch (error: any) {
-      if (error.response) {
-        return { status: error.response.status, data: error.response.data };
-      }
-      throw error;
-    }
+    } catch (error: any) { if (error.response) return { status: error.response.status, data: error.response.data }; throw error }
   });
 
-  // 专用的二进制下载 handler
-  ipcMain.handle("download-binary", async (_event: any, url: string, options: any = {}) => {
-    if (!validateUrl(url)) {
-      throw new Error("无效的 URL");
-    }
-
-    const { method = "GET", headers = {}, body } = options;
-
+  ipcMain.handle("download-binary", async (_e: any, url: string, options: any = {}) => {
+    if (!validateUrl(url)) throw new Error("无效的 URL");
     try {
-      const response = await httpClient.request({
-        url,
-        method,
-        headers,
-        body,
-        timeout: 30000,
-        responseType: 'arraybuffer',
-      });
-
+      const response = await httpClient.request({ url, method: options.method || "GET", headers: options.headers || {}, body: options.body, timeout: 30000, responseType: 'arraybuffer' });
       let data = response.data;
-      
-      if (Buffer.isBuffer(data)) {
-        // 直接返回 Buffer 的 base64 编码
-        return {
-          status: response.status,
-          data: data.toString('base64'),
-          _binary: true,
-          _encoding: 'base64',
-          headers: response.headers,
-        };
-      }
-      
-      if (data instanceof ArrayBuffer) {
-        const buffer = Buffer.from(data);
-        return {
-          status: response.status,
-          data: buffer.toString('base64'),
-          _binary: true,
-          _encoding: 'base64',
-          headers: response.headers,
-        };
-      }
-
+      if (Buffer.isBuffer(data)) return { status: response.status, data: data.toString('base64'), _binary: true, _encoding: 'base64', headers: response.headers };
+      if (data instanceof ArrayBuffer) return { status: response.status, data: Buffer.from(data).toString('base64'), _binary: true, _encoding: 'base64', headers: response.headers };
       return { status: response.status, data, headers: response.headers };
-    } catch (error: any) {
-      if (error.response) {
-        return { status: error.response.status, data: error.response.data };
-      }
-      throw error;
-    }
+    } catch (error: any) { if (error.response) return { status: error.response.status, data: error.response.data }; throw error }
   });
 
-  // File handlers
-  ipcMain.handle("read-file", async (_event: any, filePath: string) => {
-    if (filePath.includes("..") || filePath.includes("~")) {
-      throw new Error("非法路径");
-    }
-    return await fs.readFile(filePath, "utf-8");
-  });
+  ipcMain.handle("read-file", async (_e: any, filePath: string) => { if (filePath.includes("..")||filePath.includes("~")) throw new Error("非法路径"); return await fs.readFile(filePath, "utf-8") });
+  ipcMain.handle("show-open-dialog", async (_e: any, options: any) => { const win = BrowserWindow.getFocusedWindow() || getMainWindow(); return await dialog.showOpenDialog(win!, options) });
+  ipcMain.handle("get-app-path", () => process.env.APP_PATH || process.cwd());
 
-  ipcMain.handle("write-file", async (_event: any, filePath: string, content: string) => {
-    if (filePath.includes("..") || filePath.includes("~")) {
-      throw new Error("非法路径");
-    }
-    if (content.length > 50 * 1024 * 1024) {
-      throw new Error("文件过大");
-    }
-    await fs.writeFile(filePath, content, "utf-8");
-  });
+  ipcMain.handle("minimize-window", () => { const w = BrowserWindow.getFocusedWindow(); if (w) w.minimize() });
+  ipcMain.handle("maximize-window", () => { const w = BrowserWindow.getFocusedWindow(); if (w) w.isMaximized() ? w.unmaximize() : w.maximize() });
+  ipcMain.handle("close-window", () => { const w = BrowserWindow.getFocusedWindow(); if (w) w.close() });
 
-  ipcMain.handle("show-open-dialog", async (_event: any, options: any) => {
-    const win = BrowserWindow.getFocusedWindow() || getMainWindow();
-    return await dialog.showOpenDialog(win!, options);
-  });
-
-  ipcMain.handle("get-app-path", () => {
-    return process.env.APP_PATH || process.cwd();
-  });
-
-  // Execute JS handler
-  ipcMain.handle("execute-js", async (_event: any, code: string, context: any = {}, timeout: number = 5000) => {
-    const maxTimeout = 10000;
-    const effectiveTimeout = Math.min(timeout, maxTimeout);
-
-    let processed = code.trim();
-    if (processed.startsWith("@js:")) processed = processed.substring(4);
-    if (processed.startsWith("<js>") && processed.endsWith("</js>")) {
-      processed = processed.substring(4, processed.length - 5);
-    }
-
-    const dangerousPatterns = [
-      /require\s*\(/,
-      /import\s*\(/,
-      /process\./,
-      /global\./,
-      /__dirname/,
-      /__filename/,
-      /eval\s*\(/,
-      /Function\s*\(/,
-      /new\s+Function/,
-      /child_process/,
-      /exec\s*\(/,
-      /spawn\s*\(/,
-      /fork\s*\(/,
-      /fs\./,
-      /http\./,
-      /https\./,
-      /net\./,
-      /dgram\./,
-      /cluster\./,
-      /vm\./,
-    ];
-
-    for (const pattern of dangerousPatterns) {
-      if (pattern.test(processed)) {
-        console.warn("[Security] 拒绝执行包含危险模式的代码:", pattern);
-        return { success: false, error: `代码包含不安全操作: ${pattern.source}` };
-      }
-    }
-
-    const sandbox = createSecureSandbox(context);
-
-    const executionPromise = new Promise((resolve, reject) => {
-      try {
-        const script = new vm.Script(`(() => { ${processed} })()`, {
-          timeout: effectiveTimeout,
-        } as any);
-        const result = script.runInContext(sandbox, {
-          timeout: effectiveTimeout,
-          displayErrors: true,
-          breakOnSigint: true,
-        });
-        const safeResult =
-          typeof result === "object" && result !== null
-            ? JSON.parse(JSON.stringify(result))
-            : result;
-        resolve(safeResult);
-      } catch (error) {
-        reject(error);
-      }
-    });
-
-    const timeoutPromise = new Promise((_, reject) => {
-      setTimeout(() => {
-        reject(new Error(`JS执行超时 (${effectiveTimeout}ms)`));
-      }, effectiveTimeout + 100);
-    });
-
-    try {
-      const result = await Promise.race([executionPromise, timeoutPromise]);
-      return { success: true, result: String(result) };
-    } catch (error: any) {
-      console.error("[execute-js] 执行失败:", error.message);
-      return { success: false, error: error.message };
-    }
-  });
-
-  // Window handlers
-  ipcMain.handle("minimize-window", () => {
-    const win = BrowserWindow.getFocusedWindow();
-    if (win) win.minimize();
-  });
-
-  ipcMain.handle("maximize-window", () => {
-    const win = BrowserWindow.getFocusedWindow();
-    if (win) {
-      if (win.isMaximized()) {
-        win.unmaximize();
-      } else {
-        win.maximize();
-      }
-    }
-  });
-
-  ipcMain.handle("close-window", () => {
-    const win = BrowserWindow.getFocusedWindow();
-    if (win) win.close();
-  });
-
-  // Verification handlers
-  ipcMain.handle("open-verification", async (_event: any, url: string, title: string = "人机验证") => {
-    if (!validateUrl(url)) {
-      throw new Error("无效的 URL");
-    }
-
-    if (verificationWindow) {
-      verificationWindow.focus();
-      return;
-    }
-
+  ipcMain.handle("open-verification", async (_e: any, url: string, title: string = "人机验证") => {
+    if (!validateUrl(url)) throw new Error("无效的 URL");
+    if (verificationWindow) { verificationWindow.focus(); return }
     const parentWin = BrowserWindow.getFocusedWindow() || getMainWindow();
-    verificationWindow = new BrowserWindow({
-      width: 850,
-      height: 650,
-      parent: parentWin || undefined,
-      modal: true,
-      webPreferences: {
-        nodeIntegration: false,
-        sandbox: true,
-        webviewTag: true,
-      },
-      title,
-      show: false,
-    });
-
+    verificationWindow = new BrowserWindow({ width: 850, height: 650, parent: parentWin || undefined, modal: true, webPreferences: { nodeIntegration: false, sandbox: true, webviewTag: true }, title, show: false });
     verificationWindow.loadURL(url);
-    verificationWindow.once("ready-to-show", () => {
-      verificationWindow?.show();
-    });
-    verificationWindow.on("closed", () => {
-      verificationWindow = null;
-      if (parentWin) {
-        parentWin.webContents.send("verification-cancel");
-      }
-    });
+    verificationWindow.once("ready-to-show", () => verificationWindow?.show());
+    verificationWindow.on("closed", () => { verificationWindow = null; if (parentWin) parentWin.webContents.send("verification-cancel") });
+  });
+  ipcMain.handle("close-verification", async () => { if (verificationWindow) { verificationWindow.close(); verificationWindow = null } });
+
+  ipcMain.handle("add-book-source", async (_e: any, jsonStr: string) => {
+    if (typeof jsonStr !== "string") throw new Error("输入必须是 JSON 字符串");
+    const sourceList = parseSourcesFromJson(jsonStr); if (sourceList.length === 0) throw new Error("未找到有效的书源数据");
+    const existing: any[] = store.get("sources") || []; let added = 0;
+    for (const s of sourceList) { const source = normalizeSource(sanitizeSourceInput(s)); if (source.name && source.url) { existing.push(source); added++ } }
+    store.set("sources", existing); return "成功导入 " + added + " 个书源";
+  });
+  ipcMain.handle("import-sources-from-url", async (_e: any, url: string) => {
+    if (!validateUrl(url)) throw new Error("无效的 URL");
+    const response = await httpClient.request({ url, method: "GET", timeout: 30000 });
+    if (response.status < 200 || response.status >= 300) throw new Error("HTTP " + response.status);
+    const sourceList = parseSourcesFromJson(response.data); if (sourceList.length === 0) throw new Error("未找到有效的书源数据");
+    const existing: any[] = store.get("sources") || []; let added = 0;
+    for (const s of sourceList) { const source = normalizeSource(sanitizeSourceInput(s)); if (source.name && source.url) { existing.push(source); added++ } }
+    store.set("sources", existing); return "从 URL 成功导入 " + added + " 个书源";
   });
 
-  ipcMain.handle("close-verification", async () => {
-    if (verificationWindow) {
-      verificationWindow.close();
-      verificationWindow = null;
-    }
-  });
-
-  // Source handlers
-  ipcMain.handle("add-book-source", async (_event: any, jsonStr: string) => {
-    if (typeof jsonStr !== "string") {
-      throw new Error("输入必须是 JSON 字符串");
-    }
-
-    const sourceList = parseSourcesFromJson(jsonStr);
-    if (sourceList.length === 0) {
-      throw new Error("未找到有效的书源数据");
-    }
-
-    const existing: any[] = store.get("sources") || [];
-    const normalized = sourceList.map((s: any) => {
-      const clean = sanitizeSourceInput(s);
-      return normalizeSource(clean);
-    });
-
-    const ids = new Set(existing.map((s: any) => s.id));
-    let added = 0;
-
-    for (const source of normalized) {
-      if (!source.name || !source.url) {
-        console.warn("[BookSource] 跳过无效书源:", source.name);
-        continue;
-      }
-      if (!ids.has(source.id)) {
-        existing.push(source);
-        ids.add(source.id);
-        added++;
-      }
-    }
-
-    store.set("sources", existing);
-    return `成功导入 ${added} 个书源`;
-  });
-
-  ipcMain.handle("import-sources-from-url", async (_event: any, url: string) => {
-    if (!validateUrl(url)) {
-      throw new Error("无效的 URL");
-    }
-
-    const response = await httpClient.request({
-      url,
-      method: "GET",
-      timeout: 30000,
-    });
-
-    if (response.status < 200 || response.status >= 300) {
-      throw new Error(`HTTP ${response.status}`);
-    }
-
-    const jsonStr = response.data;
-    const sourceList = parseSourcesFromJson(jsonStr);
-    if (sourceList.length === 0) {
-      throw new Error("未找到有效的书源数据");
-    }
-
-    const existing: any[] = store.get("sources") || [];
-    const normalized = sourceList.map((s: any) => {
-      const clean = sanitizeSourceInput(s);
-      return normalizeSource(clean);
-    });
-
-    const ids = new Set(existing.map((s: any) => s.id));
-    let added = 0;
-
-    for (const source of normalized) {
-      if (!source.name || !source.url) {
-        console.warn("[BookSource] 跳过无效书源:", source.name);
-        continue;
-      }
-      if (!ids.has(source.id)) {
-        existing.push(source);
-        ids.add(source.id);
-        added++;
-      }
-    }
-
-    store.set("sources", existing);
-    return `从 URL 成功导入 ${added} 个书源`;
-  });
-
-  ipcMain.handle("delete-source", async (_event: any, sourceId: string) => {
+  ipcMain.handle("delete-source", async (_e: any, index: number) => { const sources: any[] = store.get("sources") || []; if (index < 0 || index >= sources.length) return safeClone({success:false,error:"索引越界"}); sources.splice(index,1); store.set("sources", sources); return safeClone({success:true}) });
+  ipcMain.handle("test-source", async (_e: any, index: number) => {
+    const sources: any[] = store.get("sources") || []; if (index < 0 || index >= sources.length) throw new Error("书源索引无效");
+    const source = sources[index]; const start = Date.now(); const testUrl = source.url || source.searchUrl;
+    if (!validateUrl(testUrl)) throw new Error("书源 URL 无效");
     try {
-      const sources: any[] = store.get("sources") || [];
-      const filtered = sources.filter((s: any) => s.id !== sourceId);
-      store.set("sources", filtered);
-      return safeClone({ success: true, count: filtered.length });
-    } catch (err: any) {
-      return safeClone({ success: false, error: err.message });
-    }
+      const response = await httpClient.request({ url: testUrl, method: "GET", headers: source.header ? (await import("../engine/source-helper.js")).parseHeader(source.header) || {} : {}, timeout: 10000 });
+      return "连接成功 · " + (Date.now()-start) + "ms · " + Math.round((response.data?response.data.length:0)/1024) + "KB";
+    } catch (err: any) { throw new Error("连接失败: " + err.message) }
   });
-
-  ipcMain.handle("test-source", async (_event: any, sourceId: string) => {
-    const sources: any[] = store.get("sources") || [];
-    const source = sources.find((s: any) => s.id === sourceId);
-    if (!source) throw new Error("书源未找到");
-
-    const start = Date.now();
-    try {
-      const testUrl = source.url || source.searchUrl;
-      if (!validateUrl(testUrl)) {
-        throw new Error("书源 URL 无效");
-      }
-
-      const response = await httpClient.request({
-        url: testUrl,
-        method: "GET",
-        headers: source.header ? (await import("../engine/source-helper.js")).parseHeader(source.header) || {} : {},
-        timeout: 10000,
-      });
-      const elapsed = Date.now() - start;
-      const size = response.data ? response.data.length : 0;
-      return `连接成功 · ${elapsed}ms · ${Math.round(size / 1024)}KB`;
-    } catch (err: any) {
-      throw new Error(`连接失败: ${err.message}`);
-    }
-  });
-
-  ipcMain.handle("test-all-sources", async (_event: any) => {
-    const sources: any[] = store.get("sources") || [];
-    const results: any[] = [];
-    const totalTimeout = 60000;
-    const startTime = Date.now();
-
-    for (const source of sources) {
-      if (Date.now() - startTime > totalTimeout) {
-        results.push({
-          id: source.id,
-          name: source.name,
-          status: "timeout",
-          error: "总体测试超时",
-          time_ms: totalTimeout,
-          size_kb: 0,
-        });
-        continue;
-      }
-
-      const start = Date.now();
-      let status = "ok";
-      let error = "";
-      let sizeKb = 0;
-      let timeMs = 0;
-
+  ipcMain.handle("test-all-sources", async (_e: any) => {
+    const sources: any[] = store.get("sources") || []; const totalTimeout = 60000; const startTime = Date.now();
+    for (let i = 0; i < sources.length; i++) {
+      if (Date.now() - startTime > totalTimeout) { _e.sender.send("source-test-result", {index:i,name:sources[i].name,status:"timeout",error:"总体测试超时",time_ms:totalTimeout,size_kb:0}); continue }
+      const source = sources[i]; const start = Date.now(); let status = "ok", error = "", sizeKb = 0, timeMs = 0;
       try {
-        const testUrl = source.url || source.searchUrl;
-        if (!validateUrl(testUrl)) {
-          throw new Error("URL 无效");
-        }
-
-        const response = await httpClient.request({
-          url: testUrl,
-          method: "GET",
-          headers: source.header ? (await import("../engine/source-helper.js")).parseHeader(source.header) || {} : {},
-          timeout: 8000,
-        });
-        timeMs = Date.now() - start;
-        sizeKb = Math.round((response.data ? response.data.length : 0) / 1024);
-      } catch (err: any) {
-        status = "fail";
-        error = err.message;
-        timeMs = Date.now() - start;
-      }
-
-      const result = {
-        id: source.id,
-        name: source.name,
-        status,
-        time_ms: timeMs,
-        size_kb: sizeKb,
-        error,
-      };
-      results.push(result);
-      _event.sender.send("source-test-result", result);
+        const testUrl = source.url || source.searchUrl; if (!validateUrl(testUrl)) throw new Error("URL 无效");
+        const response = await httpClient.request({ url: testUrl, method: "GET", headers: source.header ? (await import("../engine/source-helper.js")).parseHeader(source.header) || {} : {}, timeout: 8000 });
+        timeMs = Date.now() - start; sizeKb = Math.round((response.data?response.data.length:0)/1024);
+      } catch (err: any) { status = "fail"; error = err.message; timeMs = Date.now() - start }
+      _e.sender.send("source-test-result", {index:i,name:source.name,status,time_ms:timeMs,size_kb:sizeKb,error});
     }
-
-    return results;
+    return [];
   });
-
-  ipcMain.handle("delete-failed-sources", async (_event: any) => {
-    const sources: any[] = store.get("sources") || [];
-    const total = sources.length;
-    let tested = 0;
-    const failedIds: string[] = [];
-
-    for (const source of sources) {
-      let failed = false;
-      try {
-        const testUrl = source.url || source.searchUrl;
-        if (!validateUrl(testUrl)) {
-          failed = true;
-        } else {
-          await httpClient.request({
-            url: testUrl,
-            method: "GET",
-            headers: source.header ? (await import("../engine/source-helper.js")).parseHeader(source.header) || {} : {},
-            timeout: 8000,
-          });
-        }
-      } catch {
-        failed = true;
-        failedIds.push(source.id);
-      }
-      tested++;
-      _event.sender.send("delete-failed-progress", {
-        tested,
-        total,
-        failed_count: failedIds.length,
-        current_id: source.id,
-        status: failed ? "fail" : "ok",
-      });
+  ipcMain.handle("toggle-source", async (_e: any, index: number) => { const sources: any[] = store.get("sources") || []; if (index < 0 || index >= sources.length) return safeClone({success:false,error:"索引越界"}); sources[index].enabled = !sources[index].enabled; store.set("sources", sources); return safeClone({success:true,enabled:sources[index].enabled}) });
+  ipcMain.handle("delete-failed-sources", async (_e: any) => {
+    const sources: any[] = store.get("sources") || []; const toKeep: any[] = [];
+    for (let i = 0; i < sources.length; i++) {
+      const source = sources[i]; let failed = false;
+      try { const testUrl = source.url || source.searchUrl; if (!validateUrl(testUrl)) failed = true; else await httpClient.request({ url: testUrl, method: "GET", headers: source.header ? (await import("../engine/source-helper.js")).parseHeader(source.header) || {} : {}, timeout: 8000 }) } catch { failed = true }
+      if (!failed) toKeep.push(source);
+      _e.sender.send("delete-failed-progress", {tested:i+1,total:sources.length,failed_count:sources.length-toKeep.length,status:failed?"fail":"ok"});
     }
-
-    const existing: any[] = store.get("sources") || [];
-    const filtered = existing.filter((s: any) => !failedIds.includes(s.id));
-    store.set("sources", filtered);
-
-    const deleted = existing.length - filtered.length;
-    _event.sender.send("delete-failed-complete", { deleted, failed_count: failedIds.length });
-    return deleted;
+    store.set("sources", toKeep); const deleted = sources.length - toKeep.length;
+    _e.sender.send("delete-failed-complete", {deleted,failed_count:deleted}); return deleted;
   });
-
-  // ===== 发现分类 - 安全返回 =====
-  ipcMain.handle("get-explore-categories", async (_event: any, sourceId: string) => {
+  ipcMain.handle("get-explore-categories", async (_e: any, index: number) => {
+    const sources: any[] = store.get("sources") || []; if (index < 0 || index >= sources.length) return safeClone([]);
+    const source = sources[index]; if (!source.exploreUrl) return safeClone([]);
+    const exploreUrl = source.exploreUrl || ""; let result: any[] = [];
     try {
-      const sources: any[] = store.get("sources") || [];
-      const source = sources.find((s: any) => s.id === sourceId);
-      if (!source) return safeClone([]);
-
-      const exploreUrl = source.exploreUrl || "";
-      let processedExploreUrl = exploreUrl;
-      if (exploreUrl.includes("<js>")) {
+      if (exploreUrl.startsWith("[")) result = JSON.parse(exploreUrl);
+      else if (exploreUrl.includes("\n") && exploreUrl.includes("::")) result = exploreUrl.split("\n").filter((l:string) => l.trim() && l.includes("::")).map((l:string) => { const p = l.split("::"); return {title:p[0].trim(),url:p.slice(1).join("::").trim()} }).filter((it:any) => validateUrl(it.url));
+      else if (validateUrl(exploreUrl)) {
         try {
-          const { executeJs } = await import("../engine/rule-parser/js.js");
-          const jsMatch = exploreUrl.match(/<js>([\s\S]*?)<\/js>/);
-          if (jsMatch) {
-            const result = executeJs({}, jsMatch[1].trim(), { source });
-            if (result && typeof result === "string") {
-              processedExploreUrl = result;
-            }
-          }
-        } catch (e) {
-          console.warn("[Explore] <js> 执行失败:", e);
-        }
+          const response = await httpClient.request({ url: exploreUrl, method: "GET", headers: source.header ? (await import("../engine/source-helper.js")).parseHeader(source.header) || {} : {}, timeout: 10000 });
+          const data = response.data;
+          if (typeof data === "string") { try { const parsed = JSON.parse(data); if (Array.isArray(parsed)) result = parsed } catch { result = data.split("\n").filter((l:string) => l.trim() && l.includes("::")).map((l:string) => { const p = l.split("::"); return {title:p[0].trim(),url:p.slice(1).join("::").trim()} }).filter((it:any) => validateUrl(it.url)) } }
+        } catch {}
       }
-      if (!exploreUrl) return safeClone([]);
-
-      let processedUrl = exploreUrl;
-      if (processedUrl.includes("{{")) {
-        processedUrl = processedUrl
-          .replace(/\{\{key\}\}/g, "")
-          .replace(/\{\{page\}\}/g, "1")
-          .trim();
-      }
-
-      let result: any[] = [];
-
-      try {
-        if (processedUrl.startsWith("[")) {
-          result = JSON.parse(processedUrl);
-        } else if (processedUrl.includes("\n") && processedUrl.includes("::")) {
-          result = processedUrl
-            .split("\n")
-            .filter((line: string) => line.trim() && line.includes("::"))
-            .map((line: string) => {
-              const parts = line.split("::");
-              return { title: parts[0].trim(), url: parts.slice(1).join("::").trim() };
-            })
-            .filter((item: any) => validateUrl(item.url));
-        } else if (validateUrl(processedUrl)) {
-          try {
-            const response = await httpClient.request({
-              url: processedUrl,
-              method: "GET",
-              headers: source.header ? (await import("../engine/source-helper.js")).parseHeader(source.header) || {} : {},
-              timeout: 10000,
-            });
-
-            const data = response.data;
-            if (typeof data === "string") {
-              try {
-                const parsed = JSON.parse(data);
-                if (Array.isArray(parsed)) {
-                  result = parsed;
-                } else if (parsed.categories && Array.isArray(parsed.categories)) {
-                  result = parsed.categories;
-                }
-              } catch {
-                result = data
-                  .split("\n")
-                  .filter((line: string) => line.trim() && line.includes("::"))
-                  .map((line: string) => {
-                    const parts = line.split("::");
-                    return { title: parts[0].trim(), url: parts.slice(1).join("::").trim() };
-                  })
-                  .filter((item: any) => validateUrl(item.url));
-              }
-            }
-          } catch (err) {
-            console.warn("[Explore] 获取远程分类失败:", err);
-          }
-        }
-      } catch (err) {
-        console.warn("[Explore] 解析分类失败:", err);
-      }
-
-      return safeClone(result);
-    } catch (err: any) {
-      console.error("[Explore] get-explore-categories 错误:", err);
-      return safeClone([]);
-    }
+    } catch {}
+    return safeClone(result);
   });
 
-  // TXT import handlers
-  ipcMain.handle("import-txt", async (_event: any, name: string, content: string) => {
-    if (!content || content.trim().length === 0) {
-      throw new Error("内容为空");
-    }
-
-    if (content.length > 100 * 1024 * 1024) {
-      throw new Error("文件过大（超过 100MB）");
-    }
-
-    const books: any[] = store.get("books") || [];
-    const bookId = `local_${Date.now()}`;
-    const book = {
-      id: bookId,
-      sourceId: "local",
-      sourceName: "本地文件",
-      name: name || "未命名",
-      author: "本地文件",
-      coverUrl: null,
-      intro: content.substring(0, 500) + (content.length > 500 ? "..." : ""),
-      kind: "本地TXT",
-      lastChapter: null,
-      bookUrl: `local://${bookId}`,
-      tocUrl: null,
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-      content: content,
-    };
-
-    books.unshift(book);
-    store.set("books", books);
-    
-    const chapters = getLocalBookChaptersSync(bookId);
-    await store.set(`local_chapters_${bookId}`, chapters);
-    
+  ipcMain.handle("import-txt", async (_e: any, name: string, content: string) => {
+    if (!content || content.trim().length === 0) throw new Error("内容为空");
+    if (content.length > 100*1024*1024) throw new Error("文件过大");
+    const books: any[] = store.get("books") || []; const bookId = "local_" + Date.now();
+    const book = { id: bookId, sourceId: "local", sourceName: "本地文件", name: name || "未命名", author: "本地文件", coverUrl: null, intro: content.substring(0,500)+(content.length>500?"...":""), kind: "本地TXT", lastChapter: null, bookUrl: "local://"+bookId, tocUrl: null, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), content };
+    books.unshift(book); store.set("books", books);
+    const chapters = getLocalBookChaptersSync(bookId); await store.set("local_chapters_"+bookId, chapters);
     return book;
   });
+  ipcMain.handle("get-local-book-chapters", async (_e: any, bookId: string) => { const cached = await store.get("local_chapters_"+bookId); if (cached) return cached; const chapters = getLocalBookChaptersSync(bookId); await store.set("local_chapters_"+bookId, chapters); return chapters });
+  ipcMain.handle("get-local-chapter-content", async (_e: any, bookId: string, chapterId: number) => { const chapters = await store.get("local_chapters_"+bookId); if (!chapters) return ""; const chapter = chapters.find((c:any) => Number(c.id) === Number(chapterId)); return chapter ? chapter.content : "" });
 
-  ipcMain.handle("get-local-book-chapters", async (_event: any, bookId: string) => {
-    const cached = await store.get(`local_chapters_${bookId}`);
-    if (cached) return cached;
-    
-    const chapters = getLocalBookChaptersSync(bookId);
-    await store.set(`local_chapters_${bookId}`, chapters);
-    return chapters;
-  });
-
-  ipcMain.handle("get-local-chapter-content", async (_event: any, bookId: string, chapterId: number) => {
-    const chapters = await store.get(`local_chapters_${bookId}`);
-    if (!chapters) return "";
-    const chapter = chapters.find((c: any) => Number(c.id) === Number(chapterId));
-    return chapter ? chapter.content : "";
-  });
-
-  // Engine handlers
-  ipcMain.handle("engine-search", async (_event: any, source: any, keyword: string, page: number = 1) => {
+  // ===== Engine API =====
+  ipcMain.handle("engine-search", async (_e: any, source: any, keyword: string, page: number = 1) => {
     try {
-      const cleanSource = safeClone(source);
-      const results = await search(cleanSource, keyword, { page });
-      return { success: true, data: safeClone(results) };
-    } catch (error: any) {
-      console.error("[Engine] Search error:", error);
-      return { success: false, error: error.message };
-    }
-  });
-
-  ipcMain.handle("engine-batch-search", async (_event: any, sources: any[], keyword: string, page: number = 1) => {
-    try {
-      const cleanSources = safeClone(sources);
-      const results = await batchSearch(cleanSources, keyword, { page });
-      const data: Record<string, any[]> = {};
-      for (const [id, books] of results) {
-        data[id] = safeClone(books || []);
+      let result = await search(safeClone(source), keyword, { page });
+      if (source.loginCheckJs) {
+        const checked = await runLoginCheck(source, JSON.stringify(result));
+        if (checked) { try { result = JSON.parse(checked) } catch {} }
       }
-      return { success: true, data };
-    } catch (error: any) {
-      console.error("[Engine] Batch search error:", error);
-      return { success: false, error: error.message };
-    }
+      return { success: true, data: safeClone(result) };
+    } catch (error: any) { return { success: false, error: error.message } }
   });
 
-  ipcMain.handle("engine-batch-search-stream", async (event: any, sources: any[], keyword: string, page: number = 1) => {
+  ipcMain.handle("engine-batch-search-stream", async (event: any, sources: any[], keyword: string, options: any = {}) => {
+    const searchId = "search_" + Date.now() + "_" + Math.random().toString(36).slice(2,6);
+    const abortController = new AbortController(); activeSearches.set(searchId, abortController);
+    const page = options.page || 1;
     try {
-      const total = sources.length;
-      let completed = 0;
-      const results: Record<string, any[]> = {};
-      const concurrency = 5;
-      const queue = [...sources];
-      const promises: Promise<void>[] = [];
-
+      const total = sources.length; let completed = 0; const concurrency = 5;
+      const queue = sources.map((s:any,i:number) => ({source:s,index:i}));
+      const results: any[] = new Array(sources.length);
       const worker = async () => {
         while (queue.length > 0) {
-          const source = queue.shift();
-          if (!source) break;
-          try {
-            const cleanSource = safeClone(source);
-            const books = await search(cleanSource, keyword, { page });
-            results[source.id] = safeClone(books || []);
-          } catch (error: any) {
-            console.error(`[Search] ${source.name} 搜索失败:`, error.message);
-            results[source.id] = [];
-          }
+          if (abortController.signal.aborted) return;
+          const item = queue.shift(); if (!item) break;
+          try { results[item.index] = safeClone(await search(safeClone(item.source), keyword, { page }) || []) } catch { results[item.index] = [] }
           completed++;
-          event.sender.send("search-progress", {
-            completed,
-            total,
-            sourceId: source.id,
-            sourceName: source.name,
-            books: results[source.id] || [],
-          });
+          if (!abortController.signal.aborted) event.sender.send("search-progress", {completed,total,index:item.index,sourceName:item.source.name,books:results[item.index]||[],searchId,page});
         }
       };
-
-      for (let i = 0; i < Math.min(concurrency, sources.length); i++) {
-        promises.push(worker());
-      }
-
+      const promises: Promise<void>[] = [];
+      for (let i = 0; i < Math.min(concurrency, sources.length); i++) promises.push(worker());
       await Promise.all(promises);
-      return { success: true, data: safeClone(results) };
-    } catch (error: any) {
-      console.error("[Engine] Batch search error:", error);
-      return { success: false, error: error.message };
-    }
+      if (abortController.signal.aborted) return { success: false, error: "搜索已取消", searchId };
+      const data: Record<string,any[]> = {};
+      for (let i = 0; i < sources.length; i++) { const key = sources[i].bookSourceName || sources[i].name || "source_"+i; data[key] = results[i] || [] }
+      return { success: true, data: safeClone(data), searchId };
+    } catch (error: any) { return { success: false, error: error.message, searchId } }
+    finally { activeSearches.delete(searchId) }
   });
 
-  ipcMain.handle("engine-get-toc", async (_event: any, source: any, tocUrl: string) => {
+  ipcMain.handle("engine-get-toc", async (_e: any, source: any, tocUrl: string, options: any = {}) => {
     try {
-      const cleanSource = safeClone(source);
-      const chapters = await getToc(cleanSource, tocUrl);
-      const safeChapters = chapters.map((ch: any) => ({
-        id: Number(ch.id),
-        title: String(ch.title || ''),
-        url: String(ch.url || ''),
-        index: Number(ch.index || 0),
-        isVip: !!ch.isVip,
-        isPay: !!ch.isPay,
-        content: ch.content ? String(ch.content) : null,
-        updateTime: ch.updateTime ? String(ch.updateTime) : undefined,
-      }));
-      return { success: true, data: safeClone(safeChapters) };
-    } catch (error: any) {
-      console.error("[Engine] Get TOC error:", error);
-      return { success: false, error: error.message };
-    }
+      const chapters = await getToc(source, tocUrl, { book: options.book });
+      return { success: true, data: safeClone(chapters.map((ch:any) => ({id:Number(ch.id),title:String(ch.title||''),url:String(ch.url||''),index:Number(ch.index||0),isVip:!!ch.isVip,isPay:!!ch.isPay,content:ch.content?String(ch.content):null,updateTime:ch.updateTime?String(ch.updateTime):undefined}))) };
+    } catch (error: any) { return { success: false, error: error.message } }
   });
 
-  ipcMain.handle("engine-get-content", async (_event: any, source: any, chapterUrl: string) => {
+  ipcMain.handle("engine-get-content", async (_e: any, source: any, chapterUrl: string) => {
+    try { return { success: true, data: await getContent(safeClone(source), chapterUrl) } }
+    catch (error: any) { return { success: false, error: error.message } }
+  });
+
+  ipcMain.handle("engine-get-book-info", async (_e: any, source: any, bookUrl: string) => {
+    try { return { success: true, data: safeClone(await getBookInfo(safeClone(source), bookUrl)) } }
+    catch (error: any) { return { success: false, error: error.message } }
+  });
+
+  ipcMain.handle("explore-books-by-id", async (_e: any, index: number, categoryUrl: string, page: number) => {
     try {
-      const cleanSource = safeClone(source);
-      const content = await getContent(cleanSource, chapterUrl);
-      return { success: true, data: content };
-    } catch (error: any) {
-      console.error("[Engine] Get content error:", error);
-      return { success: false, error: error.message };
-    }
+      const sources: any[] = store.get("sources") || []; if (index < 0 || index >= sources.length) return {success:false,data:[],error:"索引无效"};
+      return { success: true, data: safeClone(await getExploreBooks(safeClone(sources[index]), categoryUrl, page)) };
+    } catch (error: any) { return { success: false, data: [], error: error.message } }
   });
 
-  ipcMain.handle("engine-get-book-info", async (_event: any, source: any, bookUrl: string) => {
+  ipcMain.handle("execute-js", async (_e: any, code: string, context: any = {}, timeout: number = 5000) => {
     try {
-      const cleanSource = safeClone(source);
-      const book = await getBookInfo(cleanSource, bookUrl);
-      return { success: true, data: safeClone(book) };
-    } catch (error: any) {
-      console.error("[Engine] Get book info error:", error);
-      return { success: false, error: error.message };
-    }
+      const sandbox = vm.createContext({ JSON, console, String, Number, Boolean, Array, Object, parseInt, parseFloat, isNaN, isFinite, ...context });
+      const script = new vm.Script(code);
+      const result = script.runInContext(sandbox, { timeout });
+      if (typeof result === "string") return { success: true, result };
+      return { success: true, result: JSON.stringify(result) };
+    } catch (error: any) { return { success: false, error: error.message } }
   });
 
-  // ===== 发现模块 =====
-  ipcMain.handle("engine-get-explore-categories", async (_event: any, source: any) => {
-    try {
-      const cleanSource = safeClone(source);
-      const categories = getExploreCategories(cleanSource);
-      return { success: true, data: safeClone(categories || []) };
-    } catch (error: any) {
-      console.error("[Engine] Get explore categories error:", error);
-      return { success: false, error: error.message };
-    }
+  ipcMain.handle("parse-rule", async (_e: any, source: any, rule: string, data: any, context: any = {}) => {
+    try { const { parseAndExecute } = await import("../engine/rule-parser/index.js"); return { success: true, data: parseAndExecute(data, rule, { source, ...context }) } }
+    catch (error: any) { return { success: false, error: error.message } }
   });
 
-  ipcMain.handle("engine-get-explore-books", async (_event: any, source: any, categoryUrl: string, page: number) => {
-    try {
-      const cleanSource = safeClone(source);
-      const books = await getExploreBooks(cleanSource, categoryUrl, page);
-      const safeBooks = books.map((book: any) => ({
-        id: String(book.id || ''),
-        sourceId: String(book.sourceId || ''),
-        sourceName: String(book.sourceName || ''),
-        name: String(book.name || ''),
-        author: String(book.author || ''),
-        coverUrl: book.coverUrl ? String(book.coverUrl) : null,
-        intro: book.intro ? String(book.intro) : null,
-        kind: book.kind ? String(book.kind) : null,
-        lastChapter: book.lastChapter ? String(book.lastChapter) : null,
-        bookUrl: String(book.bookUrl || ''),
-        tocUrl: book.tocUrl ? String(book.tocUrl) : null,
-        createdAt: book.createdAt || new Date().toISOString(),
-        updatedAt: book.updatedAt || new Date().toISOString(),
-      }));
-      return { success: true, data: safeBooks };
-    } catch (error: any) {
-      console.error("[Engine] Get explore books error:", error);
-      return { success: false, data: [], error: error.message };
-    }
-  });
-
-  // ===== 发现 - 只传 sourceId，避免克隆问题 =====
-  ipcMain.handle("explore-books-by-id", async (_event: any, sourceId: string, categoryUrl: string, page: number) => {
-    try {
-      const sources: any[] = store.get("sources") || [];
-      const source = sources.find((s: any) => s.id === sourceId);
-      if (!source) {
-        return { success: false, data: [], error: "书源未找到" };
-      }
-      const cleanSource = safeClone(source);
-      const books = await getExploreBooks(cleanSource, categoryUrl, page);
-      const safeBooks = books.map((book: any) => ({
-        id: String(book.id || ''),
-        sourceId: String(book.sourceId || ''),
-        sourceName: String(book.sourceName || ''),
-        name: String(book.name || ''),
-        author: String(book.author || ''),
-        coverUrl: book.coverUrl ? String(book.coverUrl) : null,
-        intro: book.intro ? String(book.intro) : null,
-        kind: book.kind ? String(book.kind) : null,
-        lastChapter: book.lastChapter ? String(book.lastChapter) : null,
-        bookUrl: String(book.bookUrl || ''),
-        tocUrl: book.tocUrl ? String(book.tocUrl) : null,
-        createdAt: book.createdAt || new Date().toISOString(),
-        updatedAt: book.updatedAt || new Date().toISOString(),
-      }));
-      return { success: true, data: safeBooks };
-    } catch (error: any) {
-      console.error("[Engine] Get explore books error:", error);
-      return { success: false, data: [], error: error.message };
-    }
-  });
-
-  ipcMain.handle("parse-rule", async (_event: any, source: any, rule: string, data: any, context: any = {}) => {
-    try {
-      const { parseAndExecute } = await import("../engine/rule-parser/index.js");
-      const result = parseAndExecute(data, rule, { source, ...context });
-      return { success: true, data: result };
-    } catch (error: any) {
-      return { success: false, error: error.message };
-    }
-  });
-
-  // ===== 更新标题栏主题 =====
-  ipcMain.handle("update-title-bar-overlay", async (_event: any, theme: string) => {
+  // ===== 标题栏覆盖层更新（修复版） =====
+  ipcMain.handle("update-title-bar-overlay", async (_e: any, options: any) => {
     try {
       const win = BrowserWindow.getFocusedWindow() || getMainWindow();
-      if (win) {
-        const isDark = theme === 'dark' || (theme === 'system' && process.platform !== 'win32');
-        win.setTitleBarOverlay({
-          color: isDark ? '#0d0d0d' : '#f0ede8',
-          symbolColor: isDark ? '#e8e8e8' : '#1a1a1a',
-          height: 36,
-        });
+      if (!win) return { success: false };
+
+      let backgroundColor: string;
+      let symbolColor: string;
+
+      // 兼容旧版调用（直接传 theme 字符串）
+      if (typeof options === 'string') {
+        const isDark = options === 'dark' || (options === 'system' && process.platform !== 'win32');
+        backgroundColor = isDark ? '#1a1a1a' : '#ffffff';
+        symbolColor = isDark ? '#f0f0f0' : '#1a1a1a';
+      } else if (options && typeof options === 'object') {
+        // 新版：直接接收从 CSS 变量中读取的颜色值
+        backgroundColor = options.backgroundColor || '#1a1a1a';
+        symbolColor = options.symbolColor || '#f0f0f0';
+      } else {
+        backgroundColor = '#1a1a1a';
+        symbolColor = '#f0f0f0';
       }
+
+      win.setTitleBarOverlay({
+        color: backgroundColor,
+        symbolColor: symbolColor,
+        height: 40  // 和 CSS 标题栏高度一致
+      });
+
       return { success: true };
-    } catch (error: any) {
-      console.error('[Window] 更新标题栏失败:', error);
-      return { success: false, error: error.message };
+    } catch {
+      return { success: false };
     }
   });
 }
 
-export function clearChapterCache() {
-  chapterCache.clear();
-}
+export function clearChapterCache() { chapterCache.clear() }

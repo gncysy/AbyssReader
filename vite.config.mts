@@ -35,6 +35,11 @@ export default defineConfig({
         "node:fs/promises",
         "fs/promises",
       ],
+      output: {
+        manualChunks: {
+          'naive-ui': ['naive-ui'],
+        },
+      },
     },
   },
   resolve: {
@@ -85,3 +90,4 @@ export default defineConfig({
     ],
   },
 });
+

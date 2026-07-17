@@ -7,11 +7,11 @@ export function normalizeSource(source: any): BookSource {
   const urlValue = source.bookSourceUrl || source.url || ''
 
   return {
-    id: source.id || source.bookSourceUrl || `source_${now}_${Math.random().toString(36).slice(2, 6)}`,
+    id: urlValue || nameValue,
     name: nameValue,
-    bookSourceName: source.bookSourceName || source.name || '未命名书源',
-    bookSourceUrl: source.bookSourceUrl || source.url || '',
-    url: source.url || source.bookSourceUrl || '',
+    bookSourceName: nameValue,
+    bookSourceUrl: urlValue,
+    url: source.url || urlValue,
     searchUrl: source.searchUrl || '',
     ruleSearch: source.ruleSearch || {},
     ruleBookInfo: source.ruleBookInfo || {},
@@ -44,28 +44,15 @@ export function parseHeader(header: string | null | undefined, context: any = {}
   if (header.trim().startsWith('@js:')) {
     try {
       const result = parseAndExecute({}, header, { source: context.source || {}, ...context })
-      if (result && typeof result === 'object') {
-        return result
-      }
+      if (result && typeof result === 'object') return result
       if (result && typeof result === 'string') {
-        try {
-          return JSON.parse(result)
-        } catch {
-          return null
-        }
+        try { return JSON.parse(result) } catch { return null }
       }
       return null
-    } catch (e) {
-      console.warn('[parseHeader] 执行 @js: 失败:', e)
-      return null
-    }
+    } catch (e) { return null }
   }
 
-  try {
-    return JSON.parse(header)
-  } catch {
-    return null
-  }
+  try { return JSON.parse(header) } catch { return null }
 }
 
 export function parseSourcesFromJson(jsonStr: any): any[] {
@@ -74,35 +61,18 @@ export function parseSourcesFromJson(jsonStr: any): any[] {
     data = jsonStr
   } else if (typeof jsonStr === 'string') {
     if (jsonStr === '[object Object]') return []
-    try {
-      data = JSON.parse(jsonStr)
-    } catch {
-      return []
-    }
+    try { data = JSON.parse(jsonStr) } catch { return [] }
   } else {
     return []
   }
 
   let sourceList: any[] = []
-  if (data.sources && Array.isArray(data.sources)) {
-    sourceList = data.sources
-  } else if (Array.isArray(data)) {
-    sourceList = data
-  } else if (data.bookSourceUrl || data.bookSourceName || data.ruleSearch) {
-    sourceList = [data]
-  }
+  if (data.sources && Array.isArray(data.sources)) sourceList = data.sources
+  else if (Array.isArray(data)) sourceList = data
+  else if (data.bookSourceUrl || data.bookSourceName || data.ruleSearch) sourceList = [data]
   return sourceList
 }
 
 export function validateSource(source: any): boolean {
-  return !!(source &&
-    typeof source === 'object' &&
-    (source.name || source.bookSourceName) &&
-    (source.url || source.bookSourceUrl || source.searchUrl))
-}
-
-export function createSourceId(source: any): string {
-  if (source.id) return source.id
-  if (source.bookSourceUrl) return source.bookSourceUrl
-  return `source_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`
+  return !!(source && typeof source === 'object' && (source.name || source.bookSourceName) && (source.url || source.bookSourceUrl || source.searchUrl))
 }

@@ -1,90 +1,88 @@
 <template>
-  <div class="detail-overlay" @click.self="handleClose" @keydown.escape="handleClose" role="dialog" aria-modal="true" aria-labelledby="detail-title">
-    <div class="detail-container" tabindex="-1" ref="containerRef">
-      <!-- 头部 -->
-      <header class="detail-header">
-        <button class="btn-back" @click="handleClose" aria-label="返回书架">
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 12H5M12 19l-7-7 7-7"/></svg>
-        </button>
-        <h2 class="detail-title" id="detail-title">{{ book?.name || '加载中...' }}</h2>
-      </header>
+  <Transition name="detail">
+    <div v-if="book" class="detail-overlay" @click.self="handleClose" @keydown.escape="handleClose" role="dialog" aria-modal="true" aria-labelledby="detail-title">
+      <div class="detail-container" tabindex="-1" ref="containerRef">
+        <header class="detail-header">
+          <button class="btn-back" @click="handleClose" aria-label="返回书架">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M19 12H5M12 19l-7-7 7-7"/>
+            </svg>
+          </button>
+          <h2 class="detail-title" id="detail-title">{{ book.name || '加载中...' }}</h2>
+        </header>
 
-      <!-- 书籍信息 -->
-      <div class="detail-body" v-if="book">
-        <div class="detail-cover">
-          <img v-if="book.coverUrl" :src="book.coverUrl" alt="封面" @error="handleImageError" />
-          <div v-else class="cover-placeholder">{{ book.name?.charAt(0) || '?' }}</div>
-          <div class="cover-source">{{ book.originName || '未知来源' }}</div>
-          <svg class="progress-ring" viewBox="0 0 36 36" v-if="readingPercent > 0">
-            <circle class="ring-bg" cx="18" cy="18" r="15" fill="none" />
-            <circle class="ring-fill" cx="18" cy="18" r="15" fill="none" :stroke-dasharray="`${readingPercent * 0.94} 94`" />
-            <text x="18" y="21" text-anchor="middle" class="ring-text">{{ Math.round(readingPercent * 100) }}%</text>
-          </svg>
-        </div>
-        <div class="detail-info">
-          <h1 class="book-title">{{ book.name }}</h1>
-          <p class="book-author">{{ book.author || '未知作者' }}</p>
-          <div class="book-meta"><span class="meta-tag">{{ book.kind || '未分类' }}</span></div>
-          <div class="progress-bar-container">
-            <div class="progress-bar"><div class="progress-fill" :style="{ width: readingPercent * 100 + '%' }"></div></div>
-            <span class="progress-label">{{ progressText }}</span>
+        <div class="detail-body">
+          <div class="detail-cover">
+            <img v-if="book.coverUrl" :src="book.coverUrl" :alt="book.name + ' 封面'" @error="handleImageError" />
+            <div v-else class="cover-placeholder">
+              <div class="cover-overlay"><div class="cover-title-text">{{ book.name || '未命名' }}</div><div class="cover-author-text">{{ book.author || '佚名' }}</div></div>
+            </div>
+            <div class="cover-source">{{ book.originName || '未知来源' }}</div>
+            <svg class="progress-ring" viewBox="0 0 36 36" v-if="readingPercent > 0" :aria-label="'阅读进度 ' + Math.round(readingPercent * 100) + '%'">
+              <circle class="ring-bg" cx="18" cy="18" r="15" fill="none" />
+              <circle class="ring-fill" cx="18" cy="18" r="15" fill="none" :stroke-dasharray="readingPercent * 0.94 + ' 94'" />
+              <text x="18" y="21" text-anchor="middle" class="ring-text">{{ Math.round(readingPercent * 100) }}%</text>
+            </svg>
           </div>
-          <p class="book-intro">{{ book.intro || '暂无简介' }}</p>
+          <div class="detail-info">
+            <h1 class="book-title">{{ book.name }}</h1>
+            <p class="book-author">{{ book.author || '未知作者' }}</p>
+            <div class="book-meta"><span class="meta-tag">{{ book.kind || '未分类' }}</span></div>
+            <div class="progress-bar-container">
+              <div class="progress-bar"><div class="progress-fill" :style="{ width: readingPercent * 100 + '%' }"></div></div>
+              <span class="progress-label">{{ progressText }}</span>
+            </div>
+            <p class="book-intro">{{ book.intro || '暂无简介' }}</p>
+          </div>
         </div>
-      </div>
 
-      <!-- 目录 -->
-      <div class="detail-toc">
-        <div class="toc-header"><h3>目录</h3><span class="toc-count">{{ chapters.length }} 章</span></div>
-        <div class="toc-toolbar">
-          <div class="toc-search" v-if="chapters.length > 50">
-            <input v-model="tocFilter" type="text" placeholder="搜索章节..." class="toc-search-input" />
-          </div>
-          <div class="toc-pagination" v-if="totalPages > 1">
-            <button class="page-btn" @click="prevPage" :disabled="currentPage === 1" aria-label="上一页">‹</button>
-            <span class="page-info">{{ currentPage }} / {{ totalPages }}</span>
-            <button class="page-btn" @click="nextPage" :disabled="currentPage === totalPages" aria-label="下一页">›</button>
-          </div>
-        </div>
-        <div class="toc-list" v-if="!loadingToc" ref="listRef">
-          <div v-for="ch in pagedChapters" :key="ch.id" class="toc-item" :class="{ active: ch.id === currentChapterId, vip: ch.isVip }" role="option" :aria-selected="ch.id === currentChapterId" tabindex="0" @click="handleChapterClick(ch)" @keydown.enter="handleChapterClick(ch)" @keydown.space.prevent="handleChapterClick(ch)">
-            <span class="toc-chapter-title">{{ ch.title }}</span>
-            <div class="toc-badges">
-              <span v-if="ch.isVip" class="badge-vip">VIP</span>
-              <span v-if="ch.id === currentChapterId" class="badge-current">当前</span>
+        <div class="detail-toc">
+          <div class="toc-header"><h3>目录</h3><span class="toc-count">{{ chapters.length }} 章</span></div>
+          <div class="toc-toolbar">
+            <div class="toc-search" v-if="chapters.length > 50"><input v-model="tocFilter" type="text" placeholder="搜索章节..." class="toc-search-input" /></div>
+            <div class="toc-pagination" v-if="totalPages > 1">
+              <button class="page-btn" @click="prevPage" :disabled="currentPage === 1" aria-label="上一页">‹</button>
+              <span class="page-info">{{ currentPage }} / {{ totalPages }}</span>
+              <button class="page-btn" @click="nextPage" :disabled="currentPage === totalPages" aria-label="下一页">›</button>
             </div>
           </div>
-          <div v-if="chapters.length === 0 && !loadingToc" class="toc-empty"><span>暂无目录</span></div>
+          <div class="toc-list" v-if="!loadingToc" ref="listRef" role="listbox" aria-label="章节目录">
+            <div v-for="ch in pagedChapters" :key="ch.id" class="toc-item" :class="{ active: ch.id === currentChapterId, vip: ch.isVip }"
+              role="option" :aria-selected="ch.id === currentChapterId" tabindex="0"
+              @click="handleChapterClick(ch)" @keydown.enter="handleChapterClick(ch)" @keydown.space.prevent="handleChapterClick(ch)">
+              <span class="toc-chapter-title">{{ ch.title }}</span>
+              <div class="toc-badges"><span v-if="ch.isVip" class="badge badge-vip">VIP</span><span v-if="ch.id === currentChapterId" class="badge badge-current">当前</span></div>
+            </div>
+            <div v-if="chapters.length === 0 && !loadingToc" class="toc-empty">暂无目录</div>
+          </div>
+          <div v-else class="toc-loading"><div class="loading-spinner"></div><span>加载目录中...</span></div>
         </div>
-        <div v-else class="toc-loading"><div class="loading-spinner"></div><span>加载目录中...</span></div>
-      </div>
 
-      <!-- 底部操作栏 -->
-      <footer class="detail-footer">
-        <button class="btn-danger-ghost" @click="handleRemoveFromShelf" aria-label="移出书架">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2"/></svg>
-          <span>移出</span>
-        </button>
-        <div class="footer-spacer"></div>
-        <button class="btn-secondary" @click="handleAddToShelf" :disabled="isInShelf">
-          <svg v-if="!isInShelf" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg>
-          <svg v-else width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>
-          {{ isInShelf ? '已在书架' : '加书架' }}
-        </button>
-        <button class="btn-primary" @click="handleRead">
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"/></svg>
-          {{ currentChapterId !== undefined && currentChapterId !== null ? '继续阅读' : '开始阅读' }}
-        </button>
-      </footer>
+        <footer class="detail-footer">
+          <button class="btn-danger-ghost" @click="handleRemoveFromShelf" aria-label="移出书架">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2"/></svg><span>移出</span>
+          </button>
+          <div class="footer-spacer"></div>
+          <button class="btn-secondary" @click="handleAddToShelf" :disabled="isInShelf">
+            <svg v-if="!isInShelf" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg>
+            <svg v-else width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+            {{ isInShelf ? '已在书架' : '加书架' }}
+          </button>
+          <button class="btn-primary-detail" @click="handleRead">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+            {{ currentChapterId !== undefined && currentChapterId !== null ? '继续阅读' : '开始阅读' }}
+          </button>
+        </footer>
+      </div>
     </div>
-  </div>
+  </Transition>
 </template>
 
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import { useMessage, useDialog } from 'naive-ui'
 import { useBookshelfStore, useReadingStore } from '@/store'
-import { engine as engineApi, reader as readerApi } from '@/api'
+import { reader as readerApi } from '@/api'
 import type { Book, BookSource, Chapter } from '@shared/types'
 
 const props = defineProps<{ book: Book; source: BookSource | null }>()
@@ -135,6 +133,11 @@ const progressText = computed(() => {
   return `${currentIndex.value + 1} / ${chapters.value.length}`
 })
 
+function cleanSource(source: any): any {
+  if (!source) return null
+  return JSON.parse(JSON.stringify(source))
+}
+
 function goToPage(page: number) { currentPage.value = Math.max(1, Math.min(page, totalPages.value)) }
 function nextPage() { if (currentPage.value < totalPages.value) currentPage.value++ }
 function prevPage() { if (currentPage.value > 1) currentPage.value-- }
@@ -147,99 +150,51 @@ function scrollToCurrentChapter() {
     if (activeItem) {
       const containerRect = container.getBoundingClientRect()
       const itemRect = activeItem.getBoundingClientRect()
-      const offset = itemRect.top - containerRect.top - containerRect.height / 3
-      container.scrollBy({ top: offset, behavior: 'smooth' })
+      container.scrollBy({ top: itemRect.top - containerRect.top - containerRect.height / 3, behavior: 'smooth' })
     }
   })
 }
 
-async function loadToc() {
+async function loadTocInternal() {
   if (!props.book || loadingToc.value) return
 
-  // 本地 TXT
-  if (props.book.origin === 'local' || props.book.sourceId === 'local') {
+  if (props.book.bookUrl?.startsWith('local://')) {
     try {
       const bookId = props.book.bookUrl.replace('local://', '')
       const data = await readerApi.getLocalBookChapters(bookId)
       if (data && data.length > 0) {
-        chapters.value = data.map((c: any, idx: number) => ({
-          id: Number(c.id) || idx,
-          title: c.title || `第${idx+1}章`,
-          url: `local://${bookId}/${c.id}`,
-          index: idx,
-          content: c.content || '',
+        chapters.value = data.map((item: any, idx: number) => ({
+          id: Number(item.id) || idx, title: item.title || `第${idx+1}章`, url: `local://${bookId}/${item.id}`, index: idx, content: item.content || '',
         }))
       } else {
-        chapters.value = [{ id: 0, title: '正文', url: props.book.bookUrl, index: 0, content: props.book.content || '' }]
+        chapters.value = [{ id: 0, title: '正文', url: props.book.bookUrl, index: 0, content: '' }]
       }
-    } catch (err: any) {
-      console.error('[BookDetail] 加载本地目录失败:', err)
-      message.error('加载目录失败')
-    }
+    } catch (err: any) { message.error('加载目录失败') }
     await restoreProgress()
     return
   }
 
-  // ===== 从 store 重新获取完整书源 =====
-  const allSources = await window.electronAPI.store.get('sources')
-  const fullSource = allSources.find(s => s.bookSourceName === props.book?.originName)
-  
-  const sourceToUse = fullSource || props.source
-  if (!sourceToUse) {
-    console.warn('[BookDetail] 找不到书源')
-    loadingToc.value = false
-    return
-  }
+  const allSources = await window.electronAPI.store.get('sources') || []
+  const sourceToUse = props.source || allSources.find((s: any) => s.bookSourceName === props.book?.originName)
+  if (!sourceToUse) { loadingToc.value = false; return }
 
   loadingToc.value = true
   try {
     const tocUrl = props.book.tocUrl || props.book.bookUrl
-    
-    // 清理 source，确保可克隆
-    const cleanSource = JSON.parse(JSON.stringify({
-      id: sourceToUse.id || '',
-      bookSourceName: sourceToUse.bookSourceName || '',
-      bookSourceUrl: sourceToUse.bookSourceUrl || sourceToUse.url || '',
-      url: sourceToUse.url || '',
-      searchUrl: sourceToUse.searchUrl || '',
-      ruleToc: sourceToUse.ruleToc || {},
-      ruleContent: sourceToUse.ruleContent || {},
-      ruleBookInfo: sourceToUse.ruleBookInfo || {},
-      ruleSearch: sourceToUse.ruleSearch || {},
-      header: typeof sourceToUse.header === 'string' ? sourceToUse.header : null,
-      enabled: true,
-    }))
-
-    // 传递 book.kind
-    const bookWithKind = {
-      ...props.book,
-      kind: props.book?.kind || ''
-    }
-
-    const result = await window.electronAPI.invoke('engine-get-toc', cleanSource, tocUrl, { book: bookWithKind })
+    const result = await window.electronAPI.invoke('engine-get-toc', cleanSource(sourceToUse), tocUrl, { book: { kind: props.book?.kind || '' } })
     if (result.success) {
       chapters.value = result.data || []
-      // 存入缓存
-      if (chapters.value.length > 0 && props.book?.bookUrl) {
-        setTocCache(props.book.bookUrl, chapters.value)
-      }
-    } else {
-      message.warning('加载目录失败: ' + (result.error || '未知错误'))
-    }
-  } catch (err: any) {
-    console.error('[BookDetail] 加载目录失败:', err)
-    message.error('加载目录失败: ' + err.message)
-  } finally {
-    loadingToc.value = false
-    await restoreProgress()
-  }
+      if (chapters.value.length > 0 && props.book?.bookUrl) setTocCache(props.book.bookUrl, chapters.value)
+    } else { message.warning('加载目录失败: ' + (result.error || '未知错误')) }
+  } catch (err: any) { message.error('加载目录失败: ' + err.message) }
+  finally { loadingToc.value = false; await restoreProgress() }
 }
 
 async function restoreProgress() {
   if (!props.book || chapters.value.length === 0) return
   let targetChapterId = (props.book as any).current_chapter_id
   if (targetChapterId === undefined || targetChapterId === null) {
-    const progress = await readingStore.loadProgress(String(props.book.bookUrl))
+    const progress = await readingStore.loadProgress(String(props.book.bookUrl), props.book.name || '', props.book.author || '')
     if (progress) targetChapterId = progress.chapterId
   }
   if (targetChapterId !== undefined && targetChapterId !== null) {
@@ -247,25 +202,15 @@ async function restoreProgress() {
     if (found) {
       currentChapterId.value = found.id
       const index = chapters.value.findIndex(c => c.id === found.id)
-      if (index !== -1) {
-        goToPage(Math.floor(index / pageSize) + 1)
-        await nextTick()
-        scrollToCurrentChapter()
-      }
-    } else {
-      currentChapterId.value = chapters.value[0]?.id || null
+      if (index !== -1) { goToPage(Math.floor(index / pageSize) + 1); await nextTick(); scrollToCurrentChapter() }
     }
-  } else {
-    currentChapterId.value = chapters.value[0]?.id || null
   }
 }
 
 function handleChapterClick(ch: Chapter) {
   if (!props.book) return
-  const idx = chapters.value.findIndex(c => c.id === ch.id)
-  if (idx === -1) return
   currentChapterId.value = ch.id
-  const bookWithProgress = { ...props.book, current_chapter_id: idx }
+  const bookWithProgress = { ...props.book, current_chapter_id: chapters.value.findIndex(c => c.id === ch.id) }
   bookshelfStore.closeDetail()
   bookshelfStore.openReader(bookWithProgress, props.source, chapters.value)
 }
@@ -277,9 +222,8 @@ function handleRead() {
     const found = chapters.value.findIndex(c => c.id === currentChapterId.value)
     if (found !== -1) chapterIndex = found
   }
-  const bookWithProgress = { ...props.book, current_chapter_id: chapterIndex }
   bookshelfStore.closeDetail()
-  bookshelfStore.openReader(bookWithProgress, props.source, chapters.value)
+  bookshelfStore.openReader({ ...props.book, current_chapter_id: chapterIndex }, props.source, chapters.value)
 }
 
 async function handleAddToShelf() {
@@ -293,12 +237,9 @@ async function handleAddToShelf() {
 async function handleRemoveFromShelf() {
   if (!props.book) return
   dialog.warning({
-    title: '确认移出',
-    content: `确定将《${props.book.name}》移出书架？`,
-    positiveText: '移出',
-    negativeText: '取消',
+    title: '确认移出', content: `确定将《${props.book.name}》移出书架？`, positiveText: '移出', negativeText: '取消',
     onPositiveClick: async () => {
-      await bookshelfStore.removeBook(props.book.id)
+      await bookshelfStore.removeBookByUrl(props.book.bookUrl)
       message.success(`已移出《${props.book.name}》`)
       handleClose()
     },
@@ -306,238 +247,175 @@ async function handleRemoveFromShelf() {
 }
 
 function handleClose() { emit('close') }
-
-function handleImageError(e: Event) {
-  const img = e.target as HTMLImageElement
-  img.style.display = 'none'
-  const parent = img.parentElement
+function handleImageError(event: Event) {
+  (event.target as HTMLImageElement).style.display = 'none'
+  const parent = (event.target as HTMLElement).parentElement
   if (parent) {
-    const placeholder = parent.querySelector('.cover-placeholder')
-    if (placeholder) (placeholder as HTMLElement).style.display = 'flex'
+    const placeholder = parent.querySelector('.cover-placeholder') as HTMLElement
+    if (placeholder) placeholder.style.display = 'block'
   }
 }
+function handleKeydown(event: KeyboardEvent) { if (event.key === 'Escape') handleClose() }
 
-function handleKeydown(e: KeyboardEvent) {
-  if (e.key === 'Escape') handleClose()
+const TOC_CACHE_KEY = 'toc_cache'; const CACHE_TTL = 24 * 60 * 60 * 1000
+function getTocCache(bookId: string | number) {
+  try { const raw = localStorage.getItem(`${TOC_CACHE_KEY}_${bookId}`); if (!raw) return null; const entry = JSON.parse(raw); if (Date.now() - entry.timestamp > CACHE_TTL) { localStorage.removeItem(`${TOC_CACHE_KEY}_${bookId}`); return null; } return entry; } catch { return null; }
 }
-
-// ===== 缓存函数 =====
-const TOC_CACHE_KEY = 'toc_cache'
-const CACHE_TTL = 24 * 60 * 60 * 1000
-
-function getTocCache(bookId: string | number): { chapters: Chapter[]; timestamp: number; totalChapters: number } | null {
-  try {
-    const raw = localStorage.getItem(`${TOC_CACHE_KEY}_${bookId}`)
-    if (!raw) return null
-    const entry = JSON.parse(raw)
-    if (Date.now() - entry.timestamp > CACHE_TTL) {
-      localStorage.removeItem(`${TOC_CACHE_KEY}_${bookId}`)
-      return null
-    }
-    return entry
-  } catch { return null }
-}
-
-function setTocCache(bookId: string | number, chapters: Chapter[]) {
-  try {
-    localStorage.setItem(`${TOC_CACHE_KEY}_${bookId}`, JSON.stringify({
-      chapters,
-      timestamp: Date.now(),
-      totalChapters: chapters.length
-    }))
-  } catch {}
-}
-
-function clearTocCache(bookId: string | number) {
-  localStorage.removeItem(`${TOC_CACHE_KEY}_${bookId}`)
-}
+function setTocCache(bookId: string | number, chapters: Chapter[]) { try { localStorage.setItem(`${TOC_CACHE_KEY}_${bookId}`, JSON.stringify({ chapters, timestamp: Date.now(), totalChapters: chapters.length })) } catch {} }
 
 async function refreshTocInBackground(bookId: string | number) {
   try {
-    const allSources = await window.electronAPI.store.get('sources')
-    const fullSource = allSources.find(s => s.bookSourceName === props.book?.originName)
-    const sourceToUse = fullSource || props.source
+    const allSources = await window.electronAPI.store.get('sources') || []
+    const sourceToUse = props.source || allSources.find((s: any) => s.bookSourceName === props.book?.originName)
     if (!sourceToUse) return
-
-    const tocUrl = props.book?.tocUrl || props.book?.bookUrl
-    if (!tocUrl) return
-
-    const cleanSource = JSON.parse(JSON.stringify({
-      id: sourceToUse.id || '',
-      bookSourceName: sourceToUse.bookSourceName || '',
-      bookSourceUrl: sourceToUse.bookSourceUrl || sourceToUse.url || '',
-      url: sourceToUse.url || '',
-      searchUrl: sourceToUse.searchUrl || '',
-      ruleToc: sourceToUse.ruleToc || {},
-      ruleContent: sourceToUse.ruleContent || {},
-      ruleBookInfo: sourceToUse.ruleBookInfo || {},
-      ruleSearch: sourceToUse.ruleSearch || {},
-      header: typeof sourceToUse.header === 'string' ? sourceToUse.header : null,
-      enabled: true,
-    }))
-
-    const bookWithKind = {
-      ...props.book,
-      kind: props.book?.kind || ''
-    }
-
-    const result = await window.electronAPI.invoke('engine-get-toc', cleanSource, tocUrl, { book: bookWithKind })
-    if (result.success && result.data && result.data.length > 0) {
+    const tocUrl = props.book?.tocUrl || props.book?.bookUrl; if (!tocUrl) return
+    const result = await window.electronAPI.invoke('engine-get-toc', cleanSource(sourceToUse), tocUrl, { book: { kind: props.book?.kind || '' } })
+    if (result.success && result.data?.length > 0) {
       const cached = getTocCache(bookId)
-      if (!cached || cached.totalChapters !== result.data.length) {
-        chapters.value = result.data
-        setTocCache(bookId, result.data)
-        console.log('[BookDetail] 后台更新目录:', result.data.length, '章')
-      }
+      if (!cached || cached.totalChapters !== result.data.length) { chapters.value = result.data; setTocCache(bookId, result.data) }
     }
-  } catch (e) {
-    console.debug('[BookDetail] 后台刷新失败:', e)
-  }
+  } catch (err) { console.debug('[BookDetail] 后台刷新失败:', err) }
 }
 
-// 在 loadToc 中检查缓存
-const origLoadToc = loadToc
-loadToc = async function() {
+async function loadToc() {
   if (!props.book) return
-
-  // 检查缓存
   const cached = props.book?.bookUrl ? getTocCache(props.book.bookUrl) : null
-  if (cached && cached.chapters.length > 0) {
-    chapters.value = cached.chapters
-    loadingToc.value = false
-    restoreProgress().catch(() => {})
-    if (props.book?.bookUrl) {
-      refreshTocInBackground(props.book.bookUrl)
-    }
-    return
-  }
-
-  // 没有缓存，正常加载
-  await origLoadToc.call(this)
+  if (cached && cached.chapters.length > 0) { chapters.value = cached.chapters; loadingToc.value = false; restoreProgress().catch(() => {}); if (props.book?.bookUrl) refreshTocInBackground(props.book.bookUrl); return }
+  await loadTocInternal()
 }
 
-onMounted(() => {
-  loadToc()
-  document.addEventListener('keydown', handleKeydown)
-  nextTick(() => {
-    const container = containerRef.value
-    if (container) {
-      container.setAttribute('tabindex', '-1')
-      container.focus()
-    }
-  })
-})
-
-onUnmounted(() => {
-  document.removeEventListener('keydown', handleKeydown)
-})
-
+onMounted(() => { loadToc(); document.addEventListener('keydown', handleKeydown); nextTick(() => containerRef.value?.focus()) })
+onUnmounted(() => { document.removeEventListener('keydown', handleKeydown) })
 watch(() => props.book, () => loadToc())
 </script>
 
 <style scoped>
+.detail-enter-active { transition: opacity 0.28s var(--ease-out), transform 0.28s var(--ease-out); }
+.detail-leave-active { transition: opacity 0.22s var(--ease-out), transform 0.22s var(--ease-out); }
+.detail-enter-from { opacity: 0; transform: scale(0.96); }
+.detail-leave-to { opacity: 0; transform: scale(0.98); }
+
 .detail-overlay {
-  position: fixed;
-  inset: 0;
-  z-index: 1000;
-  background: rgba(0, 0, 0, 0.5);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 20px;
-  animation: fadeIn 0.25s ease;
+  position: fixed; inset: 0; z-index: 1000;
+  background: rgba(0,0,0,0.55); backdrop-filter: blur(16px);
+  display: flex; align-items: center; justify-content: center; padding: 24px;
 }
-@keyframes fadeIn { from { opacity: 0; transform: scale(0.97); } to { opacity: 1; transform: scale(1); } }
 .detail-container {
-  width: 100%;
-  max-width: 820px;
-  height: 90vh;
-  max-height: 800px;
-  background: var(--bg-card);
-  border-radius: 16px;
+  width: 100%; max-width: 840px; height: 90vh; max-height: 800px;
+  background: var(--bg-card); border-radius: var(--radius-xl);
   border: 1px solid var(--border-color);
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.5);
-  outline: none;
+  display: flex; flex-direction: column; overflow: hidden;
+  box-shadow: var(--shadow-xl); outline: none;
 }
-.detail-header {
-  display: flex;
-  align-items: center;
-  padding: 14px 20px;
-  border-bottom: 1px solid var(--border-color);
-  flex-shrink: 0;
-  gap: 12px;
+
+.detail-header { display: flex; align-items: center; padding: 16px 22px; border-bottom: 1px solid var(--border-color); flex-shrink: 0; gap: 14px; }
+.btn-back {
+  background: transparent; border: 1px solid transparent; color: var(--text-secondary);
+  cursor: pointer; padding: 6px; border-radius: var(--radius-sm);
+  transition: background 0.2s var(--ease-out), color 0.2s var(--ease-out), border-color 0.2s var(--ease-out);
+  display: flex; align-items: center; justify-content: center; min-width: 34px; min-height: 34px;
 }
-.btn-back { background: transparent; border: none; color: var(--text-secondary); cursor: pointer; padding: 4px; border-radius: 6px; transition: all 0.2s; display: flex; align-items: center; justify-content: center; }
-.btn-back:hover { background: var(--bg-hover); color: var(--text-primary); }
-.detail-title { font-size: 17px; font-weight: 600; color: var(--text-primary); flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin: 0; }
-.detail-body { display: flex; gap: 24px; padding: 20px 24px; flex-shrink: 0; border-bottom: 1px solid var(--border-color); }
-.detail-cover { width: 120px; min-width: 120px; height: 170px; background: var(--bg-hover); border-radius: 8px; overflow: hidden; position: relative; }
+.btn-back:hover { background: var(--bg-hover); color: var(--text-primary); border-color: var(--border-color); }
+.btn-back:focus-visible { outline: 2px solid var(--brand); outline-offset: 1px; }
+.detail-title { font-size: 17px; font-weight: var(--font-semibold); color: var(--text-primary); flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin: 0; }
+
+.detail-body { display: flex; gap: 28px; padding: 22px 26px; flex-shrink: 0; border-bottom: 1px solid var(--border-color); }
+.detail-cover { width: 130px; min-width: 130px; height: 180px; border-radius: var(--radius-md); overflow: hidden; position: relative; }
 .detail-cover img { width: 100%; height: 100%; object-fit: cover; }
-.cover-placeholder { width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; font-size: 40px; color: var(--brand); background: var(--bg-hover); }
-.cover-source { position: absolute; bottom: 0; left: 0; right: 0; padding: 4px 8px; background: rgba(0, 0, 0, 0.7); color: rgba(255, 255, 255, 0.7); font-size: 10px; text-align: center; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.progress-ring { position: absolute; bottom: -8px; right: -8px; width: 44px; height: 44px; filter: drop-shadow(0 2px 8px rgba(0,0,0,0.25)); }
+.cover-placeholder { width: 100%; height: 100%; background: url('/icons/cover.jpg') center/cover; position: relative; display: block; }
+.cover-overlay { position: absolute; inset: 0; background: rgba(0,0,0,0.5); display: flex; flex-direction: column; align-items: center; justify-content: flex-end; padding: 14px; text-align: center; }
+.cover-title-text { font-size: 14px; font-weight: var(--font-semibold); color: #fff; line-height: 1.3; text-shadow: 0 2px 8px rgba(0,0,0,0.8); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; word-break: break-all; width: 100%; }
+.cover-author-text { font-size: 11px; color: rgba(255,255,255,0.8); margin-top: 4px; text-shadow: 0 1px 4px rgba(0,0,0,0.8); width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cover-source { position: absolute; bottom: 0; left: 0; right: 0; padding: 4px 10px; background: rgba(0,0,0,0.75); color: rgba(255,255,255,0.8); font-size: 10px; text-align: center; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.progress-ring { position: absolute; bottom: -10px; right: -10px; width: 48px; height: 48px; filter: drop-shadow(0 2px 8px rgba(0,0,0,0.3)); }
 .ring-bg { stroke: var(--bg-card); stroke-width: 3; }
-.ring-fill { stroke: var(--brand); stroke-width: 3; stroke-linecap: round; transform: rotate(-90deg); transform-origin: center; transition: stroke-dasharray 0.6s ease; }
-.ring-text { font-size: 9px; font-weight: 600; fill: var(--text-primary); }
-.detail-info { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
-.book-title { font-size: 20px; font-weight: 600; color: var(--text-primary); margin: 0; }
+.ring-fill { stroke: var(--brand); stroke-width: 3; stroke-linecap: round; transform: rotate(-90deg); transform-origin: center; transition: stroke-dasharray 0.6s var(--ease-out); }
+.ring-text { font-size: 9px; font-weight: var(--font-semibold); fill: var(--text-primary); }
+
+.detail-info { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
+.book-title { font-size: 22px; font-weight: var(--font-semibold); color: var(--text-primary); margin: 0; letter-spacing: -0.2px; }
 .book-author { font-size: 14px; color: var(--text-secondary); margin: 0; }
 .book-meta { display: flex; gap: 6px; flex-wrap: wrap; }
-.meta-tag { font-size: 12px; padding: 2px 10px; border-radius: 4px; background: var(--bg-hover); color: var(--text-secondary); }
-.progress-bar-container { display: flex; align-items: center; gap: 10px; margin-top: 2px; }
-.progress-bar { flex: 1; height: 4px; background: var(--bg-hover); border-radius: 2px; overflow: hidden; }
-.progress-fill { height: 100%; background: linear-gradient(90deg, var(--brand), var(--brand-hover)); border-radius: 2px; transition: width 0.5s cubic-bezier(0.4,0,0.2,1); }
+.meta-tag { font-size: 12px; padding: 3px 12px; border-radius: var(--radius-full); background: var(--bg-hover); color: var(--text-secondary); font-weight: var(--font-medium); }
+.progress-bar-container { display: flex; align-items: center; gap: 10px; margin-top: 4px; }
+.progress-bar { flex: 1; }
 .progress-label { font-size: 12px; color: var(--text-muted); white-space: nowrap; }
-.book-intro { font-size: 13px; color: var(--text-muted); line-height: 1.6; margin: 0; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
-.detail-toc { flex: 1; display: flex; flex-direction: column; padding: 0 20px 4px; min-height: 0; overflow: hidden; }
-.toc-header { display: flex; justify-content: space-between; align-items: center; padding: 10px 0 6px; flex-shrink: 0; border-bottom: 1px solid var(--border-color); }
-.toc-header h3 { font-size: 15px; font-weight: 600; color: var(--text-primary); margin: 0; }
+.book-intro { font-size: 13px; color: var(--text-muted); line-height: 1.7; margin: 0; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+
+.detail-toc { flex: 1; display: flex; flex-direction: column; padding: 0 22px 4px; min-height: 0; overflow: hidden; }
+.toc-header { display: flex; justify-content: space-between; align-items: center; padding: 12px 0 8px; flex-shrink: 0; border-bottom: 1px solid var(--border-color); }
+.toc-header h3 { font-size: 15px; font-weight: var(--font-semibold); color: var(--text-primary); margin: 0; }
 .toc-count { font-size: 13px; color: var(--text-muted); }
-.toc-toolbar { display: flex; align-items: center; gap: 12px; padding: 6px 0; flex-shrink: 0; flex-wrap: wrap; }
+.toc-toolbar { display: flex; align-items: center; gap: 12px; padding: 8px 0; flex-shrink: 0; flex-wrap: wrap; }
 .toc-search { flex: 1; min-width: 140px; }
-.toc-search-input { width: 100%; padding: 5px 12px; font-size: 13px; background: var(--bg); border: 1px solid var(--border-color); border-radius: 6px; color: var(--text-primary); outline: none; transition: border-color 0.2s; }
-.toc-search-input:focus { border-color: var(--brand); }
-.toc-search-input::placeholder { color: var(--text-muted); }
 .toc-pagination { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
-.page-btn { width: 30px; height: 30px; border: 1px solid var(--border-color); border-radius: 6px; background: transparent; color: var(--text-secondary); cursor: pointer; font-size: 16px; display: flex; align-items: center; justify-content: center; transition: all 0.2s; }
-.page-btn:hover:not(:disabled) { border-color: var(--brand); color: var(--text-primary); }
+.page-btn {
+  width: 34px; height: 34px; border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm); background: transparent; color: var(--text-secondary);
+  cursor: pointer; font-size: 16px; display: flex; align-items: center; justify-content: center;
+  transition: border-color 0.2s var(--ease-out), color 0.2s var(--ease-out), background 0.2s var(--ease-out);
+}
+.page-btn:hover:not(:disabled) { border-color: var(--brand); color: var(--text-primary); background: var(--bg-hover); }
+.page-btn:focus-visible { outline: 2px solid var(--brand); outline-offset: 1px; }
 .page-btn:disabled { opacity: 0.3; cursor: not-allowed; }
-.page-info { font-size: 13px; color: var(--text-secondary); min-width: 50px; text-align: center; }
-.toc-list { flex: 1; overflow-y: auto; padding: 4px 0 12px; display: flex; flex-direction: column; gap: 2px; }
-.toc-item { position: relative; display: flex; justify-content: space-between; align-items: center; padding: 9px 12px; border-radius: 8px; cursor: pointer; transition: all 0.15s; gap: 12px; outline: none; }
-.toc-item::before { content: ''; position: absolute; left: 0; top: 50%; transform: translateY(-50%) scaleY(0); width: 3px; height: 60%; background: var(--brand); border-radius: 0 2px 2px 0; transition: transform 0.2s ease; }
+.page-info { font-size: 13px; color: var(--text-secondary); min-width: 54px; text-align: center; font-weight: var(--font-medium); }
+
+.toc-list { flex: 1; overflow-y: auto; padding: 6px 0 14px; display: flex; flex-direction: column; gap: 2px; }
+.toc-item {
+  position: relative; display: flex; justify-content: space-between; align-items: center;
+  padding: 10px 14px; border-radius: var(--radius-md); cursor: pointer;
+  transition: background 0.18s var(--ease-out); gap: 12px; outline: none; min-height: 42px;
+}
+.toc-item::before {
+  content: ''; position: absolute; left: 0; top: 50%; transform: translateY(-50%) scaleY(0);
+  width: 3px; height: 60%; background: var(--brand); border-radius: 0 2px 2px 0;
+  transition: transform 0.25s var(--ease-out);
+}
 .toc-item:hover::before { transform: translateY(-50%) scaleY(0.6); }
 .toc-item.active::before { transform: translateY(-50%) scaleY(1); }
 .toc-item:hover { background: var(--bg-hover); }
-.toc-item.active { background: rgba(var(--brand-rgb, 212, 160, 23), 0.08); }
+.toc-item:focus-visible { outline: 2px solid var(--brand); outline-offset: -1px; }
+.toc-item.active { background: var(--bg-active); }
 .toc-item.active .toc-chapter-title { color: var(--brand); }
 .toc-chapter-title { font-size: 14px; color: var(--text-secondary); flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .toc-item.vip .toc-chapter-title { color: #d4a017; }
 .toc-badges { display: flex; gap: 4px; flex-shrink: 0; }
-.badge-vip { font-size: 10px; padding: 1px 8px; border-radius: 4px; background: rgba(212, 160, 23, 0.15); color: #d4a017; }
-.badge-current { font-size: 10px; padding: 1px 8px; border-radius: 4px; background: rgba(76, 175, 80, 0.15); color: #4caf50; }
 .toc-empty, .toc-loading { display: flex; align-items: center; justify-content: center; gap: 12px; height: 100%; min-height: 120px; color: var(--text-muted); font-size: 14px; }
-.loading-spinner { width: 20px; height: 20px; border: 2px solid var(--border-color); border-top-color: var(--brand); border-radius: 50%; animation: spin 0.8s linear infinite; }
-@keyframes spin { to { transform: rotate(360deg); } }
-.detail-footer { display: flex; align-items: center; gap: 12px; padding: 14px 24px; border-top: 1px solid var(--border-color); flex-shrink: 0; }
+
+.detail-footer { display: flex; align-items: center; gap: 14px; padding: 16px 26px; border-top: 1px solid var(--border-color); flex-shrink: 0; }
 .footer-spacer { flex: 1; }
-.btn-danger-ghost { display: flex; align-items: center; gap: 6px; padding: 8px 12px; font-size: 13px; color: var(--text-muted); background: transparent; border: none; border-radius: 8px; cursor: pointer; transition: all 0.2s; }
-.btn-danger-ghost:hover { color: #e74c3c; background: rgba(231, 76, 60, 0.06); }
-.btn-primary { display: flex; align-items: center; justify-content: center; gap: 8px; padding: 8px 22px; font-size: 14px; font-weight: 500; color: #0d0d0d; background: linear-gradient(135deg, var(--brand), var(--brand-hover)); border: none; border-radius: 8px; cursor: pointer; transition: all 0.2s; min-width: 130px; box-shadow: 0 2px 8px rgba(var(--brand-rgb, 212, 160, 23), 0.3); }
-.btn-primary:hover { transform: translateY(-1px); box-shadow: 0 6px 20px rgba(var(--brand-rgb, 212, 160, 23), 0.35); }
-.btn-primary:active { transform: translateY(0); box-shadow: 0 1px 4px rgba(var(--brand-rgb, 212, 160, 23), 0.2); }
-.btn-secondary { display: flex; align-items: center; gap: 6px; padding: 8px 16px; font-size: 14px; font-weight: 500; color: var(--text-secondary); background: transparent; border: 1px solid var(--border-color); border-radius: 8px; cursor: pointer; transition: all 0.2s; }
-.btn-secondary:hover:not(:disabled) { color: var(--text-primary); background: var(--bg-hover); border-color: var(--brand); }
-.btn-secondary:disabled { opacity: 0.5; cursor: not-allowed; }
-.toc-list::-webkit-scrollbar { width: 4px; }
-.toc-list::-webkit-scrollbar-track { background: transparent; }
-.toc-list::-webkit-scrollbar-thumb { background: var(--border-color); border-radius: 4px; }
-.toc-list::-webkit-scrollbar-thumb:hover { background: var(--text-muted); }
+
+.btn-danger-ghost {
+  display: flex; align-items: center; gap: 6px; padding: 8px 14px; font-size: 13px;
+  color: var(--text-muted); background: transparent; border: 1px solid transparent;
+  border-radius: var(--radius-md); cursor: pointer;
+  transition: color 0.2s var(--ease-out), background 0.2s var(--ease-out), border-color 0.2s var(--ease-out);
+  min-height: 38px;
+}
+.btn-danger-ghost:hover { color: #e74c3c; background: rgba(231,76,60,0.06); border-color: rgba(231,76,60,0.2); }
+.btn-danger-ghost:focus-visible { outline: 2px solid #e74c3c; outline-offset: 1px; }
+
+.btn-primary-detail {
+  display: flex; align-items: center; justify-content: center; gap: 8px;
+  padding: 10px 24px; font-size: 14px; font-weight: var(--font-medium);
+  color: #0f0f0f; background: var(--brand); border: none;
+  border-radius: var(--radius-md); cursor: pointer;
+  transition: background 0.2s var(--ease-out), transform 0.2s var(--ease-out), box-shadow 0.2s var(--ease-out);
+  min-width: 140px; min-height: 42px;
+  box-shadow: 0 2px 8px rgba(212,160,23,0.25);
+}
+.btn-primary-detail:hover { background: var(--brand-hover); transform: translateY(-1px); box-shadow: 0 6px 20px rgba(212,160,23,0.35); }
+.btn-primary-detail:active { transform: translateY(0); box-shadow: 0 1px 4px rgba(212,160,23,0.2); }
+.btn-primary-detail:focus-visible { outline: 2px solid var(--brand-hover); outline-offset: 2px; }
+
+.btn-secondary {
+  display: flex; align-items: center; gap: 6px; padding: 8px 18px; font-size: 14px;
+  font-weight: var(--font-medium); color: var(--text-secondary); background: transparent;
+  border: 1px solid var(--border-color); border-radius: var(--radius-md); cursor: pointer;
+  transition: color 0.2s var(--ease-out), background 0.2s var(--ease-out), border-color 0.2s var(--ease-out), transform 0.2s var(--ease-out);
+  min-height: 38px;
+}
+.btn-secondary:hover:not(:disabled) { color: var(--text-primary); background: var(--bg-hover); border-color: var(--brand); transform: translateY(-1px); }
+.btn-secondary:focus-visible { outline: 2px solid var(--brand); outline-offset: 1px; }
+.btn-secondary:disabled { opacity: 0.35; cursor: not-allowed; transform: none; }
 </style>
-
-

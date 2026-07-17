@@ -1,5 +1,5 @@
 import jsonpath from 'jsonpath'
-import type { ParsedRule } from './index.js'
+import type { ParsedRule } from './regex.js'
 
 export function parseJsonPath(rule: string): ParsedRule {
   let expression = rule
@@ -41,3 +41,4 @@ export function executeJsonPath(source: any, expression: string): any {
     return null
   }
 }
+

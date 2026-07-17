@@ -1,137 +1,16 @@
 <!DOCTYPE html>
-<html lang="zh-CN" class="dark">
+<html lang="zh-CN">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' node:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: http: https:; connect-src 'self' https:;" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; img-src 'self' https: http: data:; connect-src 'self' https: http:; font-src 'self' https://fonts.gstatic.com data:" />
   <title>墨阅</title>
-
-  <link rel="preconnect" href="https://fonts.googleapis.com" />
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=Lato:wght@400;700&amp;family=Fira+Code:wght@400;600&amp;family=Noto+Serif+SC:wght@400;600;700&amp;display=swap" rel="stylesheet" />
-
-  <style>
-    * {
-      margin: 0;
-      padding: 0;
-      box-sizing: border-box;
-    }
-
-    html, body, #app {
-      height: 100%;
-      overflow: hidden;
-    }
-
-    body {
-      font-family: 'Lato', -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, "PingFang SC", "Microsoft YaHei", sans-serif;
-      -webkit-font-smoothing: antialiased;
-      -moz-osx-font-smoothing: grayscale;
-      background: #0d0d0d;
-      color: #e8e8e8;
-      transition: background 0.3s, color 0.3s;
-    }
-
-    /* ===== 加载页面 - 使用 CSS 变量跟随主题 ===== */
-    :root {
-      --loading-bg: #0d0d0d;
-      --loading-text: #e8e8e8;
-      --loading-brand: #d4a017;
-    }
-
-    [data-theme="light"] {
-      --loading-bg: #f0ede8;
-      --loading-text: #1a1a1a;
-    }
-
-    [data-theme="sepia"] {
-      --loading-bg: #e8dcc8;
-      --loading-text: #3d2b1f;
-    }
-
-    ::-webkit-scrollbar {
-      width: 4px;
-      height: 4px;
-    }
-    ::-webkit-scrollbar-track {
-      background: transparent;
-    }
-    ::-webkit-scrollbar-thumb {
-      background: rgba(255, 255, 255, 0.15);
-      border-radius: 4px;
-    }
-    ::-webkit-scrollbar-thumb:hover {
-      background: rgba(255, 255, 255, 0.25);
-    }
-
-    #app-loading {
-      position: fixed;
-      inset: 0;
-      background: var(--loading-bg);
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      justify-content: center;
-      z-index: 9999;
-      transition: background 0.6s ease, opacity 0.6s ease;
-    }
-    #app-loading.hidden {
-      opacity: 0;
-      pointer-events: none;
-    }
-    .loading-logo {
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      gap: 12px;
-    }
-    .loading-logo img {
-      width: 64px;
-      height: 64px;
-      display: block;
-    }
-    .loading-logo-text {
-      font-size: 28px;
-      font-weight: 600;
-      color: var(--loading-brand);
-      letter-spacing: 0.12em;
-      font-family: 'Lato', sans-serif;
-    }
-    .loading-dots {
-      display: flex;
-      gap: 8px;
-      margin-top: 16px;
-    }
-    .loading-dot {
-      width: 6px;
-      height: 6px;
-      background: var(--loading-brand);
-      border-radius: 50%;
-      animation: pulse 1.4s infinite ease-in-out both;
-    }
-    .loading-dot:nth-child(1) { animation-delay: 0s; }
-    .loading-dot:nth-child(2) { animation-delay: 0.2s; }
-    .loading-dot:nth-child(3) { animation-delay: 0.4s; }
-    @keyframes pulse {
-      0%, 80%, 100% { transform: scale(0.6); opacity: 0.3; }
-      40% { transform: scale(1); opacity: 1; }
-    }
-  </style>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Lato:wght@400;700&family=Fira+Code:wght@400;600&family=Noto+Serif+SC:wght@400;600;700&display=swap" rel="stylesheet">
 </head>
 <body>
-  <div id="app-loading">
-    <div class="loading-logo">
-      <img src="/icons/icon.svg" alt="墨阅" />
-      <div class="loading-logo-text">墨阅</div>
-    </div>
-    <div class="loading-dots">
-      <span class="loading-dot"></span>
-      <span class="loading-dot"></span>
-      <span class="loading-dot"></span>
-    </div>
-  </div>
-
   <div id="app"></div>
-
   <script type="module" src="./main.ts"></script>
 </body>
 </html>

@@ -14,11 +14,10 @@ export const engine = {
   getExploreCategories: (source: any) =>
     ipcInvoke('engine-get-explore-categories', source),
   getExploreBooks: (source: any, categoryUrl: string, page: number) => {
-    // 清理 source，只保留可序列化的字段
     const cleanSource = {
-      id: source.id,
-      name: source.name,
-      url: source.url,
+      bookSourceName: source.bookSourceName || source.name || '',
+      bookSourceUrl: source.bookSourceUrl || source.url || '',
+      url: source.url || '',
       searchUrl: source.searchUrl || '',
       ruleSearch: source.ruleSearch || {},
       ruleBookInfo: source.ruleBookInfo || {},
@@ -45,4 +44,3 @@ export const engine = {
     return ipcInvoke('engine-get-explore-books', cleanSource, categoryUrl, page)
   },
 }
-

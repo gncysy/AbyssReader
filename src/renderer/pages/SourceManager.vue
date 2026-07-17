@@ -3,24 +3,19 @@
     <header class="page-header">
       <div>
         <h1 class="page-title">书源管理</h1>
-        <p class="page-subtitle">{{ filteredSources.length }} 个书源</p>
+        <p class="page-subtitle">{{ filteredSources.length }} / {{ sources.length }} 个书源</p>
       </div>
       <div class="header-actions">
         <div class="search-wrapper">
-          <input
-            v-model="searchText"
-            type="text"
-            placeholder="搜索书源..."
-            class="input-search"
-          />
+          <input v-model="searchText" type="text" placeholder="搜索书源..." class="input-search" />
         </div>
-        <button class="btn-secondary" @click="triggerFileInput">上传文件</button>
-        <button class="btn-secondary" @click="showUrlModal = true">从 URL</button>
-        <button class="btn-primary" @click="showJsonModal = true">粘贴 JSON</button>
-        <button class="btn-secondary" :disabled="testingAll" @click="testAll">
+        <button class="btn-sm-secondary" @click="triggerFileInput">上传文件</button>
+        <button class="btn-sm-secondary" @click="showUrlModal = true">从 URL</button>
+        <button class="btn-sm-primary" @click="showJsonModal = true">粘贴 JSON</button>
+        <button class="btn-sm-secondary" :disabled="testingAll" @click="testAll">
           {{ testingAll ? `测试中 ${testProgress}/${sources.length}` : '测试全部' }}
         </button>
-        <button class="btn-danger" :disabled="deletingFailed" @click="deleteFailed">
+        <button class="btn-sm-danger" :disabled="deletingFailed" @click="deleteFailed">
           {{ deletingFailed ? '删除中...' : '删除失效' }}
         </button>
       </div>
@@ -29,190 +24,76 @@
     <input ref="fileInput" type="file" accept=".json" class="hidden" @change="onFileSelected" />
 
     <div v-if="importing" class="import-progress">
-      <div class="progress-bar">
-        <div class="progress-fill" :style="{ width: importProgress + '%' }"></div>
-      </div>
+      <div class="progress-bar"><div class="progress-fill" :style="{ width: importProgress + '%' }"></div></div>
       <span class="progress-text">{{ importProgress }}%</span>
       <span class="progress-label">{{ importLabel }}</span>
     </div>
 
     <div v-if="filteredSources.length > 0" class="source-list">
-      <div class="list-header">
-        <span>名称</span>
-        <span>状态</span>
-        <span>测试结果</span>
-        <span>操作</span>
-      </div>
-      <div
-        v-for="source in filteredSources"
-        :key="source.id"
-        class="list-row"
-        @click="showSourceDetail(source)"
-      >
-        <span class="source-name">{{ getSourceName(source) }}</span>
-        <span class="status-dot" :class="source.enabled ? 'enabled' : 'disabled'"></span>
-        <span>{{ testResults[source.id] || '—' }}</span>
+      <div class="list-header"><span>名称</span><span>状态</span><span>测试结果</span><span>操作</span></div>
+      <div v-for="(item, idx) in filteredSources" :key="item.originalIndex" class="list-row" tabindex="0"
+        @click="showSourceDetail(item.originalIndex)" @keydown.enter="showSourceDetail(item.originalIndex)">
+        <span class="source-name">{{ getSourceName(item.source) }}</span>
+        <span class="status-indicator"><span class="status-dot" :class="item.source.enabled ? 'enabled' : 'disabled'"></span></span>
+        <span class="test-result">{{ testResults[item.originalIndex] || '—' }}</span>
         <div class="row-actions" @click.stop>
-          <button class="action-btn debug-btn" @click="openDebug(source)" title="调试此书源">🔧</button>
-          <button class="action-btn" :disabled="testingId === source.id" @click="testSource(source)">
-            {{ testingId === source.id ? '...' : '测试' }}
-          </button>
-          <button class="action-btn" @click="toggleSource(source)">
-            {{ source.enabled ? '禁用' : '启用' }}
-          </button>
-          <button class="action-btn danger" @click="deleteSource(source)">删除</button>
+          <button class="action-btn debug-btn" @click="openDebug(item.originalIndex)"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg></button>
+          <button class="action-btn" :disabled="testingIdx === item.originalIndex" @click="testSource(item.originalIndex)">{{ testingIdx === item.originalIndex ? '...' : '测试' }}</button>
+          <button class="action-btn" @click="toggleSource(item.originalIndex)">{{ item.source.enabled ? '禁用' : '启用' }}</button>
+          <button class="action-btn action-btn-danger" @click="deleteSource(item.originalIndex)">删除</button>
         </div>
       </div>
     </div>
 
     <div v-else class="empty-state">
-      <div class="empty-icon">📦</div>
       <h3>{{ searchText ? '未找到匹配的书源' : '暂无书源' }}</h3>
       <p>{{ searchText ? '试试其他关键词' : '导入书源开始阅读' }}</p>
     </div>
 
-    <n-modal v-model:show="showJsonModal" preset="dialog" title="导入书源" positive-text="导入" @positive-click="importJson">
+    <n-modal v-model:show="showJsonModal" preset="dialog" title="导入书源" positive-text="导入" @positive-click="handleImportJson">
       <n-input v-model:value="jsonInput" type="textarea" placeholder="粘贴书源 JSON..." :autosize="{ minRows: 12, maxRows: 20 }" />
     </n-modal>
-
-    <n-modal v-model:show="showUrlModal" preset="dialog" title="从 URL 导入" positive-text="导入" @positive-click="importFromUrl">
+    <n-modal v-model:show="showUrlModal" preset="dialog" title="从 URL 导入" positive-text="导入" @positive-click="handleImportFromUrl">
       <n-input v-model:value="urlInput" placeholder="输入书源 JSON URL..." />
     </n-modal>
 
-    <!-- 书源详情对话框 -->
-    <n-modal
-      v-model:show="showDetailModal"
-      preset="dialog"
-      :title="`📖 书源详情`"
-      :style="{ width: '700px' }"
-      :show-icon="false"
-    >
-      <div v-if="selectedSource" class="source-detail">
+    <n-modal v-model:show="showDetailModal" preset="dialog" title="书源详情" :style="{ width: '700px' }" :show-icon="false">
+      <div v-if="detailSource" class="source-detail">
         <div class="detail-section">
-          <div class="detail-row">
-            <span class="detail-label">名称</span>
-            <span class="detail-value">{{ getSourceName(selectedSource) }}</span>
-          </div>
-          <div class="detail-row">
-            <span class="detail-label">分组</span>
-            <span class="detail-value">{{ selectedSource.group || '未分组' }}</span>
-          </div>
-          <div class="detail-row">
-            <span class="detail-label">状态</span>
-            <span class="detail-value" :class="selectedSource.enabled ? 'enabled-text' : 'disabled-text'">
-              {{ selectedSource.enabled ? '✅ 已启用' : '❌ 已禁用' }}
-            </span>
-          </div>
-          <div class="detail-row">
-            <span class="detail-label">类型</span>
-            <span class="detail-value">{{ selectedSource._legado ? 'JS 书源' : 'JSON 书源' }}</span>
-          </div>
+          <div class="detail-row"><span class="detail-label">名称</span><span class="detail-value">{{ getSourceName(detailSource) }}</span></div>
+          <div class="detail-row"><span class="detail-label">分组</span><span class="detail-value">{{ detailSource.group || '未分组' }}</span></div>
+          <div class="detail-row"><span class="detail-label">状态</span><span class="detail-value" :class="detailSource.enabled ? 'enabled-text' : 'disabled-text'">{{ detailSource.enabled ? '已启用' : '已禁用' }}</span></div>
+          <div class="detail-row"><span class="detail-label">类型</span><span class="detail-value">{{ detailSource._legado ? 'JS 书源' : 'JSON 书源' }}</span></div>
         </div>
-
-        <div v-if="selectedSource.comment" class="detail-section">
-          <div class="detail-label">📝 说明</div>
-          <div class="detail-comment">{{ selectedSource.comment }}</div>
-        </div>
-
+        <div v-if="detailSource.comment" class="detail-section"><div class="detail-label">说明</div><div class="detail-comment">{{ detailSource.comment }}</div></div>
         <div class="detail-section">
-          <div class="detail-row">
-            <span class="detail-label">书源 URL</span>
-            <span class="detail-value url-text">{{ selectedSource.url || '无' }}</span>
-          </div>
-          <div class="detail-row">
-            <span class="detail-label">搜索 URL</span>
-            <span class="detail-value url-text">{{ selectedSource.searchUrl || '无' }}</span>
-          </div>
-          <div v-if="selectedSource.exploreUrl" class="detail-row">
-            <span class="detail-label">发现 URL</span>
-            <span class="detail-value url-text">{{ selectedSource.exploreUrl }}</span>
-          </div>
+          <div class="detail-row"><span class="detail-label">书源 URL</span><span class="detail-value url-text">{{ detailSource.bookSourceUrl || '无' }}</span></div>
+          <div class="detail-row"><span class="detail-label">搜索 URL</span><span class="detail-value url-text">{{ detailSource.searchUrl || '无' }}</span></div>
         </div>
-
         <div class="detail-section">
-          <div class="detail-label">📋 规则预览</div>
+          <div class="detail-label">规则预览</div>
           <div class="rule-preview">
-            <div class="rule-item">
-              <span class="rule-key">搜索:</span>
-              <span class="rule-value">{{ selectedSource.ruleSearch?.bookList || '未配置' }}</span>
-            </div>
-            <div class="rule-item">
-              <span class="rule-key">目录:</span>
-              <span class="rule-value">{{ selectedSource.ruleToc?.chapterList || '未配置' }}</span>
-            </div>
-            <div class="rule-item">
-              <span class="rule-key">正文:</span>
-              <span class="rule-value">{{ selectedSource.ruleContent?.content || '未配置' }}</span>
-            </div>
-            <div class="rule-item">
-              <span class="rule-key">详情:</span>
-              <span class="rule-value">{{ selectedSource.ruleBookInfo?.name || '未配置' }}</span>
-            </div>
+            <div class="rule-item"><span class="rule-key">搜索:</span><span class="rule-value">{{ detailSource.ruleSearch?.bookList || '未配置' }}</span></div>
+            <div class="rule-item"><span class="rule-key">目录:</span><span class="rule-value">{{ detailSource.ruleToc?.chapterList || '未配置' }}</span></div>
+            <div class="rule-item"><span class="rule-key">正文:</span><span class="rule-value">{{ detailSource.ruleContent?.content || '未配置' }}</span></div>
           </div>
         </div>
-
-        <div class="detail-section meta">
-          <div class="detail-row">
-            <span class="detail-label">响应时间</span>
-            <span class="detail-value">{{ selectedSource.respondTime || 0 }}ms</span>
-          </div>
-          <div class="detail-row">
-            <span class="detail-label">更新时间</span>
-            <span class="detail-value">{{ formatTime(selectedSource.lastUpdateTime) }}</span>
-          </div>
-          <div class="detail-row">
-            <span class="detail-label">权重</span>
-            <span class="detail-value">{{ selectedSource.weight || 0 }}</span>
-          </div>
-          <div class="detail-row">
-            <span class="detail-label">Cookie</span>
-            <span class="detail-value">{{ selectedSource.enabledCookieJar ? '✅ 启用' : '❌ 禁用' }}</span>
-          </div>
-        </div>
-
         <div class="detail-actions">
-          <button class="btn-primary" @click="openDebugFromDetail">🔧 调试</button>
-          <button class="btn-edit" @click="openEditor">✏️ 编辑书源</button>
-          <button class="btn-secondary" @click="copySourceId">📋 复制 ID</button>
-          <button class="btn-secondary" @click="showDetailModal = false">关闭</button>
+          <button class="btn-sm-primary" @click="openDebugFromDetail">调试</button>
+          <button class="btn-sm-edit" @click="openEditor">编辑书源</button>
+          <button class="btn-sm-secondary" @click="showDetailModal = false">关闭</button>
         </div>
       </div>
     </n-modal>
 
-    <!-- 编辑书源对话框 -->
-    <n-modal
-      v-model:show="showEditorModal"
-      preset="dialog"
-      title="✏️ 编辑书源"
-      :style="{ width: '750px', maxWidth: '95vw' }"
-      positive-text="保存"
-      negative-text="取消"
-      @positive-click="saveSourceEdit"
-      @negative-click="showEditorModal = false"
-    >
+    <n-modal v-model:show="showEditorModal" preset="dialog" title="编辑书源" :style="{ width: '750px', maxWidth: '95vw' }" positive-text="保存" negative-text="取消" @positive-click="saveSourceEdit" @negative-click="showEditorModal = false">
       <div class="editor-container">
-        <div class="editor-hint">
-          ⚠️ 修改书源规则需要了解 CSS/XPath/JSON 选择器语法。编辑前建议先备份。
-        </div>
-        <n-input
-          v-model:value="editJson"
-          type="textarea"
-          :autosize="{ minRows: 20, maxRows: 35 }"
-          class="editor-textarea"
-        />
+        <div class="editor-hint">修改书源规则需要了解 CSS/XPath/JSON 选择器语法。编辑前建议先备份。</div>
+        <n-input v-model:value="editJson" type="textarea" :autosize="{ minRows: 20, maxRows: 35 }" class="editor-textarea" />
       </div>
     </n-modal>
 
-    <!-- 书源调试助手 -->
-    <DebugPanel
-      v-if="showDebugPanel"
-      :visible="showDebugPanel"
-      :sources="sources"
-      :source-id="debugSourceId"
-      :book-url="debugBookUrl"
-      @update:visible="showDebugPanel = $event"
-      @select-source="debugSourceId = $event"
-    />
+    <DebugPanel v-if="showDebugPanel" :visible="showDebugPanel" :sources="sources" :source-index="debugSourceIndex" @update:visible="showDebugPanel = $event" />
   </div>
 </template>
 
@@ -233,8 +114,8 @@ function getSourceName(source: BookSource | null | undefined): string {
 
 const sources = ref<BookSource[]>([])
 const searchText = ref('')
-const testResults = ref<Record<string, string>>({})
-const testingId = ref('')
+const testResults = ref<Record<number, string>>({})
+const testingIdx = ref(-1)
 const testingAll = ref(false)
 const testProgress = ref(0)
 const deletingFailed = ref(false)
@@ -245,15 +126,14 @@ const urlInput = ref('')
 const fileInput = ref<HTMLInputElement | null>(null)
 
 const showDetailModal = ref(false)
-const selectedSource = ref<BookSource | null>(null)
+const detailSource = ref<BookSource | null>(null)
+const detailSourceIndex = ref(-1)
 
 const showEditorModal = ref(false)
 const editJson = ref('')
-const editingSourceId = ref('')
 
 const showDebugPanel = ref(false)
-const debugSourceId = ref('')
-const debugBookUrl = ref('')
+const debugSourceIndex = ref(-1)
 
 const importing = ref(false)
 const importProgress = ref(0)
@@ -262,52 +142,46 @@ const importLabel = ref('准备导入...')
 let unlistenTest: (() => void) | null = null
 
 const filteredSources = computed(() => {
-  if (!searchText.value.trim()) return sources.value
+  if (!searchText.value.trim()) {
+    return sources.value.map((source, i) => ({ source, originalIndex: i }))
+  }
   const keyword = searchText.value.trim().toLowerCase()
-  return sources.value.filter(s =>
-    (s.bookSourceName || s.name || '').toLowerCase().includes(keyword) ||
-    s.url?.toLowerCase().includes(keyword) ||
-    s.id?.toLowerCase().includes(keyword) ||
-    s.group?.toLowerCase().includes(keyword) ||
-    s.comment?.toLowerCase().includes(keyword)
-  )
+  const result: { source: BookSource; originalIndex: number }[] = []
+  sources.value.forEach((source, i) => {
+    if (
+      (source.bookSourceName || source.name || '').toLowerCase().includes(keyword) ||
+      source.url?.toLowerCase().includes(keyword) ||
+      (source.group || '').toLowerCase().includes(keyword) ||
+      (source.comment || '').toLowerCase().includes(keyword)
+    ) result.push({ source, originalIndex: i })
+  })
+  return result
 })
 
-function formatTime(timestamp: number | string): string {
-  if (!timestamp) return '未知'
-  const ts = typeof timestamp === 'string' ? parseInt(timestamp) : timestamp
-  if (isNaN(ts) || ts === 0) return '未知'
-  const date = new Date(ts)
-  return date.toLocaleString('zh-CN')
-}
-
-function showSourceDetail(source: BookSource) {
-  selectedSource.value = source
-  showDetailModal.value = true
-}
-
+function setTestResult(idx: number, value: string) { testResults.value = { ...testResults.value, [idx]: value } }
+function openDebug(idx: number) { debugSourceIndex.value = idx; showDebugPanel.value = true }
 function openDebugFromDetail() {
-  if (!selectedSource.value) return
-  showDetailModal.value = false
-  setTimeout(() => {
-    openDebug(selectedSource.value!)
-  }, 200)
+  if (detailSourceIndex.value >= 0) {
+    showDetailModal.value = false
+    setTimeout(() => { debugSourceIndex.value = detailSourceIndex.value; showDebugPanel.value = true }, 200)
+  }
 }
 
-async function copySourceId() {
-  if (!selectedSource.value) return
-  try {
-    await navigator.clipboard.writeText(selectedSource.value.id)
-    message.success('已复制书源 ID')
-  } catch {
-    message.warning('复制失败，请手动复制')
+async function loadSources() {
+  try { sources.value = await store.get('sources') || [] } catch (err: any) { message.error('加载书源失败: ' + err.message) }
+}
+
+function showSourceDetail(idx: number) {
+  if (idx >= 0 && idx < sources.value.length) {
+    detailSource.value = sources.value[idx]
+    detailSourceIndex.value = idx
+    showDetailModal.value = true
   }
 }
 
 function openEditor() {
-  if (!selectedSource.value) return
-  editingSourceId.value = selectedSource.value.id
-  editJson.value = JSON.stringify(selectedSource.value, null, 2)
+  if (!detailSource.value) return
+  editJson.value = JSON.stringify(detailSource.value, null, 2)
   showDetailModal.value = false
   showEditorModal.value = true
 }
@@ -315,527 +189,186 @@ function openEditor() {
 async function saveSourceEdit() {
   try {
     const parsed = JSON.parse(editJson.value)
-    if (!parsed.id) {
-      message.error('书源缺少 id 字段')
-      return
-    }
-    
-    const allSources = await store.get('sources') || []
-    const index = allSources.findIndex((s: any) => s.id === parsed.id)
-    if (index === -1) {
-      message.error('书源不存在')
-      return
-    }
-    
-    allSources[index] = parsed
-    await store.set('sources', allSources)
-    sources.value = allSources
-    
+    sources.value[detailSourceIndex.value] = parsed
+    await store.set('sources', sources.value)
     showEditorModal.value = false
-    message.success(`✅ 已更新书源: ${getSourceName(parsed)}`)
-    
-    selectedSource.value = parsed
+    detailSource.value = parsed
     showDetailModal.value = true
-  } catch (err: any) {
-    message.error('JSON 格式错误: ' + err.message)
-  }
+    message.success('已保存')
+  } catch (err: any) { message.error('JSON 格式错误: ' + err.message) }
 }
 
-function openDebug(source: BookSource) {
-  debugSourceId.value = source.id
-  debugBookUrl.value = ''
-  showDebugPanel.value = true
-}
-
-async function loadSources() {
+async function testSource(idx: number) {
+  if (idx < 0 || idx >= sources.value.length) return
+  testingIdx.value = idx
   try {
-    const raw = await store.get('sources')
-    sources.value = raw || []
-    const sourceIds = new Set(sources.value.map(s => s.id))
-    for (const id of Object.keys(testResults.value)) {
-      if (!sourceIds.has(id)) {
-        delete testResults.value[id]
-      }
-    }
-  } catch (err: any) {
-    message.error('加载书源失败: ' + err.message)
-  }
-}
-
-async function testSource(source: BookSource) {
-  testingId.value = source.id
-  try {
-    const result = await sourceApi.test(source.id)
-    testResults.value[source.id] = result
-    message.success(`${getSourceName(source)}: ${result}`)
-  } catch (err: any) {
-    testResults.value[source.id] = '失败: ' + err.message
-    message.error(`${getSourceName(source)}: ${err.message}`)
-  } finally {
-    testingId.value = ''
-  }
+    const result = await sourceApi.test(idx)
+    setTestResult(idx, result)
+  } catch (err: any) { setTestResult(idx, '失败: ' + err.message) }
+  finally { testingIdx.value = -1 }
 }
 
 async function testAll() {
-  if (sources.value.length === 0) {
-    message.warning('没有书源可测试')
-    return
-  }
-
-  testingAll.value = true
-  testProgress.value = 0
-  testResults.value = {}
-
-  if (unlistenTest) {
-    try { unlistenTest() } catch {}
-    unlistenTest = null
-  }
-
-  try {
-    unlistenTest = window.electronAPI.on('source-test-result', (r: any) => {
-      if (r.status === 'ok') {
-        testResults.value[r.id] = `连接成功 · ${r.time_ms}ms · ${r.size_kb}KB`
-      } else {
-        testResults.value[r.id] = `失败: ${r.error || '未知错误'}`
-      }
-      testProgress.value++
-    })
-
-    await sourceApi.testAll()
-    await new Promise((resolve) => setTimeout(resolve, 2000))
-    message.success('测试完成')
-
-  } catch (err: any) {
-    message.error('测试失败: ' + err.message)
-  } finally {
-    testingAll.value = false
-    if (unlistenTest) {
-      try { unlistenTest() } catch {}
-      unlistenTest = null
-    }
-  }
+  if (!sources.value.length) { message.warning('没有书源可测试'); return }
+  if (unlistenTest) { try { unlistenTest() } catch {}; unlistenTest = null }
+  testingAll.value = true; testProgress.value = 0; testResults.value = {}
+  unlistenTest = window.electronAPI.on('source-test-result', (result: any) => {
+    if (result.status === 'ok') setTestResult(result.index, `连接成功 / ${result.time_ms}ms / ${result.size_kb}KB`)
+    else setTestResult(result.index, `失败: ${result.error || '未知错误'}`)
+    testProgress.value++
+  })
+  try { await sourceApi.testAll(); await new Promise(r => setTimeout(r, 2000)); message.success('测试完成') }
+  catch (err: any) { message.error('测试失败: ' + err.message) }
+  finally { testingAll.value = false; if (unlistenTest) { try { unlistenTest() } catch {}; unlistenTest = null } }
 }
 
-async function toggleSource(source: BookSource) {
+async function toggleSource(idx: number) {
   try {
-    const list = await store.get('sources') || []
-    const idx = list.findIndex((s: BookSource) => s.id === source.id)
-    if (idx !== -1) {
-      list[idx].enabled = !list[idx].enabled
-      await store.set('sources', list)
-      sources.value = list
-      message.success(`${getSourceName(source)} ${source.enabled ? '已禁用' : '已启用'}`)
-    }
-  } catch (err: any) {
-    message.error('操作失败: ' + err.message)
-  }
+    const result = await sourceApi.toggleSource(idx)
+    if (result.success) { sources.value[idx].enabled = result.enabled; sources.value = [...sources.value] }
+  } catch (err: any) { message.error('操作失败: ' + err.message) }
 }
 
-async function deleteSource(source: BookSource) {
+async function deleteSource(idx: number) {
+  if (idx < 0 || idx >= sources.value.length) return
   dialog.warning({
-    title: '确认删除',
-    content: `删除「${getSourceName(source)}」？`,
-    positiveText: '删除',
-    negativeText: '取消',
+    title: '确认删除', content: `删除「${getSourceName(sources.value[idx])}」？`, positiveText: '删除', negativeText: '取消',
     onPositiveClick: async () => {
-      try {
-        const list = await store.get('sources') || []
-        const filtered = list.filter((s: BookSource) => s.id !== source.id)
-        await store.set('sources', filtered)
-        sources.value = filtered
-        delete testResults.value[source.id]
-        message.success('已删除')
-      } catch (err: any) {
-        message.error('删除失败: ' + err.message)
-      }
+      try { const r = await sourceApi.deleteSource(idx); if (r?.success) { await loadSources(); message.success('已删除') } else message.error('删除失败') }
+      catch (err: any) { message.error('删除失败: ' + err.message) }
     },
   })
 }
 
 async function deleteFailed() {
-  if (sources.value.length === 0) {
-    message.warning('没有书源可操作')
-    return
-  }
-
+  if (!sources.value.length) { message.warning('没有书源可操作'); return }
   dialog.warning({
-    title: '删除失效书源',
-    content: `将测试所有 ${sources.value.length} 个书源，并删除连接失败的。`,
-    positiveText: '开始检测',
-    negativeText: '取消',
+    title: '删除失效书源', content: `将测试所有 ${sources.value.length} 个书源，并删除连接失败的。`, positiveText: '开始检测', negativeText: '取消',
     onPositiveClick: async () => {
       deletingFailed.value = true
-      try {
-        const result = await sourceApi.deleteFailed()
-        await loadSources()
-        message.success(`已删除 ${result} 个失效书源`)
-      } catch (err: any) {
-        message.error('操作失败: ' + err.message)
-      } finally {
-        deletingFailed.value = false
-      }
+      try { const r = await sourceApi.deleteFailed(); await loadSources(); message.success(`已删除 ${r} 个失效书源`) }
+      catch (err: any) { message.error('操作失败: ' + err.message) }
+      finally { deletingFailed.value = false }
     },
   })
 }
 
-function triggerFileInput() {
-  fileInput.value?.click()
-}
+function triggerFileInput() { fileInput.value?.click() }
 
 async function onFileSelected(event: Event) {
-  const input = event.target as HTMLInputElement
-  const file = input.files?.[0]
-  if (!file) return
-
-  importing.value = true
-  importProgress.value = 10
-  importLabel.value = '读取文件...'
-
-  try {
-    const text = await file.text()
-    importProgress.value = 30
-    importLabel.value = '解析书源...'
-
-    await sourceApi.add(text)
-    importProgress.value = 70
-    importLabel.value = '保存书源...'
-
-    await loadSources()
-    importProgress.value = 100
-    importLabel.value = '导入完成！'
-    message.success('导入成功')
-  } catch (err: any) {
-    message.error('导入失败: ' + err.message)
-    importLabel.value = '导入失败'
-  } finally {
-    input.value = ''
-    setTimeout(() => {
-      importing.value = false
-      importProgress.value = 0
-      importLabel.value = '准备导入...'
-    }, 800)
-  }
+  const input = event.target as HTMLInputElement; const file = input.files?.[0]; if (!file) return
+  importing.value = true; importProgress.value = 10; importLabel.value = '读取文件...'
+  try { const t = await file.text(); importProgress.value = 30; await sourceApi.add(t); await loadSources(); importProgress.value = 100; message.success('导入成功') }
+  catch (err: any) { message.error('导入失败: ' + err.message) }
+  finally { input.value = ''; setTimeout(() => { importing.value = false; importProgress.value = 0 }, 800) }
 }
 
-async function importJson() {
-  if (!jsonInput.value.trim()) {
-    message.warning('请粘贴书源 JSON')
-    return
-  }
-
+async function handleImportJson() {
+  if (!jsonInput.value.trim()) { message.warning('请粘贴书源 JSON'); return }
   importing.value = true
-  importProgress.value = 10
-  importLabel.value = '解析书源...'
-
-  try {
-    await sourceApi.add(jsonInput.value)
-    importProgress.value = 70
-    importLabel.value = '保存书源...'
-
-    jsonInput.value = ''
-    showJsonModal.value = false
-    await loadSources()
-    importProgress.value = 100
-    importLabel.value = '导入完成！'
-    message.success('导入成功')
-  } catch (err: any) {
-    message.error('导入失败: ' + err.message)
-    importLabel.value = '导入失败'
-  } finally {
-    setTimeout(() => {
-      importing.value = false
-      importProgress.value = 0
-      importLabel.value = '准备导入...'
-    }, 800)
-  }
+  try { await sourceApi.add(jsonInput.value); jsonInput.value = ''; showJsonModal.value = false; await loadSources(); message.success('导入成功') }
+  catch (err: any) { message.error('导入失败: ' + err.message) }
+  finally { setTimeout(() => { importing.value = false }, 800) }
 }
 
-async function importFromUrl() {
-  if (!urlInput.value.trim()) {
-    message.warning('请输入 URL')
-    return
-  }
-
+async function handleImportFromUrl() {
+  if (!urlInput.value.trim()) { message.warning('请输入 URL'); return }
   importing.value = true
-  importProgress.value = 10
-  importLabel.value = '下载书源...'
-
-  try {
-    importProgress.value = 30
-    await sourceApi.importFromUrl(urlInput.value)
-    importProgress.value = 70
-    importLabel.value = '保存书源...'
-
-    urlInput.value = ''
-    showUrlModal.value = false
-    await loadSources()
-    importProgress.value = 100
-    importLabel.value = '导入完成！'
-    message.success('导入成功')
-  } catch (err: any) {
-    message.error('导入失败: ' + err.message)
-    importLabel.value = '导入失败'
-  } finally {
-    setTimeout(() => {
-      importing.value = false
-      importProgress.value = 0
-      importLabel.value = '准备导入...'
-    }, 800)
-  }
+  try { await sourceApi.importFromUrl(urlInput.value); urlInput.value = ''; showUrlModal.value = false; await loadSources(); message.success('导入成功') }
+  catch (err: any) { message.error('导入失败: ' + err.message) }
+  finally { setTimeout(() => { importing.value = false }, 800) }
 }
 
-onMounted(() => {
-  loadSources()
-})
-
-onUnmounted(() => {
-  if (unlistenTest) {
-    try { unlistenTest() } catch {}
-  }
-})
+onMounted(() => { loadSources() })
+onUnmounted(() => { if (unlistenTest) { try { unlistenTest() } catch {} } })
 </script>
 
 <style scoped>
 .source-manager-page { position: relative; z-index: 1; }
-.page-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: flex-end;
-  margin-bottom: 24px;
-  flex-wrap: wrap;
-  gap: 12px;
-}
-.page-title { font-size: 28px; font-weight: 600; color: var(--text-primary); }
-.page-subtitle { font-size: 14px; color: var(--text-muted); margin-top: 4px; }
-.header-actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
 
-.search-wrapper { position: relative; }
 .input-search {
-  padding: 8px 12px;
-  font-size: 14px;
-  color: var(--text-primary);
-  background: var(--bg-card);
-  border: 1px solid var(--border-color);
-  border-radius: 8px;
-  outline: none;
   width: 180px;
-  transition: border-color 0.2s;
 }
-.input-search:focus { border-color: var(--brand); }
-.input-search::placeholder { color: var(--text-muted); }
 
 .import-progress {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 12px 16px;
-  background: var(--bg-card);
-  border-radius: 8px;
-  margin-bottom: 16px;
+  display: flex; align-items: center; gap: 12px; padding: 12px 16px;
+  background: var(--bg-card); border-radius: var(--radius-md); margin-bottom: 16px;
   border: 1px solid var(--border-color);
 }
-.progress-bar { flex: 1; height: 6px; background: var(--bg-hover); border-radius: 4px; overflow: hidden; }
-.progress-fill { height: 100%; background: var(--brand); border-radius: 4px; transition: width 0.3s ease; }
-.progress-text { font-size: 13px; color: var(--text-secondary); min-width: 40px; text-align: right; }
-.progress-label { font-size: 13px; color: var(--text-muted); min-width: 80px; }
+.progress-text { font-size: 13px; color: var(--text-secondary); font-weight: var(--font-medium); }
+.progress-label { font-size: 12px; color: var(--text-muted); }
 
-.source-list {
-  background: var(--bg-card);
-  border: 1px solid var(--border-color);
-  border-radius: 8px;
-  overflow: hidden;
-}
-
+.source-list { background: var(--bg-card); border: 1px solid var(--border-color); border-radius: var(--radius-lg); overflow: hidden; box-shadow: var(--shadow-sm); }
 .list-header {
-  display: grid;
-  grid-template-columns: 1fr 60px 1fr 200px;
-  padding: 10px 16px;
-  background: var(--bg-hover);
-  border-bottom: 1px solid var(--border-color);
-  font-size: 12px;
-  color: var(--text-muted);
-  font-weight: 500;
+  display: grid; grid-template-columns: 1fr 60px 1fr 180px; padding: 10px 18px;
+  background: var(--bg-hover); border-bottom: 1px solid var(--border-color);
+  font-size: 12px; color: var(--text-muted); font-weight: var(--font-medium);
+  text-transform: uppercase; letter-spacing: 0.04em;
 }
-
 .list-row {
-  display: grid;
-  grid-template-columns: 1fr 60px 1fr 200px;
-  padding: 10px 16px;
-  border-bottom: 1px solid var(--border-color);
-  align-items: center;
-  font-size: 14px;
-  cursor: pointer;
-  transition: background 0.15s;
+  display: grid; grid-template-columns: 1fr 60px 1fr 180px; padding: 12px 18px;
+  border-bottom: 1px solid var(--border-color); align-items: center;
+  font-size: 14px; cursor: pointer;
+  transition: background 0.18s var(--ease-out);
 }
 .list-row:hover { background: var(--bg-hover); }
 .list-row:last-child { border-bottom: none; }
+.list-row:focus-visible { outline: 2px solid var(--brand); outline-offset: -2px; }
+.source-name { color: var(--text-primary); font-weight: var(--font-medium); }
 
-.source-name { color: var(--text-primary); }
-.status-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  display: inline-block;
-}
-.status-dot.enabled { background: #4caf50; }
-.status-dot.disabled { background: #666; }
+.status-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+.status-dot.enabled { background: #4caf50; box-shadow: 0 0 6px rgba(76, 175, 80, 0.4); }
+.status-dot.disabled { background: rgba(128, 128, 128, 0.4); }
+
+.test-result { color: var(--text-secondary); font-size: 13px; }
 
 .row-actions { display: flex; gap: 4px; align-items: center; }
 .action-btn {
-  padding: 2px 10px;
-  font-size: 12px;
-  background: transparent;
-  border: 1px solid var(--border-color);
-  border-radius: 4px;
-  color: var(--text-secondary);
-  cursor: pointer;
-  transition: all 0.2s;
+  padding: 4px 14px; font-size: 12px; background: transparent;
+  border: 1px solid var(--border-color); border-radius: var(--radius-sm);
+  color: var(--text-secondary); cursor: pointer;
+  transition: border-color 0.2s var(--ease-out), color 0.2s var(--ease-out), background 0.2s var(--ease-out);
 }
-.action-btn:hover { border-color: var(--brand); color: var(--text-primary); }
+.action-btn:hover { border-color: var(--brand); color: var(--text-primary); background: var(--bg-hover); }
 .action-btn:disabled { opacity: 0.3; cursor: not-allowed; }
-.action-btn.danger:hover { border-color: #e74c3c; color: #e74c3c; }
-.action-btn.debug-btn {
-  border-color: var(--brand);
-  color: var(--brand);
-  font-size: 14px;
-  padding: 2px 6px;
-}
-.action-btn.debug-btn:hover { background: var(--brand); color: #0d0d0d; }
+.action-btn-danger:hover { border-color: #e74c3c; color: #e74c3c; background: rgba(231, 76, 60, 0.06); }
 
-.empty-state {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  padding: 60px 0;
-  text-align: center;
+.debug-btn {
+  border-color: var(--brand); color: var(--brand); padding: 4px 8px;
+  display: inline-flex; align-items: center; justify-content: center;
 }
-.empty-icon { font-size: 48px; margin-bottom: 16px; opacity: 0.5; }
-.empty-state h3 { font-size: 20px; color: var(--text-secondary); }
-.empty-state p { font-size: 14px; color: var(--text-muted); }
-
-.hidden { display: none; }
+.debug-btn:hover { background: var(--brand); color: #0f0f0f; }
 
 .source-detail { padding: 4px 0; max-height: 500px; overflow-y: auto; }
-.detail-section { margin-bottom: 16px; padding-bottom: 12px; border-bottom: 1px solid var(--border-color); }
+.detail-section { margin-bottom: 16px; padding-bottom: 14px; border-bottom: 1px solid var(--border-color); }
 .detail-section:last-child { border-bottom: none; margin-bottom: 0; }
-.detail-section.meta { opacity: 0.7; font-size: 13px; }
-.detail-label { font-size: 13px; font-weight: 600; color: var(--text-secondary); margin-bottom: 4px; display: block; }
-.detail-row { display: flex; padding: 2px 0; font-size: 13px; }
-.detail-row .detail-label { min-width: 70px; font-weight: 500; color: var(--text-muted); margin-bottom: 0; flex-shrink: 0; }
-.detail-value { color: var(--text-primary); word-break: break-all; }
-.detail-value.enabled-text { color: #4caf50; }
-.detail-value.disabled-text { color: #e74c3c; }
+.detail-label { font-size: 13px; font-weight: var(--font-semibold); color: var(--text-secondary); margin-bottom: 6px; display: block; }
+.detail-row { display: flex; padding: 3px 0; font-size: 13px; }
+.detail-row .detail-label { min-width: 70px; font-weight: var(--font-medium); color: var(--text-muted); margin-bottom: 0; flex-shrink: 0; }
+.detail-value { color: var(--text-primary); word-break: break-all; line-height: 1.5; }
+.detail-value.enabled-text { color: #4caf50; font-weight: var(--font-medium); }
+.detail-value.disabled-text { color: #e74c3c; font-weight: var(--font-medium); }
 .detail-value.url-text { font-size: 12px; color: var(--brand); word-break: break-all; }
 .detail-comment {
-  padding: 8px 12px;
-  background: var(--bg-hover);
-  border-radius: 6px;
-  font-size: 13px;
-  color: var(--text-secondary);
-  white-space: pre-wrap;
-  word-break: break-all;
-  max-height: 120px;
-  overflow-y: auto;
+  padding: 10px 14px; background: var(--bg-hover); border-radius: var(--radius-sm);
+  font-size: 13px; color: var(--text-secondary); white-space: pre-wrap;
+  max-height: 120px; overflow-y: auto; line-height: 1.6;
 }
 .rule-preview {
-  background: var(--bg);
-  border-radius: 6px;
-  padding: 8px 12px;
-  font-size: 12px;
-  font-family: monospace;
+  background: var(--bg); border-radius: var(--radius-sm); padding: 10px 14px;
+  font-size: 12px; font-family: var(--font-mono); line-height: 1.6;
 }
-.rule-item {
-  display: flex;
-  gap: 8px;
-  padding: 2px 0;
-  border-bottom: 1px solid var(--border-color);
-}
+.rule-item { display: flex; gap: 8px; padding: 2px 0; border-bottom: 1px solid var(--border-color); }
 .rule-item:last-child { border-bottom: none; }
 .rule-key { color: var(--text-muted); min-width: 44px; flex-shrink: 0; }
 .rule-value { color: var(--text-secondary); word-break: break-all; }
-.detail-actions { display: flex; gap: 8px; margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--border-color); flex-wrap: wrap; }
+.detail-actions { display: flex; gap: 8px; margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--border-color); flex-wrap: wrap; }
 
 .editor-container { padding: 4px 0; }
 .editor-hint {
-  padding: 8px 12px;
-  background: rgba(212, 160, 23, 0.10);
-  border: 1px solid rgba(212, 160, 23, 0.20);
-  border-radius: 6px;
-  font-size: 12px;
-  color: var(--text-secondary);
-  margin-bottom: 12px;
+  padding: 10px 14px; background: rgba(212,160,23,0.08); border: 1px solid rgba(212,160,23,0.15);
+  border-radius: var(--radius-sm); font-size: 12px; color: var(--text-secondary);
+  margin-bottom: 14px; line-height: 1.5;
 }
-.editor-textarea { font-family: 'Fira Code', monospace; font-size: 13px; line-height: 1.6; }
-
-.btn-primary {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-  padding: 8px 16px;
-  font-size: 14px;
-  font-weight: 500;
-  color: #0d0d0d;
-  background: var(--brand);
-  border: none;
-  border-radius: 8px;
-  cursor: pointer;
-  transition: all 0.2s;
-}
-.btn-primary:hover { background: var(--brand-hover); transform: translateY(-1px); }
-.btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
-
-.btn-secondary {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-  padding: 8px 16px;
-  font-size: 14px;
-  font-weight: 500;
-  color: var(--text-secondary);
-  background: transparent;
-  border: 1px solid var(--border-color);
-  border-radius: 8px;
-  cursor: pointer;
-  transition: all 0.2s;
-}
-.btn-secondary:hover { color: var(--text-primary); background: var(--bg-hover); border-color: var(--brand); }
-.btn-secondary:disabled { opacity: 0.5; cursor: not-allowed; }
-
-.btn-danger {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-  padding: 8px 16px;
-  font-size: 14px;
-  font-weight: 500;
-  color: #c0392b;
-  background: rgba(192, 57, 43, 0.10);
-  border: 1px solid rgba(192, 57, 43, 0.20);
-  border-radius: 8px;
-  cursor: pointer;
-  transition: all 0.2s;
-}
-.btn-danger:hover { background: #c0392b; color: white; }
-.btn-danger:disabled { opacity: 0.5; cursor: not-allowed; }
-
-.btn-edit {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-  padding: 8px 16px;
-  font-size: 14px;
-  font-weight: 500;
-  color: #0d0d0d;
-  background: #4caf50;
-  border: none;
-  border-radius: 8px;
-  cursor: pointer;
-  transition: all 0.2s;
-}
-.btn-edit:hover { background: #43a047; transform: translateY(-1px); }
+.editor-textarea { font-family: var(--font-mono); font-size: 13px; line-height: 1.7; }
 </style>

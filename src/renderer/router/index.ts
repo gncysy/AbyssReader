@@ -68,7 +68,8 @@ const routes: RouteRecordRaw[] = [
     meta: { title: 'WebDAV' },
   },
   {
-    path: '/settings/about',
+    path: '/settings/replaceRules', name: 'replaceRules', component: () => import('@/pages/settings/ReplaceRules.vue') },
+  { path: '/settings/about',
     name: 'settings-about',
     component: () => import('@/pages/settings/About.vue'),
     meta: { title: '关于' },
@@ -95,3 +96,4 @@ router.beforeEach((to, from, next) => {
 })
 
 export default router
+

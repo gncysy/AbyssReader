@@ -8,32 +8,29 @@
     <n-message-provider>
       <n-notification-provider>
         <n-dialog-provider>
-          <div class="app-shell" :data-theme="currentTheme" @dblclick="toggleMaximize">
-            <!-- 标题栏 -->
-            <div class="titlebar" :data-theme="currentTheme" @dblclick="toggleMaximize">
+          <div class="app-shell" :data-theme="effectiveTheme" @dblclick="toggleMaximize">
+            <div class="titlebar" :data-theme="effectiveTheme">
               <div class="titlebar-drag"></div>
-              <div class="titlebar-actions">
-                <button class="titlebar-btn" @click="minimize">─</button>
-                <button class="titlebar-btn" @click="toggleMaximize">☐</button>
-                <button class="titlebar-btn close" @click="closeWindow">✕</button>
-              </div>
             </div>
 
-            <!-- 主体 -->
             <div class="app-body">
-              <nav class="app-sidebar">
+              <nav class="app-sidebar" aria-label="主导航">
                 <div class="sidebar-logo">
                   <img src="/icons/icon.svg" alt="墨阅" class="logo-icon" />
                   <span class="logo-text">墨阅</span>
                 </div>
-
-                <div class="sidebar-menu">
+                <div class="sidebar-menu" role="navigation">
                   <div
                     v-for="item in navItems"
                     :key="item.route"
                     class="nav-item"
                     :class="{ active: currentRoute === item.route }"
+                    role="button"
+                    :tabindex="currentRoute === item.route ? -1 : 0"
+                    :aria-current="currentRoute === item.route ? 'page' : undefined"
                     @click="navigate(item.route)"
+                    @keydown.enter="navigate(item.route)"
+                    @keydown.space.prevent="navigate(item.route)"
                   >
                     <n-icon :size="20" class="nav-icon">
                       <component :is="item.icon" />
@@ -41,7 +38,6 @@
                     <span class="nav-label">{{ item.label }}</span>
                   </div>
                 </div>
-
                 <div class="sidebar-footer">
                   <div class="footer-version">v{{ appVersion }}</div>
                 </div>
@@ -58,15 +54,12 @@
             </div>
           </div>
 
-          <!-- 书籍详情浮窗（全局） -->
           <BookDetail
             v-if="bookshelfStore.showDetail"
             :book="bookshelfStore.detailBook!"
             :source="bookshelfStore.detailSource"
             @close="bookshelfStore.closeDetail()"
           />
-
-          <!-- 阅读器（全屏） -->
           <Reader
             v-if="bookshelfStore.showReader"
             :book="bookshelfStore.readerBook!"
@@ -84,12 +77,8 @@ import { ref, computed, onMounted, onUnmounted, watch, provide, nextTick } from 
 import { useRoute, useRouter } from 'vue-router'
 import { darkTheme, lightTheme, zhCN, dateZhCN, NIcon } from 'naive-ui'
 import {
-  BookOutline,
-  SearchOutline,
-  CompassOutline,
-  CloudOutline,
-  SettingsOutline,
-  AppsOutline,
+  BookOutline, SearchOutline, CompassOutline, CloudOutline,
+  SettingsOutline, AppsOutline,
 } from '@vicons/ionicons5'
 import { useBookshelfStore, useReadingStore } from '@/store'
 import { ROUTES, APP_VERSION } from '@shared/constants'
@@ -108,15 +97,17 @@ const currentTheme = computed({
 })
 
 const appVersion = APP_VERSION
+const effectiveTheme = ref('dark')
+
+function resolveEffectiveTheme(theme: string): string {
+  if (theme === 'system') return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
+  return theme
+}
 
 function applyThemeToDOM(theme: string) {
-  const root = document.documentElement
-  if (theme === 'system') {
-    const isDark = window.matchMedia('(prefers-color-scheme: dark)').matches
-    root.setAttribute('data-theme', isDark ? 'dark' : 'light')
-  } else {
-    root.setAttribute('data-theme', theme)
-  }
+  const resolved = resolveEffectiveTheme(theme)
+  document.documentElement.setAttribute('data-theme', resolved)
+  effectiveTheme.value = resolved
 }
 
 function setTheme(theme: string) {
@@ -129,22 +120,25 @@ function updateTitleBar(theme: string) {
   try {
     const api = window.electronAPI
     if (api && typeof api.invoke === 'function') {
-      api.invoke('update-title-bar-overlay', theme).catch(() => {})
+      nextTick(() => {
+        const style = getComputedStyle(document.documentElement)
+        const bgCard = style.getPropertyValue('--bg-card').trim()
+        const textPrimary = style.getPropertyValue('--text-primary').trim()
+        
+        api.invoke('update-title-bar-overlay', {
+          theme: theme,
+          backgroundColor: bgCard,
+          symbolColor: textPrimary,
+        }).catch(() => {})
+      })
     }
-  } catch {
-    // 忽略错误
-  }
+  } catch {}
 }
 
-provide('theme', {
-  current: currentTheme,
-  set: setTheme,
-})
+provide('theme', { current: currentTheme, set: setTheme })
 
 const theme = computed(() => {
-  if (currentTheme.value === 'dark' || currentTheme.value === 'system') {
-    return darkTheme
-  }
+  if (currentTheme.value === 'dark' || currentTheme.value === 'system') return darkTheme
   return lightTheme
 })
 
@@ -174,50 +168,35 @@ function navigate(routeName: string) {
   }
 }
 
-function minimize() {
-  window.electronAPI?.minimizeWindow?.()
-}
+function toggleMaximize() { window.electronAPI?.toggleMaximizeWindow?.() }
 
-function toggleMaximize() {
-  window.electronAPI?.toggleMaximizeWindow?.()
-}
-
-function closeWindow() {
-  window.electronAPI?.closeWindow?.()
-}
-
-function handleSystemThemeChange(e: MediaQueryListEvent) {
+function handleSystemThemeChange() {
   if (currentTheme.value === 'system') {
     applyThemeToDOM('system')
     updateTitleBar('system')
   }
 }
 
-let mediaListener: ((e: MediaQueryListEvent) => void) | null = null
+let mediaQuery: MediaQueryList | null = null
 
 async function initializeApp() {
   await readingStore.loadSettings()
   applyThemeToDOM(currentTheme.value)
   await nextTick()
-  setTimeout(() => {
-    updateTitleBar(currentTheme.value)
-  }, 100)
-  setTimeout(() => {
-    updateTitleBar(currentTheme.value)
-  }, 300)
+  setTimeout(() => updateTitleBar(currentTheme.value), 100)
+  setTimeout(() => updateTitleBar(currentTheme.value), 300)
 }
 
 onMounted(() => {
   initializeApp()
-  const media = window.matchMedia('(prefers-color-scheme: dark)')
-  mediaListener = handleSystemThemeChange
-  media.addEventListener('change', mediaListener)
+  mediaQuery = window.matchMedia('(prefers-color-scheme: dark)')
+  mediaQuery.addEventListener('change', handleSystemThemeChange)
 })
 
 onUnmounted(() => {
-  if (mediaListener) {
-    window.matchMedia('(prefers-color-scheme: dark)').removeEventListener('change', mediaListener)
-    mediaListener = null
+  if (mediaQuery) {
+    mediaQuery.removeEventListener('change', handleSystemThemeChange)
+    mediaQuery = null
   }
 })
 
@@ -228,21 +207,15 @@ watch(currentTheme, (val) => {
 </script>
 
 <style scoped>
-* {
-  box-sizing: border-box;
-  margin: 0;
-  padding: 0;
-}
-
 .app-shell {
   display: flex;
   flex-direction: column;
   height: 100vh;
   width: 100vw;
   overflow: hidden;
-  background: var(--bg);
+  background: var(--bg-card);
   color: var(--text-primary);
-  transition: background 0.3s, color 0.3s;
+  transition: background 0.3s var(--ease-out), color 0.3s var(--ease-out);
   border-radius: 12px;
   border: 1px solid var(--border-color);
 }
@@ -250,16 +223,13 @@ watch(currentTheme, (val) => {
 .titlebar {
   display: flex;
   align-items: center;
-  justify-content: flex-end;
-  height: 36px;
-  min-height: 36px;
-  background: var(--bg);
+  height: 40px;
+  min-height: 40px;
+  background: var(--bg-card);
   flex-shrink: 0;
   z-index: 20;
-  transition: background 0.3s, color 0.3s;
+  transition: background 0.3s var(--ease-out);
   -webkit-app-region: drag;
-  padding-right: 12px;
-  position: relative;
 }
 
 .titlebar-drag {
@@ -269,42 +239,10 @@ watch(currentTheme, (val) => {
   user-select: none;
 }
 
-.titlebar-actions {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  flex-shrink: 0;
-  -webkit-app-region: no-drag;
-}
-
-.titlebar-btn {
-  width: 28px;
-  height: 28px;
-  border: none;
-  border-radius: 6px;
-  background: transparent;
-  font-size: 14px;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  transition: all 0.15s ease;
-  color: var(--text-secondary);
-  -webkit-app-region: no-drag;
-}
-.titlebar-btn:hover {
-  background: var(--bg-hover);
-  color: var(--text-primary);
-}
-.titlebar-btn.close:hover {
-  background: #e74c3c !important;
-  color: white !important;
-}
-
 .app-body {
   display: flex;
   flex: 1;
-  height: calc(100vh - 36px);
+  height: calc(100vh - 40px);
   overflow: hidden;
 }
 
@@ -313,111 +251,59 @@ watch(currentTheme, (val) => {
   flex-direction: column;
   width: 200px;
   min-width: 200px;
-  padding: 24px 16px 20px;
+  padding: 20px 16px;
   background: var(--bg-card);
   border-right: 1px solid var(--border-color);
   flex-shrink: 0;
   height: 100%;
-  transition: background 0.3s, border-color 0.3s;
+  transition: background 0.3s var(--ease-out), border-color 0.3s var(--ease-out);
 }
 
 .sidebar-logo {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 0 8px 32px;
+  padding: 0 8px 28px;
   border-bottom: 1px solid var(--border-color);
   margin-bottom: 20px;
-  transition: border-color 0.3s;
+  transition: border-color 0.3s var(--ease-out);
 }
 
-.logo-icon {
-  width: 28px;
-  height: 28px;
-  display: block;
-  flex-shrink: 0;
-}
-.logo-text {
-  font-size: 16px;
-  font-weight: 600;
-  color: var(--text-primary);
-  letter-spacing: 0.08em;
-}
+.logo-icon { width: 28px; height: 28px; display: block; flex-shrink: 0; }
+.logo-text { font-size: 16px; font-weight: var(--font-semibold); color: var(--text-primary); letter-spacing: 0.04em; }
 
-.sidebar-menu {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
+.sidebar-menu { flex: 1; display: flex; flex-direction: column; gap: 2px; }
+.nav-item {
+  display: flex; align-items: center; gap: 12px;
+  padding: 10px 12px; border-radius: var(--radius-md); cursor: pointer;
+  transition: background 0.2s var(--ease-out), color 0.2s var(--ease-out);
+  color: var(--text-muted); min-height: 44px;
 }
-.sidebar-menu .nav-item {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 10px 12px;
-  border-radius: 10px;
-  cursor: pointer;
-  transition: all 0.2s;
-  color: var(--text-muted);
-}
-.sidebar-menu .nav-item:hover {
-  background: var(--bg-hover);
-  color: var(--text-secondary);
-}
-.sidebar-menu .nav-item.active {
-  background: var(--bg-active);
-  color: var(--brand);
-}
-.sidebar-menu .nav-item.active .nav-icon { color: var(--brand); }
-
+.nav-item:hover { background: var(--bg-hover); color: var(--text-secondary); }
+.nav-item:focus-visible { outline: 2px solid var(--brand); outline-offset: -2px; }
+.nav-item.active { background: var(--bg-active); color: var(--brand); font-weight: var(--font-medium); }
+.nav-item.active .nav-icon { color: var(--brand); }
 .nav-icon { flex-shrink: 0; }
-.nav-label { font-size: 14px; font-weight: 500; }
+.nav-label { font-size: 14px; font-weight: var(--font-medium); }
 
-.sidebar-footer {
-  padding-top: 16px;
-  border-top: 1px solid var(--border-color);
-  margin-top: auto;
-  transition: border-color 0.3s;
-}
-.footer-version {
-  font-size: 11px;
-  color: var(--text-muted);
-  opacity: 0.4;
-  letter-spacing: 0.08em;
-  text-align: center;
-}
+.sidebar-footer { padding-top: 16px; border-top: 1px solid var(--border-color); margin-top: auto; transition: border-color 0.3s var(--ease-out); }
+.footer-version { font-size: 12px; color: var(--text-muted); opacity: 0.45; letter-spacing: 0.04em; text-align: center; }
 
 .app-main {
-  flex: 1;
-  position: relative;
-  overflow-y: auto;
-  padding: 32px 40px 40px;
-  background: var(--bg);
-  min-width: 0;
-  height: 100%;
-  transition: background 0.3s;
+  flex: 1; position: relative; overflow-y: auto;
+  padding: 32px 40px 40px; background: var(--bg); min-width: 0; height: 100%;
+  transition: background 0.3s var(--ease-out);
 }
-
 .main-glow {
-  position: absolute;
-  top: -120px;
-  left: 50%;
-  transform: translateX(-50%);
-  width: 600px;
-  height: 300px;
-  background: radial-gradient(ellipse, var(--brand-glow) 0%, transparent 70%);
-  pointer-events: none;
-  z-index: 0;
+  position: absolute; top: -120px; left: 50%; transform: translateX(-50%);
+  width: 600px; height: 300px;
+  background: radial-gradient(ellipse, rgba(212,160,23,0.06) 0%, transparent 70%);
+  pointer-events: none; z-index: 0;
 }
 
 .page-enter-active, .page-leave-active {
-  transition: opacity 0.28s cubic-bezier(0.2,0,0,1), transform 0.28s cubic-bezier(0.2,0,0,1);
+  transition: opacity 0.3s var(--ease-out), transform 0.3s var(--ease-out);
 }
-.page-enter-from { opacity: 0; transform: translateY(6px); }
-.page-leave-to { opacity: 0; transform: translateY(-4px); }
-
-.app-main::-webkit-scrollbar { width: 4px; }
-.app-main::-webkit-scrollbar-track { background: transparent; }
-.app-main::-webkit-scrollbar-thumb { background: var(--border-color); border-radius: 4px; }
-.app-main::-webkit-scrollbar-thumb:hover { background: var(--text-muted); }
+.page-enter-from { opacity: 0; transform: translateY(8px); }
+.page-leave-to { opacity: 0; transform: translateY(-6px); }
 </style>

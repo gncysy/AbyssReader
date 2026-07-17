@@ -1,25 +1,10 @@
-/**
- * 规则解析引擎 - 对标 Legado AnalyzeRule.kt
- * 支持：@XPath、@Json、@CSS、@Js、@Regex、@put、@get、{{}}、##、||、&&、%%
- */
-
-import { executeCss } from './css.js'
+import { executeCss, parseCss } from './css.js'
 import { executeXPath } from './xpath.js'
 import { executeJsonPath } from './jsonpath.js'
 import { executeJs } from './js.js'
-import { executeRegex } from './regex.js'
+import { putContext, getContext } from '../context/shared.js'
 
-export type RuleMode = 'xpath' | 'json' | 'css' | 'js' | 'regex' | 'text'
-
-export interface ParsedRule {
-  type: RuleMode
-  expression: string
-  attribute?: string | null
-  cleanPattern?: string | null
-  cleanReplacement?: string | null
-  flags?: string | null
-  original: string
-}
+export type RuleMode = 'css' | 'json' | 'xpath' | 'js' | 'regex'
 
 export interface SourceRule {
   mode: RuleMode
@@ -32,208 +17,493 @@ export interface SourceRule {
 
 export interface RuleContext {
   source?: any
-  baseUrl?: string
-  redirectUrl?: string
   book?: any
   chapter?: any
   result?: any
-  src?: any
-  key?: string
-  page?: number
+  baseUrl?: string
   nextChapterUrl?: string
-  variables?: Record<string, any>
+  page?: number
+  key?: string
+  isUrl?: boolean
+  coroutineContext?: any
   [key: string]: any
 }
 
-const variableStore = new Map<string, any>()
+const JS_PATTERN = /<js>([\s\S]*?)<\/js>|@js:\s*([^\s,{]+)/gi
 
-export function putVariable(key: string, value: any): void {
-  variableStore.set(key, value)
-}
-
-export function getVariable(key: string): any {
-  return variableStore.get(key)
-}
-
-export function clearVariables(): void {
-  variableStore.clear()
-}
-
-const PUT_PATTERN = /@put:\s*\{([^}]+?)\}/gi
-const GET_PATTERN = /@get:\s*\{([^}]+?)\}/gi
-
-export function parseRule(ruleStr: string, context: RuleContext = { source: null }): SourceRule[] {
-  if (!ruleStr || typeof ruleStr !== 'string') return []
-  
-  const rules: SourceRule[] = []
-  let mode: RuleMode = 'css'
-  let start = 0
-  const trimmed = ruleStr.trim()
-  
-  if (trimmed.startsWith('$.')) { mode = 'json' }
-  else if (trimmed.match(/^@XPath:/i)) { mode = 'xpath'; start = 7 }
-  else if (trimmed.match(/^@Json:/i)) { mode = 'json'; start = 6 }
-  else if (trimmed.match(/^@CSS:/i)) { mode = 'css'; start = 5 }
-  else if (trimmed.match(/^@Js:/i)) { mode = 'js'; start = 4 }
-  else if (trimmed.match(/^@Regex:/i)) { mode = 'regex'; start = 7 }
-  else if (trimmed.match(/^@text:/i)) { mode = 'text'; start = 6 }
-  
-  let rule = start > 0 ? ruleStr.substring(start).trim() : ruleStr
-  const putMap: Record<string, string> = {}
-  
-  rule = rule.replace(PUT_PATTERN, (match, content) => {
-    try {
-      const pairs = content.split(',').map((p: string) => p.trim().split(':'))
-      for (const [key, value] of pairs) {
-        if (key && value) { putMap[key.trim()] = value.trim(); putVariable(key.trim(), value.trim()) }
-      }
-    } catch (e) {}
-    return ''
-  })
-  
-  rule = rule.replace(GET_PATTERN, (match, key) => {
-    const value = getVariable(key.trim())
-    return value !== undefined && value !== null ? String(value) : ''
-  })
-  
-  let replaceRegex = '', replacement = '', replaceFirst = false
-  const cleanParts = rule.split('##')
-  if (cleanParts.length >= 2) {
-    rule = cleanParts[0].trim()
-    replaceRegex = cleanParts[1].trim()
-    if (cleanParts.length >= 3) replacement = cleanParts[2] || ''
-    if (cleanParts.length >= 4) replaceFirst = true
+function isJsonContent(content: any): boolean {
+  if (content && typeof content === 'object' && content.type === 'tag') return false
+  if (typeof content === 'object' && content !== null) return true
+  if (typeof content === 'string') {
+    const trimmed = content.trim()
+    return (trimmed.startsWith('{') && trimmed.endsWith('}')) || (trimmed.startsWith('[') && trimmed.endsWith(']'))
   }
-  
-  // 处理 {{}} 模板
-  const evalMatches = rule.match(/\{\{[\s\S]*?\}\}/g)
-  if (evalMatches) {
-    for (const match of evalMatches) {
-      const jsContent = match.match(/\{\{([\s\S]*?)\}\}/)
-      if (jsContent) {
-        try {
-          const result = executeJs(context.source || {}, jsContent[1].trim(), context)
-          rule = rule.replace(match, result !== null && result !== undefined ? String(result) : '')
-        } catch (e) { rule = rule.replace(match, '') }
+  return false
+}
+
+/**
+ * 分离 @put:{} 规则，返回清理后的规则和 putMap
+ */
+function extractPutRule(ruleStr: string): { cleanedRule: string; putMap: Record<string, string> } {
+  const putMap: Record<string, string> = {}
+  let cleanedRule = ruleStr
+  const putPattern = /@put:\s*\{([^}]+)\}/gi
+
+  cleanedRule = cleanedRule.replace(putPattern, (_m: string, jsonStr: string) => {
+    try {
+      const parsed = JSON.parse(jsonStr)
+      Object.assign(putMap, parsed)
+    } catch {
+      // 兼容单引号和非标准格式
+      const pairs = jsonStr.replace(/'/g, '"').split(',').map(s => s.trim())
+      for (const pair of pairs) {
+        const colonIdx = pair.indexOf(':')
+        if (colonIdx > 0) {
+          const k = pair.substring(0, colonIdx).trim().replace(/["']/g, '')
+          let v = pair.substring(colonIdx + 1).trim().replace(/["']/g, '')
+          // 去掉可能的尾部逗号
+          v = v.replace(/,$/, '')
+          putMap[k] = v
+        }
       }
     }
-  }
-  
-  rule = rule.replace(/@js:\s*([\s\S]*?)(?=\s*(?:@\w+:|$))/gi, (match, code) => {
-    try {
-      const result = executeJs(context.source || {}, code.trim(), context)
-      return result !== null && result !== undefined ? String(result) : ''
-    } catch (e) { return '' }
+    return ''
   })
-  
-  rules.push({ mode, rule: rule.trim() || rule, replaceRegex, replacement, replaceFirst, putMap: Object.keys(putMap).length > 0 ? putMap : undefined })
+
+  return { cleanedRule, putMap }
+}
+
+const ruleCache = new Map<string, SourceRule[]>()
+const STRING_RULE_CACHE_MAX = 64
+
+/**
+ * 拆分为规则列表（对应 legado splitSourceRule）
+ * 按 @js: 和 <js></js> 分段，每段可能包含 ##替换规则
+ */
+export function parseRule(ruleStr: string, isJson: boolean = false): SourceRule[] {
+  if (!ruleStr) return []
+
+  const rules: SourceRule[] = []
+
+  // 先提取所有 @put
+  const { cleanedRule, putMap } = extractPutRule(ruleStr)
+  let remaining = cleanedRule.trim()
+  if (!remaining) return rules
+
+  // 判断默认模式
+  let defaultMode: RuleMode = isJson ? 'json' : 'css'
+
+  // 检查规则字符串级别的前缀
+  if (remaining.startsWith('$.')) { defaultMode = 'json' }
+  else if (remaining.startsWith('/')) { defaultMode = 'xpath' }
+  else if (remaining.toLowerCase().startsWith('@xpath:')) { defaultMode = 'xpath'; remaining = remaining.substring(7) }
+  else if (remaining.toLowerCase().startsWith('@json:')) { defaultMode = 'json'; remaining = remaining.substring(6) }
+  else if (remaining.toLowerCase().startsWith('@css:')) { defaultMode = 'css'; remaining = remaining.substring(5) }
+  else if (remaining.startsWith('@@')) { defaultMode = 'css'; remaining = remaining.substring(2) }
+
+  // 按 @js: 和 <js> 分段
+  let start = 0
+  let mode: RuleMode = defaultMode
+  const jsRe = new RegExp(JS_PATTERN.source, 'gi')
+  let jsMatch: RegExpExecArray | null
+
+  while ((jsMatch = jsRe.exec(remaining)) !== null) {
+    if (jsMatch.index > start) {
+      let tmp = remaining.substring(start, jsMatch.index).trim()
+      if (tmp) {
+        const subRules = splitRuleByHash(tmp, mode, putMap)
+        rules.push(...subRules)
+      }
+    }
+    const jsCode = jsMatch[2] || jsMatch[1]
+    rules.push({
+      mode: 'js',
+      rule: jsCode.trim(),
+      putMap: Object.keys(putMap).length > 0 ? { ...putMap } : undefined,
+    })
+    start = jsRe.lastIndex
+  }
+
+  if (remaining.length > start) {
+    let tmp = remaining.substring(start).trim()
+    if (tmp) {
+      const subRules = splitRuleByHash(tmp, mode, putMap)
+      rules.push(...subRules)
+    }
+  }
+
+  if (rules.length === 0 && Object.keys(putMap).length > 0) {
+    // 只有 putMap 没有规则
+    rules.push({ mode: defaultMode, rule: '', putMap: { ...putMap } })
+  }
+
   return rules
 }
 
-export function executeRule(source: any, rule: string, context: RuleContext = { source: null }): any {
-  if (!rule) return ''
-  const rules = parseRule(rule, context)
-  if (rules.length === 0) return ''
-  let result: any = source
-  
-  for (const sourceRule of rules) {
-    if (result === null || result === undefined) break
-    const ruleStr = sourceRule.rule
-    if (!ruleStr) continue
-    
-    if (sourceRule.replaceRegex) {
-      const regex = new RegExp(sourceRule.replaceRegex, 'g')
-      const repl = sourceRule.replacement || ''
-      if (typeof result === 'string') {
-        result = sourceRule.replaceFirst ? result.replace(regex, repl) : result.replace(regex, repl)
-      } else if (Array.isArray(result)) {
-        result = result.map(item => typeof item === 'string' ? (sourceRule.replaceFirst ? item.replace(regex, repl) : item.replace(regex, repl)) : item)
-      }
-      continue
+/**
+ * 拆分 ##替换规则
+ */
+function splitRuleByHash(
+  ruleFragment: string,
+  mode: RuleMode,
+  putMap: Record<string, string>
+): SourceRule[] {
+  const rules: SourceRule[] = []
+
+  if (!ruleFragment.includes('##')) {
+    rules.push({
+      mode,
+      rule: ruleFragment.trim(),
+      putMap: Object.keys(putMap).length > 0 ? { ...putMap } : undefined,
+    })
+    return rules
+  }
+
+  const parts = ruleFragment.split('##')
+  const mainRule = parts[0].trim()
+  let replaceRegex = ''
+  let replacement = ''
+  let replaceFirst = false
+
+  if (parts.length > 1) replaceRegex = parts[1]
+  if (parts.length > 2) replacement = parts[2]
+  if (parts.length > 3) replaceFirst = true
+
+  rules.push({
+    mode,
+    rule: mainRule,
+    replaceRegex: replaceRegex || undefined,
+    replacement: replacement || undefined,
+    replaceFirst: replaceFirst || undefined,
+    putMap: Object.keys(putMap).length > 0 ? { ...putMap } : undefined,
+  })
+
+  return rules
+}
+
+/**
+ * 获取缓存的规则列表（对应 legado splitSourceRuleCacheString）
+ */
+function getCachedRules(ruleStr: string, isJson: boolean): SourceRule[] {
+  let rules = ruleCache.get(ruleStr)
+  if (!rules) {
+    rules = parseRule(ruleStr, isJson)
+    if (ruleCache.size >= STRING_RULE_CACHE_MAX) {
+      // 简单淘汰：删第一个
+      const firstKey = ruleCache.keys().next().value
+      if (firstKey) ruleCache.delete(firstKey)
     }
-    
-    switch (sourceRule.mode) {
-      case 'xpath': result = executeXPath(result, ruleStr); break
-      case 'json': result = executeJsonPath(result, ruleStr); break
-      case 'js': result = executeJs(result, ruleStr, context); break
-      case 'regex': result = executeRegex(result, ruleStr); break
-      case 'text': result = ruleStr; break
-      default: result = executeCss(result, ruleStr); break
+    ruleCache.set(ruleStr, rules)
+  }
+  return rules
+}
+
+/**
+ * 执行 putMap，将变量存入上下文
+ */
+function executePut(putMap: Record<string, string> | undefined, context: RuleContext, data: any): void {
+  if (!putMap) return
+  const sourceKey = context.source?.bookSourceUrl || context.source?.url || 'default'
+  for (const [key, value] of Object.entries(putMap)) {
+    // 值本身可能是规则，需要解析
+    const resolvedValue = resolveValue(value, context, data)
+    putContext(sourceKey, key, resolvedValue)
+  }
+}
+
+/**
+ * 解析值中的 {{}} 和 @get:{} 引用
+ */
+function resolveValue(value: string, context: RuleContext, lastResult: any): string {
+  if (typeof value !== 'string') return String(value)
+
+  let result = value
+
+  // @get:{key}
+  result = result.replace(/@get:\{([^}]+)\}/gi, (_m: string, key: string) => {
+    const k = key.trim()
+    const sourceKey = context.source?.bookSourceUrl || context.source?.url || 'default'
+    return getContext(sourceKey, k) || ''
+  })
+
+  // {{expression}}
+  result = result.replace(/\{\{([^}]+)\}\}/g, (_m: string, expr: string) => {
+    const trimmed = expr.trim()
+    // 捕获组引用 $1 $2
+    if (/^\$\d+$/.test(trimmed) && Array.isArray(lastResult)) {
+      const idx = parseInt(trimmed.substring(1), 10)
+      if (idx < lastResult.length) return String(lastResult[idx] || '')
+    }
+    // 变量名
+    if (/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(trimmed)) {
+      const k = trimmed
+      if (lastResult !== null && lastResult !== undefined && typeof lastResult === 'object' && !Array.isArray(lastResult) && k in lastResult) {
+        return String(lastResult[k])
+      }
+      if (context[k] !== undefined) return String(context[k])
+      if (context.source?.[k] !== undefined) return String(context.source[k])
+      if (context.book?.[k] !== undefined) return String(context.book[k])
+      if (context.chapter?.[k] !== undefined) return String(context.chapter[k])
+      const sourceKey = context.source?.bookSourceUrl || context.source?.url || 'default'
+      const cached = getContext(sourceKey, k)
+      if (cached) return String(cached)
+      return ''
+    }
+    // JS 表达式
+    try {
+      const fn = new Function(
+        'result', 'src', 'book', 'source', 'chapter', 'baseUrl', 'page', 'key',
+        `return (${trimmed})`
+      )
+      const val = fn(lastResult, context.src, context.book, context.source, context.chapter, context.baseUrl, context.page, context.key)
+      if (val === undefined || val === null) return ''
+      return String(val)
+    } catch { return '' }
+  })
+
+  return result
+}
+
+/**
+ * 执行正则替换
+ */
+function applyReplaceRegex(result: string, pattern: string, replacement: string, replaceFirst?: boolean): string {
+  if (!pattern || typeof result !== 'string') return result
+  try {
+    if (replaceFirst) {
+      return result.replace(new RegExp(pattern), replacement)
+    }
+    return result.replace(new RegExp(pattern, 'g'), replacement)
+  } catch { return result }
+}
+
+/**
+ * 执行单条规则
+ */
+function executeSingleRule(
+  data: any,
+  sourceRule: SourceRule,
+  context: RuleContext,
+  lastResult: any
+): any {
+  const { mode, rule: rawRule, replaceRegex, replacement, replaceFirst, putMap } = sourceRule
+
+  // 执行 putMap
+  executePut(putMap, context, lastResult)
+
+  // 解析规则中的变量引用
+  const resolvedRule = rawRule ? resolveValue(rawRule, context, lastResult) : ''
+
+  // 空规则 → 返回上次结果
+  if (!resolvedRule) {
+    if (replaceRegex !== undefined && lastResult !== null && lastResult !== undefined) {
+      if (typeof lastResult === 'string') {
+        return applyReplaceRegex(lastResult, replaceRegex, replacement || '', replaceFirst)
+      }
+    }
+    return lastResult
+  }
+
+  // 处理 || 备选规则
+  if (resolvedRule.includes('||')) {
+    const options = resolvedRule.split('||').map(s => s.trim())
+    for (const option of options) {
+      const val = executeSingleRule(data, { mode, rule: option, replaceRegex, replacement, replaceFirst }, context, lastResult)
+      if (val !== null && val !== undefined && val !== '' &&
+        !(Array.isArray(val) && val.length === 0)) {
+        return val
+      }
+    }
+    return null
+  }
+
+  // 处理 && 合并规则
+  if (resolvedRule.includes('&&') && !resolvedRule.startsWith('@CSS:')) {
+    const parts = resolvedRule.split('&&').map(s => s.trim())
+    const results: string[] = []
+    for (const part of parts) {
+      const val = executeSingleRule(data, { mode, rule: part }, context, lastResult)
+      if (val !== null && val !== undefined && val !== '') {
+        if (Array.isArray(val)) results.push(...val.map(v => String(v)))
+        else results.push(String(val))
+      }
+    }
+    let finalResult: any = results.length > 0 ? results.join(',') : null
+    if (replaceRegex !== undefined && finalResult !== null) {
+      finalResult = applyReplaceRegex(String(finalResult), replaceRegex, replacement || '', replaceFirst)
+    }
+    return finalResult
+  }
+
+  const input = lastResult !== undefined ? lastResult : data
+  let stepResult: any
+
+  switch (mode) {
+    case 'js':
+      stepResult = executeJs(input, resolvedRule, {
+        ...context,
+        result: input,
+        src: data,
+        nextChapterUrl: context.nextChapterUrl || undefined,
+      })
+      break
+    case 'json':
+      stepResult = executeJsonPath(input, resolvedRule)
+      break
+    case 'xpath':
+      stepResult = executeXPath(input, resolvedRule)
+      break
+    case 'css':
+    default: {
+      const cssRule = parseCss(resolvedRule)
+      stepResult = executeCss(input, cssRule.expression, cssRule.attribute || undefined)
+      break
     }
   }
-  
-  if (result === null || result === undefined) return ''
-  if (Array.isArray(result)) return result
-  if (typeof result === 'object' && result !== null) return result
-  return String(result)
+
+  // 应用替换
+  if (replaceRegex !== undefined && stepResult !== null && stepResult !== undefined) {
+    if (typeof stepResult === 'string') {
+      stepResult = applyReplaceRegex(stepResult, replaceRegex, replacement || '', replaceFirst)
+    } else if (Array.isArray(stepResult)) {
+      stepResult = stepResult.map((item: any) =>
+        typeof item === 'string'
+          ? applyReplaceRegex(item, replaceRegex, replacement || '', replaceFirst)
+          : item !== null && item !== undefined
+            ? applyReplaceRegex(String(item), replaceRegex, replacement || '', replaceFirst)
+            : item
+      )
+    } else if (stepResult !== null && stepResult !== undefined) {
+      stepResult = applyReplaceRegex(String(stepResult), replaceRegex, replacement || '', replaceFirst)
+    }
+  }
+
+  return stepResult
 }
 
-export function executeRuleList(source: any, rule: string, context: RuleContext = { source: null }): string[] {
-  if (!rule) return []
-  const result = executeRule(source, rule, context)
-  if (!result) return []
-  if (Array.isArray(result)) return result.map(item => String(item)).filter(s => s)
-  if (typeof result === 'string') return result.split('\n').map(s => s.trim()).filter(s => s)
-  return [String(result)].filter(s => s)
+/**
+ * 获取单个字符串结果（对应 legado getString）
+ */
+export function getString(data: any, rule: string, context: RuleContext = {}): string {
+  if (!rule || rule === 'null' || rule === 'undefined') return ''
+
+  const isJson = isJsonContent(data)
+  const parsedData = isJson && typeof data === 'string'
+    ? (() => { try { return JSON.parse(data) } catch { return data } })()
+    : data
+
+  const rules = getCachedRules(rule, isJson)
+  if (rules.length === 0) return ''
+
+  let result: any = parsedData
+
+  // 如果数据是 NativeObject（JS 执行结果），特殊处理
+  if (result && typeof result === 'object' && !Array.isArray(result) && rules.length === 1) {
+    const sourceRule = rules[0]
+    executePut(sourceRule.putMap, context, result)
+    const resolvedRule = sourceRule.rule ? resolveValue(sourceRule.rule, context, result) : ''
+    if (resolvedRule && resolvedRule in result) {
+      result = result[resolvedRule]
+      if (sourceRule.replaceRegex !== undefined && typeof result === 'string') {
+        result = applyReplaceRegex(result, sourceRule.replaceRegex, sourceRule.replacement || '', sourceRule.replaceFirst)
+      }
+      return result !== null && result !== undefined ? String(result) : ''
+    }
+  }
+
+  for (const sourceRule of rules) {
+    const stepResult = executeSingleRule(parsedData, sourceRule, context, result)
+    if (stepResult === null || stepResult === undefined) return ''
+    result = stepResult
+  }
+
+  let finalResult: string
+  if (typeof result === 'string') finalResult = result
+  else if (Array.isArray(result) && result.length > 0) finalResult = String(result[0])
+  else if (result !== null && result !== undefined) finalResult = String(result)
+  else return ''
+
+  // HTML 实体解码
+  if (finalResult.indexOf('&') > -1) {
+    finalResult = finalResult
+      .replace(/&amp;/g, '&')
+      .replace(/&lt;/g, '<')
+      .replace(/&gt;/g, '>')
+      .replace(/&quot;/g, '"')
+      .replace(/&#39;/g, "'")
+      .replace(/&nbsp;/g, ' ')
+  }
+
+  // URL 处理
+  if (context.isUrl && finalResult) {
+    const base = context.baseUrl || context.source?.url || ''
+    if (base && !finalResult.startsWith('http')) {
+      if (finalResult.startsWith('/')) {
+        try { const u = new URL(base); finalResult = u.origin + finalResult } catch {}
+      } else {
+        finalResult = base.replace(/\/+$/, '') + '/' + finalResult.replace(/^\/+/, '')
+      }
+    }
+  }
+
+  return finalResult
 }
 
-export function executeRuleElements(source: any, rule: string, context: RuleContext = { source: null }): any[] {
+/**
+ * 获取元素列表（对应 legado getElements）
+ */
+export function getElements(data: any, rule: string, context: RuleContext = {}): any[] {
   if (!rule) return []
-  const result = executeRule(source, rule, context)
-  if (!result) return []
+
+  const isJson = isJsonContent(data)
+  const parsedData = isJson && typeof data === 'string'
+    ? (() => { try { return JSON.parse(data) } catch { return data } })()
+    : data
+
+  const rules = getCachedRules(rule, isJson)
+  if (rules.length === 0) return []
+
+  let result: any = parsedData
+
+  for (const sourceRule of rules) {
+    const stepResult = executeSingleRule(parsedData, sourceRule, context, result)
+    if (stepResult === null || stepResult === undefined) return []
+    result = stepResult
+  }
+
   if (Array.isArray(result)) return result
   return [result]
 }
 
-export function parseAndExecute(source: any, rule: string, context: RuleContext = { source: null }): any {
-  if (!source || !rule) return null
-  
-  const combinators = ['||', '&&', '%%']
-  let usedCombinator: string | null = null
-  let parts: string[] = [rule]
-  
-  for (const comb of combinators) {
-    if (rule.includes(comb)) {
-      usedCombinator = comb
-      parts = rule.split(comb).map(s => s.trim())
-      break
-    }
-  }
-  
-  if (parts.length === 1) return executeRule(source, parts[0], context)
-  
-  const results: any[] = []
-  for (const part of parts) results.push(executeRule(source, part, context))
-  const validResults = results.filter(r => r !== null && r !== undefined && r !== '')
-  
-  switch (usedCombinator) {
-    case '||': return validResults.length > 0 ? validResults[0] : null
-    case '&&': {
-      if (validResults.length === 0) return null
-      if (validResults.length === 1) return validResults[0]
-      const merged: string[] = []
-      for (const r of validResults) {
-        if (Array.isArray(r)) merged.push(...r.map(item => String(item)))
-        else merged.push(String(r))
-      }
-      return merged
-    }
-    case '%%': {
-      if (validResults.length === 0) return null
-      const matrixResults = validResults.map(r => Array.isArray(r) ? r : [r])
-      const maxLen = Math.max(...matrixResults.map(arr => arr.length))
-      const merged: string[] = []
-      for (let i = 0; i < maxLen; i++) {
-        for (const arr of matrixResults) {
-          if (i < arr.length) merged.push(String(arr[i]))
-        }
-      }
-      return merged
-    }
-    default: return validResults.length > 0 ? validResults[0] : null
-  }
+/**
+ * 获取元素（对应 legado getElement）
+ */
+export function getElement(data: any, rule: string, context: RuleContext = {}): any {
+  const elements = getElements(data, rule, context)
+  return elements.length > 0 ? elements[0] : null
 }
 
-export function parseFallbackRule(rule: string): string[] {
-  return rule.split(/\s*\|\|\s*/).filter(s => s.trim())
+export function executeRule(data: any, rule: string, context: RuleContext = {}): any {
+  return getString(data, rule, context)
+}
+
+export function executeRuleList(data: any, rule: string, context: RuleContext = {}): string[] {
+  if (!rule) return []
+  const result = getElements(data, rule, context)
+  return result.map((item: any) => typeof item === 'string' ? item : String(item))
+}
+
+export function executeRuleElements(data: any, rule: string, context: RuleContext = {}): any[] {
+  return getElements(data, rule, context)
+}
+
+export function parseAndExecute(data: any, rule: string, context: RuleContext = {}): any {
+  if (data === undefined || !rule) return null
+  return getString(data, rule, context)
+}
+
+export function parseFallbackRule(data: any, rule: string, fallback: string, context: RuleContext = {}): any {
+  const result = parseAndExecute(data, rule, context)
+  if (result !== null && result !== undefined && result !== '') return result
+  return parseAndExecute(data, fallback, context)
 }

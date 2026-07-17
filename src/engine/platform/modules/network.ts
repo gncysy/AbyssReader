@@ -22,7 +22,7 @@ export const network = {
       if (response.status >= 200 && response.status < 300) {
         lastTextResponse = typeof response.data === 'string' ? response.data : JSON.stringify(response.data);
         lastByteResponse = Buffer.from(response.data);
-        return response.data;
+        return { data: response.data, headers: response.headers, status: response.status };
       }
       throw new Error(`HTTP ${response.status}`);
     } catch (error: any) {
@@ -146,3 +146,4 @@ export const network = {
     }
   }
 };
+
