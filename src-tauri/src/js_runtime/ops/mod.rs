@@ -1,11 +1,13 @@
 pub mod ajax;
 pub mod crypto;
+pub mod dom;
 pub mod io;
 pub mod storage;
 pub mod webview_manager;
 
 pub use ajax::*;
 pub use crypto::*;
+pub use dom::*;
 pub use io::*;
 pub use storage::*;
 pub use webview_manager::*;
@@ -20,7 +22,6 @@ pub static MAIN_WINDOW: RwLock<Option<tauri::WebviewWindow>> = RwLock::new(None)
 pub static EMBEDDED_WEBVIEWS: std::sync::LazyLock<RwLock<HashMap<String, tauri::WebviewWindow>>> =
     std::sync::LazyLock::new(|| RwLock::new(HashMap::new()));
 
-// ─── 验证码等待结果存储（ops 层所有，commands 层通过函数读写） ───
 pub static VERIFICATION_PENDING: std::sync::LazyLock<parking_lot::Mutex<Option<String>>> =
     std::sync::LazyLock::new(|| parking_lot::Mutex::new(None));
 
@@ -151,7 +152,6 @@ pub fn load_cookies_from_file() -> String {
     if let Some(dir) = COOKIE_SAVE_PATH.get() {
         let path = dir.join("cookies.json");
         if let Ok(content) = std::fs::read_to_string(&path) {
-            // 解密（文件内容始终为加密格式）
             let decrypted = storage::decrypt_cookie_data(&content);
             if decrypted.is_empty() {
                 return "error: cookie 解密失败".into();
@@ -178,6 +178,7 @@ deno_core::extension!(
         crypto::op_java_des_base64_decode, crypto::op_java_des_base64_encode,
         crypto::op_java_rsa_set_public_key, crypto::op_java_rsa_set_private_key,
         crypto::op_java_rsa_encrypt, crypto::op_java_rsa_decrypt, crypto::op_java_sign,
+        dom::op_jsoup_before, dom::op_jsoup_after, dom::op_jsoup_prepend, dom::op_jsoup_append,
         io::op_jsoup_parse, io::op_jsoup_select, io::op_jsoup_text, io::op_jsoup_own_text, io::op_jsoup_attr, io::op_jsoup_html, io::op_jsoup_outer_html, io::op_jsoup_remove, io::op_jsoup_size, io::op_jsoup_get, io::op_jsoup_each_text, io::op_jsoup_children, io::op_jsoup_tag_name, io::op_java_cache_file, io::op_java_download_file,
         io::op_java_read_txt_file, io::op_java_read_file_bytes_base64,
         io::op_java_delete_file, io::op_java_get_txt_in_folder,

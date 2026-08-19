@@ -88,7 +88,6 @@
 
   Elements.prototype.select = function(css) {
     if (this._childElements !== null) {
-      // 对每个子元素执行 select，合并结果
       var allSelected = [];
       for (var i = 0; i < this._childElements.length; i++) {
         var subHtml = Deno.core.ops.op_jsoup_select(this._childElements[i], css);
@@ -106,6 +105,32 @@
 
   Elements.prototype.remove = function(css) {
     var result = Deno.core.ops.op_jsoup_remove(this._html, css || this._css);
+    this._html = result;
+    return this;
+  };
+
+  // ─── 新增 DOM 操作 ───
+
+  Elements.prototype.before = function(content) {
+    var result = Deno.core.ops.op_jsoup_before(this._html, this._css, String(content));
+    this._html = result;
+    return this;
+  };
+
+  Elements.prototype.after = function(content) {
+    var result = Deno.core.ops.op_jsoup_after(this._html, this._css, String(content));
+    this._html = result;
+    return this;
+  };
+
+  Elements.prototype.prepend = function(content) {
+    var result = Deno.core.ops.op_jsoup_prepend(this._html, this._css, String(content));
+    this._html = result;
+    return this;
+  };
+
+  Elements.prototype.append = function(content) {
+    var result = Deno.core.ops.op_jsoup_append(this._html, this._css, String(content));
     this._html = result;
     return this;
   };
@@ -173,12 +198,37 @@
   };
 
   Element.prototype.children = function() {
-    // MID-3 修复：保存子元素数组，不拼接
     var decoded = Deno.core.ops.op_jsoup_children(this._html);
     var childElements = JSON.parse(decoded);
     var result = new Elements("", "");
     result._childElements = childElements;
     return result;
+  };
+
+  // ─── 新增 DOM 操作 ───
+
+  Element.prototype.before = function(content) {
+    var result = Deno.core.ops.op_jsoup_before(this._html, "", String(content));
+    this._html = result;
+    return this;
+  };
+
+  Element.prototype.after = function(content) {
+    var result = Deno.core.ops.op_jsoup_after(this._html, "", String(content));
+    this._html = result;
+    return this;
+  };
+
+  Element.prototype.prepend = function(content) {
+    var result = Deno.core.ops.op_jsoup_prepend(this._html, "", String(content));
+    this._html = result;
+    return this;
+  };
+
+  Element.prototype.append = function(content) {
+    var result = Deno.core.ops.op_jsoup_append(this._html, "", String(content));
+    this._html = result;
+    return this;
   };
 
   Element.prototype.remove = function() {
