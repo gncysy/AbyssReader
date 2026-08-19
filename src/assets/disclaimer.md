@@ -4,7 +4,7 @@
 
 墨阅是一款开源的桌面端阅读辅助工具，基于 GPL-3.0 许可证发布。
 
-项目地址：[https://github.com/gncysy/AbyssReader-Tauri](https://github.com/gncysy/AbyssReader-Tauri)
+项目地址：[https://github.com/gncysy/AbyssReader](https://github.com/gncysy/AbyssReader)
 
 ## 内容来源
 
@@ -41,3 +41,4 @@
 ## 免责条款
 
 本软件按"原样"提供，不包含任何形式的明示或暗示担保，包括但不限于适销性、特定用途适用性及不侵权的担保。在任何情况下，开发者均不对因使用或无法使用本软件而产生的任何直接、间接、偶然、特殊或 consequential 损害承担责任。
+

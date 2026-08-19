@@ -1,14 +1,14 @@
 [package]
-name = "abyss-reader-tauri"
+name = "abyss-reader"
 version = "0.1.0"
 edition = "2021"
 
 [lib]
-name = "abyss_reader_tauri_lib"
+name = "abyss_reader_lib"
 crate-type = ["cdylib", "rlib"]
 
 [[bin]]
-name = "abyss-reader-tauri"
+name = "abyss-reader"
 path = "src/main.rs"
 
 [dependencies]
@@ -78,3 +78,4 @@ codegen-units = 4
 panic = "unwind"
 strip = true
 incremental = false
+

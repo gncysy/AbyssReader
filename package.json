@@ -1,5 +1,5 @@
 {
-  "name": "abyss-reader-tauri",
+  "name": "abyss-reader",
   "private": true,
   "version": "0.1.0",
   "type": "module",
@@ -51,3 +51,4 @@
     "vue-tsc": "^2.0.0"
   }
 }
+
