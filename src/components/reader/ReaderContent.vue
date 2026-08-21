@@ -31,7 +31,7 @@ import ScrollThumb from './ScrollThumb.vue'
 import LoadingSpinner from '@/components/common/LoadingSpinner.vue'
 import type { ComicImage } from '@engine/business/comic/index.js'
 
-const props = defineProps<{
+defineProps<{
   sanitizedContent: string
   isComic: boolean
   loadingContent: boolean

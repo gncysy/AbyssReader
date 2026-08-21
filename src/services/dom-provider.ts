@@ -4,6 +4,7 @@
 // ============================================
 
 import { setDomProvider, type DomProvider, type DomDocument, type DomNode } from '@engine/parser/dom/provider.js'
+import { getCachedRegex } from '@engine/utils/regex-cache.js'
 
 const TEXT_NODE_TAG = '#text'
 
@@ -75,104 +76,113 @@ function textNodesOf(node: Node): string[] {
   return result
 }
 
-/**
- * 解析 CSS 选择器中的 :contains()、:has()、:matches() 伪类
- * 返回 { baseSelector, containsTexts, hasSelectors, matchesTexts, notSelectors }
- */
-function parseExtendedSelector(selector: string): {
+function safeMatchGroup(match: RegExpExecArray, index: number): string {
+  const val = match[index]
+  return val !== undefined ? val : ''
+}
+
+interface SelectorParts {
   baseSelector: string
   containsTexts: string[]
   hasSelectors: string[]
   matchesTexts: string[]
   notHasTexts: string[]
-} {
+}
+
+function parseExtendedSelector(selector: string): SelectorParts {
   const containsTexts: string[] = []
   const hasSelectors: string[] = []
   const matchesTexts: string[] = []
   const notHasTexts: string[] = []
   let baseSelector = selector
 
-  // :contains(text)
-  const containsRegex = /:contains\(([^)]+)\)/g
-  let containsMatch: RegExpExecArray | null
-  while ((containsMatch = containsRegex.exec(selector)) !== null) {
-    const text = containsMatch[1].replace(/^['"]|['"]$/g, '')
-    containsTexts.push(text)
-  }
-  if (containsTexts.length > 0) {
-    baseSelector = baseSelector.replace(containsRegex, '')
+  const containsRegex = getCachedRegex(':contains\\(([^)]+)\\)', 'g')
+  const hasRegex = getCachedRegex(':has\\(([^)]+)\\)', 'g')
+  const notHasRegex = getCachedRegex(':not\\(:has\\(([^)]+)\\)\\)', 'g')
+  const notMatchesRegex = getCachedRegex(':not\\(:matches\\(([^)]+)\\)\\)', 'g')
+  const notOtherRegex = getCachedRegex(':not\\([^)]+\\)', 'g')
+  const matchesRegex = getCachedRegex(':matches\\(([^)]+)\\)', 'g')
+
+  if (containsRegex) {
+    containsRegex.lastIndex = 0
+    let m: RegExpExecArray | null
+    while ((m = containsRegex.exec(selector)) !== null) {
+      containsTexts.push(safeMatchGroup(m, 1).replace(/^['"]|['"]$/g, ''))
+    }
+    if (containsTexts.length > 0) {
+      const r = getCachedRegex(':contains\\([^)]+\\)', 'g')
+      if (r) baseSelector = baseSelector.replace(r, '')
+    }
   }
 
-  // :has(selector)
-  const hasRegex = /:has\(([^)]+)\)/g
-  let hasMatch: RegExpExecArray | null
-  while ((hasMatch = hasRegex.exec(selector)) !== null) {
-    hasSelectors.push(hasMatch[1])
-  }
-  if (hasSelectors.length > 0) {
-    baseSelector = baseSelector.replace(hasRegex, '')
-  }
-
-  // :not(:has(...)) — 提取"不包含"的文本
-  const notHasRegex = /:not\(:has\(([^)]+)\)\)/g
-  let notHasMatch: RegExpExecArray | null
-  while ((notHasMatch = notHasRegex.exec(selector)) !== null) {
-    notHasTexts.push(notHasMatch[1])
-  }
-  if (notHasTexts.length > 0) {
-    baseSelector = baseSelector.replace(notHasRegex, '')
+  if (hasRegex) {
+    hasRegex.lastIndex = 0
+    let m: RegExpExecArray | null
+    while ((m = hasRegex.exec(selector)) !== null) {
+      hasSelectors.push(safeMatchGroup(m, 1))
+    }
+    if (hasSelectors.length > 0) {
+      const r = getCachedRegex(':has\\([^)]+\\)', 'g')
+      if (r) baseSelector = baseSelector.replace(r, '')
+    }
   }
 
-  // :not(:matches(...)) — 提取"不匹配"的文本
-  const notMatchesRegex = /:not\(:matches\(([^)]+)\)\)/g
-  let notMatchesMatch: RegExpExecArray | null
-  while ((notMatchesMatch = notMatchesRegex.exec(selector)) !== null) {
-    const text = notMatchesMatch[1].replace(/^['"]|['"]$/g, '')
-    notHasTexts.push(text)
-  }
-  if (notHasTexts.length > 0) {
-    baseSelector = baseSelector.replace(notMatchesRegex, '')
+  if (notHasRegex) {
+    notHasRegex.lastIndex = 0
+    let m: RegExpExecArray | null
+    while ((m = notHasRegex.exec(selector)) !== null) {
+      notHasTexts.push(safeMatchGroup(m, 1))
+    }
+    if (notHasTexts.length > 0) {
+      const r = getCachedRegex(':not\\(:has\\([^)]+\\)\\)', 'g')
+      if (r) baseSelector = baseSelector.replace(r, '')
+    }
   }
 
-  // :not(selector) — 其他 :not() 忽略（降级：不排除任何元素）
-  baseSelector = baseSelector.replace(/:not\([^)]+\)/g, '')
-
-  // :matches(text)
-  const matchesRegex = /:matches\(([^)]+)\)/g
-  let matchesMatch: RegExpExecArray | null
-  while ((matchesMatch = matchesRegex.exec(selector)) !== null) {
-    const text = matchesMatch[1].replace(/^['"]|['"]$/g, '')
-    matchesTexts.push(text)
+  if (notMatchesRegex) {
+    notMatchesRegex.lastIndex = 0
+    let m: RegExpExecArray | null
+    while ((m = notMatchesRegex.exec(selector)) !== null) {
+      const text = safeMatchGroup(m, 1).replace(/^['"]|['"]$/g, '')
+      notHasTexts.push(text)
+    }
+    if (notHasTexts.length > 0) {
+      const r = getCachedRegex(':not\\(:matches\\([^)]+\\)\\)', 'g')
+      if (r) baseSelector = baseSelector.replace(r, '')
+    }
   }
-  if (matchesTexts.length > 0) {
-    baseSelector = baseSelector.replace(matchesRegex, '')
+
+  if (notOtherRegex) {
+    baseSelector = baseSelector.replace(notOtherRegex, '')
+  }
+
+  if (matchesRegex) {
+    matchesRegex.lastIndex = 0
+    let m: RegExpExecArray | null
+    while ((m = matchesRegex.exec(selector)) !== null) {
+      matchesTexts.push(safeMatchGroup(m, 1).replace(/^['"]|['"]$/g, ''))
+    }
+    if (matchesTexts.length > 0) {
+      const r = getCachedRegex(':matches\\([^)]+\\)', 'g')
+      if (r) baseSelector = baseSelector.replace(r, '')
+    }
   }
 
   return { baseSelector, containsTexts, hasSelectors, matchesTexts, notHasTexts }
 }
 
-/**
- * 检查元素是否匹配 :matches() 正则
- */
 function matchesElementText(el: Element, patterns: string[]): boolean {
   if (patterns.length === 0) return true
   const text = el.textContent || ''
   for (const pattern of patterns) {
-    try {
-      const regex = new RegExp(pattern)
-      if (!regex.test(text)) {
-        return false
-      }
-    } catch {
-      // 正则无效，跳过
+    const regex = getCachedRegex(pattern)
+    if (regex && !regex.test(text)) {
+      return false
     }
   }
   return true
 }
 
-/**
- * 检查元素是否包含指定的子选择器
- */
 function hasChildSelector(el: Element, selectors: string[]): boolean {
   if (selectors.length === 0) return true
   for (const sel of selectors) {
@@ -187,9 +197,6 @@ function hasChildSelector(el: Element, selectors: string[]): boolean {
   return false
 }
 
-/**
- * 执行带扩展伪类的 querySelectorAll
- */
 function querySelectorAllWithExtended(
   root: Document | Element,
   selector: string,
@@ -210,36 +217,29 @@ function querySelectorAllWithExtended(
   return elements.filter((el) => {
     const text = el.textContent || ''
 
-    // :contains() 过滤
     for (const searchText of containsTexts) {
       if (!text.includes(searchText)) {
         return false
       }
     }
 
-    // :has() 过滤
     if (hasSelectors.length > 0 && !hasChildSelector(el, hasSelectors)) {
       return false
     }
 
-    // :matches() 过滤
     if (!matchesElementText(el, matchesTexts)) {
       return false
     }
 
-    // :not(:has(...)) / :not(:matches(...)) 排除
     for (const notText of notHasTexts) {
-      // 尝试作为正则匹配
-      try {
-        const regex = new RegExp(notText)
+      const regex = getCachedRegex(notText)
+      if (regex) {
+        regex.lastIndex = 0
         if (regex.test(text)) {
           return false
         }
-      } catch {
-        // 尝试作为文本包含
-        if (text.includes(notText)) {
-          return false
-        }
+      } else if (text.includes(notText)) {
+        return false
       }
     }
 
@@ -248,13 +248,13 @@ function querySelectorAllWithExtended(
 }
 
 class BrowserDomProvider implements DomProvider {
-  parseHTML(html: string, _baseUrl?: string): DomDocument {
+  parseHTML(html: string): DomDocument {
     const parser = new DOMParser()
     const doc = parser.parseFromString(html, 'text/html')
     return this.wrapDocument(doc)
   }
 
-  parseXML(xml: string, _baseUrl?: string): DomDocument {
+  parseXML(xml: string): DomDocument {
     const parser = new DOMParser()
     const doc = parser.parseFromString(xml, 'application/xml')
     return this.wrapDocument(doc)

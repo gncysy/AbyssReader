@@ -5,32 +5,9 @@ use parking_lot::Mutex;
 use tauri::Emitter;
 use crate::storage::cache::{self, CacheCategory};
 
-fn with_blocking_client<F, R>(f: F) -> R
-where
-    F: FnOnce(&reqwest::blocking::Client) -> R + Send + 'static,
-    R: Send + 'static,
-{
-    let (tx, rx) = std::sync::mpsc::channel();
-    let handle = std::thread::spawn(move || {
-        let client = reqwest::blocking::Client::builder()
-            .user_agent(crate::js_runtime::ops::get_ua())
-            .danger_accept_invalid_certs(true)
-            .redirect(reqwest::redirect::Policy::limited(5))
-            .timeout(std::time::Duration::from_secs(30))
-            .build()
-            .unwrap();
-        let result = f(&client);
-        let _ = tx.send(result);
-    });
-
-    match rx.recv() {
-        Ok(result) => result,
-        Err(_) => {
-            let _ = handle.join();
-            panic!("with_blocking_client: 线程异常退出")
-        }
-    }
-}
+const MAX_UNARCHIVE_TOTAL_BYTES: u64 = 200 * 1024 * 1024; // 200MB
+const MAX_UNARCHIVE_FILE_BYTES: u64 = 50 * 1024 * 1024; // 50MB 单文件
+const MAX_UNARCHIVE_FILES: usize = 500;
 
 #[op2]
 #[string]
@@ -179,21 +156,23 @@ pub fn op_java_cache_file(#[string] url: String) -> String {
     let url_clone = url.clone();
     let cache_key_clone = cache_key.clone();
 
-    with_blocking_client(move |client| match client.get(&url_clone).send() {
-        Ok(resp) => {
-            if resp.status().is_success() {
-                match resp.text() {
-                    Ok(text) => {
-                        let _ = cache::cache_put(CacheCategory::Lib, &cache_key_clone, text.as_bytes());
-                        text
+    crate::js_runtime::ops::common::with_blocking_client(move |client| {
+        match client.get(&url_clone).send() {
+            Ok(resp) => {
+                if resp.status().is_success() {
+                    match resp.text() {
+                        Ok(text) => {
+                            let _ = cache::cache_put(CacheCategory::Lib, &cache_key_clone, text.as_bytes());
+                            text
+                        }
+                        Err(_) => String::new(),
                     }
-                    Err(_) => String::new(),
+                } else {
+                    String::new()
                 }
-            } else {
-                String::new()
             }
+            Err(_) => String::new(),
         }
-        Err(_) => String::new(),
     })
 }
 
@@ -208,21 +187,23 @@ pub fn op_java_download_file(#[string] url: String) -> String {
     let url_clone = url.clone();
     let cache_key_clone = cache_key.clone();
 
-    with_blocking_client(move |client| match client.get(&url_clone).send() {
-        Ok(resp) => {
-            if resp.status().is_success() {
-                match resp.text() {
-                    Ok(text) => {
-                        let _ = cache::cache_put(CacheCategory::Lib, &cache_key_clone, text.as_bytes());
-                        cache_key_clone
+    crate::js_runtime::ops::common::with_blocking_client(move |client| {
+        match client.get(&url_clone).send() {
+            Ok(resp) => {
+                if resp.status().is_success() {
+                    match resp.text() {
+                        Ok(text) => {
+                            let _ = cache::cache_put(CacheCategory::Lib, &cache_key_clone, text.as_bytes());
+                            cache_key_clone
+                        }
+                        Err(_) => String::new(),
                     }
-                    Err(_) => String::new(),
+                } else {
+                    String::new()
                 }
-            } else {
-                String::new()
             }
+            Err(_) => String::new(),
         }
-        Err(_) => String::new(),
     })
 }
 
@@ -372,21 +353,46 @@ pub fn op_java_unarchive_file(#[string] path: String) -> String {
             let reader = std::io::BufReader::new(file);
             match zip::ZipArchive::new(reader) {
                 Ok(mut archive) => {
+                    // 修复：zip bomb 防护
+                    let mut total_bytes: u64 = 0;
+                    let mut file_count: usize = 0;
+
                     for i in 0..archive.len() {
-                        if let Ok(mut entry) = archive.by_index(i) {
-                            if let Some(name) = entry.enclosed_name() {
-                                let out_path = out_dir.join(name);
-                                if entry.is_dir() {
-                                    let _ = std::fs::create_dir_all(&out_path);
-                                } else {
-                                    if let Some(parent) = out_path.parent() {
-                                        let _ = std::fs::create_dir_all(parent);
-                                    }
-                                    if let Ok(mut outfile) = std::fs::File::create(&out_path) {
-                                        let _ = std::io::copy(&mut entry, &mut outfile);
-                                    }
+                        if file_count >= MAX_UNARCHIVE_FILES {
+                            return format!("error: 压缩包文件数超过限制 ({})", MAX_UNARCHIVE_FILES);
+                        }
+
+                        let mut entry = match archive.by_index(i) {
+                            Ok(e) => e,
+                            Err(_) => continue,
+                        };
+
+                        let entry_size = entry.size();
+
+                        // 单文件大小限制
+                        if entry_size > MAX_UNARCHIVE_FILE_BYTES {
+                            return format!("error: 压缩包内文件过大 ({})", entry_size);
+                        }
+
+                        // 总大小限制
+                        total_bytes += entry_size;
+                        if total_bytes > MAX_UNARCHIVE_TOTAL_BYTES {
+                            return format!("error: 压缩包解压后总大小超过限制 ({})", MAX_UNARCHIVE_TOTAL_BYTES);
+                        }
+
+                        if let Some(name) = entry.enclosed_name() {
+                            let out_path = out_dir.join(name);
+                            if entry.is_dir() {
+                                let _ = std::fs::create_dir_all(&out_path);
+                            } else {
+                                if let Some(parent) = out_path.parent() {
+                                    let _ = std::fs::create_dir_all(parent);
+                                }
+                                if let Ok(mut outfile) = std::fs::File::create(&out_path) {
+                                    let _ = std::io::copy(&mut entry, &mut outfile);
                                 }
                             }
+                            file_count += 1;
                         }
                     }
                     out_dir.to_string_lossy().to_string()
@@ -405,18 +411,20 @@ pub fn op_java_zip_content(#[string] data: String, #[string] path_in_zip: String
 
     let data_clone = data.clone();
     let bytes: Vec<u8> = if data.starts_with("http://") || data.starts_with("https://") {
-        with_blocking_client(move |client| match client.get(&data_clone).send() {
-            Ok(resp) => {
-                if resp.status().is_success() {
-                    match resp.bytes() {
-                        Ok(b) => b.to_vec(),
-                        Err(_) => Vec::new(),
+        crate::js_runtime::ops::common::with_blocking_client_bytes(move |client| {
+            match client.get(&data_clone).send() {
+                Ok(resp) => {
+                    if resp.status().is_success() {
+                        match resp.bytes() {
+                            Ok(b) => b.to_vec(),
+                            Err(_) => Vec::new(),
+                        }
+                    } else {
+                        Vec::new()
                     }
-                } else {
-                    Vec::new()
                 }
+                Err(_) => Vec::new(),
             }
-            Err(_) => Vec::new(),
         })
     } else {
         match base64::engine::general_purpose::STANDARD.decode(&data) {
@@ -460,18 +468,20 @@ fn load_font_bytes(data: &str) -> Result<Vec<u8>, String> {
 
     let data_string = data.to_string();
     let bytes: Vec<u8> = if data.starts_with("http://") || data.starts_with("https://") {
-        with_blocking_client(move |client| match client.get(&data_string).send() {
-            Ok(resp) => {
-                if resp.status().is_success() {
-                    match resp.bytes() {
-                        Ok(b) => b.to_vec(),
-                        Err(_) => Vec::new(),
+        crate::js_runtime::ops::common::with_blocking_client_bytes(move |client| {
+            match client.get(&data_string).send() {
+                Ok(resp) => {
+                    if resp.status().is_success() {
+                        match resp.bytes() {
+                            Ok(b) => b.to_vec(),
+                            Err(_) => Vec::new(),
+                        }
+                    } else {
+                        Vec::new()
                     }
-                } else {
-                    Vec::new()
                 }
+                Err(_) => Vec::new(),
             }
-            Err(_) => Vec::new(),
         })
     } else {
         use base64::Engine;
@@ -572,4 +582,21 @@ pub fn op_java_get_verification_code(#[string] svg: String) -> String {
 
         std::thread::sleep(std::time::Duration::from_millis(VERIFICATION_WAIT_INTERVAL_MS));
     }
+}
+
+#[op2]
+pub fn op_java_str_to_bytes(#[string] input: String, #[string] charset: String) -> Vec<u8> {
+    let enc = encoding_rs::Encoding::for_label(charset.as_bytes())
+        .unwrap_or(encoding_rs::UTF_8);
+    let (bytes, _, _) = enc.encode(&input);
+    bytes.to_vec()
+}
+
+#[op2]
+#[string]
+pub fn op_java_bytes_to_str(#[buffer] input: &[u8], #[string] charset: String) -> String {
+    let enc = encoding_rs::Encoding::for_label(charset.as_bytes())
+        .unwrap_or(encoding_rs::UTF_8);
+    let (text, _, _) = enc.decode(input);
+    text.into_owned()
 }

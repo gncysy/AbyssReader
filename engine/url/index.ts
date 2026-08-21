@@ -3,8 +3,7 @@
 // ============================================
 
 import { getJsRuntime } from '../parser/js-executor.js'
-import { RuleAnalyzer } from '../parser/rule-analyzer.js'
-import type { UrlAnalysis } from '../types.js'
+import type { UrlAnalysis, EngineBookSource, EngineBook, EngineChapter } from '../types.js'
 
 const PAGE_PATTERN = /<(.*?)>/g
 const PARAM_PATTERN = /\s*,\s*(?=\{)/
@@ -44,7 +43,9 @@ export function resolveUrl(url: string, baseUrl?: string): string {
   if (/^data:/i.test(relativePathTrim)) return relativePathTrim
   if (relativePathTrim.toLowerCase().startsWith('javascript')) return ''
 
-  const cleanBase = baseUrl.substring(0, baseUrl.indexOf(',')).trim()
+  // 修复：当 baseUrl 没有逗号时不应截断
+  const commaIndex = baseUrl.indexOf(',')
+  const cleanBase = commaIndex === -1 ? baseUrl.trim() : baseUrl.substring(0, commaIndex).trim()
 
   try {
     return new URL(relativePathTrim, cleanBase).toString()
@@ -81,10 +82,11 @@ export function getSubDomain(url: string): string {
   }
 }
 
-export function buildUrl(url: string, baseUrl: string, variables: Record<string, any> = {}): string {
+export function buildUrl(url: string, baseUrl: string, variables: Record<string, unknown> = {}): string {
   if (!url) return ''
   let result = url
   for (const [key, val] of Object.entries(variables)) {
+    if (val === null || val === undefined) continue
     result = result.replace(new RegExp('\\{\\{' + key + '\\}\\}', 'g'), encodeURIComponent(String(val)))
   }
   return resolveUrl(result, baseUrl)
@@ -102,36 +104,34 @@ function parseUrlOption(jsonStr: string): UrlOption | null {
   }
 }
 
-/**
- * 对 URL 的 query 参数部分进行非 ASCII 字符编码
- */
 function encodeQueryNonAscii(url: string): string {
   const queryIdx = url.indexOf('?')
   if (queryIdx === -1) return url
   const base = url.substring(0, queryIdx + 1)
   const query = url.substring(queryIdx + 1)
-  // 只编码非 ASCII 字符（ASCII 包括 % 已编码的保留）
   const encoded = query.replace(/[^\x00-\x7F%]/g, (ch) => encodeURIComponent(ch))
   return base + encoded
 }
 
+export interface AnalyzeUrlOptions {
+  baseUrl?: string
+  key?: string
+  page?: number
+  source?: EngineBookSource
+  book?: Partial<EngineBook>
+  chapter?: Partial<EngineChapter>
+  headerMap?: Record<string, string>
+  speakText?: string
+  speakSpeed?: number
+}
+
 export async function analyzeUrl(
   ruleUrl: string,
-  options: {
-    baseUrl?: string
-    key?: string
-    page?: number
-    source?: any
-    book?: any
-    chapter?: any
-    headerMap?: Record<string, string>
-    speakText?: string
-    speakSpeed?: number
-  } = {},
+  options: AnalyzeUrlOptions = {},
 ): Promise<UrlAnalysis> {
   let baseUrl = options.baseUrl || ''
   const urlMatcher = PARAM_PATTERN.exec(baseUrl)
-  if (urlMatcher) baseUrl = baseUrl.substring(0, urlMatcher.start())
+  if (urlMatcher) baseUrl = baseUrl.substring(0, urlMatcher.index)
   const hashIdx = baseUrl.indexOf('#')
   if (hashIdx !== -1) baseUrl = baseUrl.substring(0, hashIdx)
 
@@ -206,11 +206,11 @@ export async function analyzeUrl(
     const runtime = getJsRuntime()
 
     while ((templateMatch = templateRegex.exec(ruleUrlProcessed)) !== null) {
-      const jsCode = templateMatch[1].trim()
-      if (!jsCode) continue
+      const jsCode = templateMatch[1]
+      if (!jsCode || !jsCode.trim()) continue
       if (runtime) {
         try {
-          const r = await runtime.execute(jsCode, {
+          const r = await runtime.execute(jsCode.trim(), {
             result: ruleUrlProcessed,
             baseUrl,
             source: options.source || {},
@@ -234,7 +234,8 @@ export async function analyzeUrl(
     ruleUrlProcessed = ruleUrlProcessed.replace(PAGE_PATTERN, (_m, pagesStr: string) => {
       const pages = pagesStr.split(',').map((s: string) => s.trim())
       const idx = options.page! - 1
-      return idx < pages.length ? pages[idx] : pages[pages.length - 1]
+      const page = pages[idx]
+      return page !== undefined ? page : (pages[pages.length - 1] || '')
     })
   }
 
@@ -251,7 +252,6 @@ export async function analyzeUrl(
   const newBase = getBaseUrl(url)
   if (newBase) baseUrl = newBase
 
-  // 修复：对 URL query 参数中的非 ASCII 字符进行编码
   url = encodeQueryNonAscii(url)
 
   const method: 'GET' | 'POST' = urlOption?.method?.toUpperCase() === 'POST' ? 'POST' : 'GET'

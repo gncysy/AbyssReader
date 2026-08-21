@@ -9,17 +9,26 @@
     <div v-if="activeTab === 'about'" class="about-content">
       <div class="about-logo"><img src="/icons/icon.svg" alt="墨阅" class="logo-icon" /><span class="logo-name">墨阅</span></div>
       <p class="about-version">v{{ appVersion }}</p><p class="about-desc">桌面端小说阅读器</p><p class="about-license">GPL-3.0</p>
-      <div class="about-links"><a href="https://github.com/gncysy/AbyssReader" target="_blank" rel="noopener noreferrer" class="about-link"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/></svg>GitHub</a></div>
+      <div class="about-links"><a href="https://github.com/gncysy/AbyssReader" target="_blank" rel="noopener noreferrer" class="about-link">GitHub</a></div>
       <button class="btn-check-update" :disabled="checking || downloading" @click="checkForUpdate"><span v-if="checking">检查中...</span><span v-else-if="downloading">下载中 {{ downloadProgress }}%</span><span v-else>{{ updateStatus || '检查更新' }}</span></button>
       <p v-if="updateError" class="update-error">{{ updateError }}</p>
     </div>
     <div v-else class="about-markdown" v-html="renderedMarkdown" @click="handleMarkdownClick"></div>
+
+    <n-modal v-model:show="showDownloadConfirm" preset="dialog" title="发现新版本" positive-text="下载安装" negative-text="取消"
+      @positive-click="confirmDownload" @negative-click="showDownloadConfirm = false">
+      <p style="color:var(--text-secondary);font-size:14px;line-height:1.6">
+        发现新版本 v{{ latestVersion }}，是否下载并安装？<br/>
+        下载完成后程序将关闭。
+      </p>
+    </n-modal>
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
 import { marked } from 'marked'
+import { NModal } from 'naive-ui'
 import { APP_VERSION } from '@/constants/index.js'
 import BackButton from '@/components/common/BackButton.vue'
 import { windowApi } from '@/services/window.js'
@@ -31,6 +40,10 @@ const UPDATE_CHECK_INTERVAL = 6 * 60 * 60 * 1000
 const UPDATE_CHECK_KEY = 'lastUpdateCheck'
 const GITHUB_API_URL = 'https://api.github.com/repos/gncysy/AbyssReader-Tauri/releases?per_page=5'
 
+const CHUNK_SIZE = 1024 * 1024
+const CONCURRENT_CHUNKS = 3
+const MIN_CHUNKED_SIZE = CHUNK_SIZE * 2
+
 const appVersion = APP_VERSION
 const activeTab = ref('about')
 const checking = ref(false)
@@ -38,11 +51,15 @@ const downloading = ref(false)
 const downloadProgress = ref(0)
 const updateStatus = ref('')
 const updateError = ref('')
+const showDownloadConfirm = ref(false)
+const latestVersion = ref('')
+let pendingDownloadUrl = ''
+let pendingFileName = ''
+let pendingSha256: string | undefined = undefined
 
 function renderMarkdown(raw: string): string {
   if (!raw) return ''
   const html = marked.parse(raw, { breaks: true }) as string
-  // 锚点处理：marked 已处理 # 标题，这里只需处理点击跳转
   return html.replace(/<a href="#([^"]+)"/g, (_, anchor: string) => {
     return `<a class="md-anchor" href="javascript:void(0)" data-anchor="${encodeURIComponent(decodeURIComponent(anchor))}"`
   })
@@ -85,34 +102,48 @@ async function checkForUpdate(): Promise<void> {
       headers: { Accept: 'application/vnd.github.v3+json' },
     })
     if (!res.ok) throw new Error('HTTP ' + res.status)
-    const releases = await res.json()
+    const releases = await res.json() as unknown[]
     if (!Array.isArray(releases) || releases.length === 0) {
       updateStatus.value = '暂无发布版本'
       return
     }
-    const latest = releases[0].tag_name?.replace(/^v/, '') || ''
+    const latestRelease = releases[0] as Record<string, unknown>
+    const latest = String(latestRelease.tag_name || '').replace(/^v/, '')
     if (!latest) throw new Error('未能解析版本号')
     if (compareVersions(appVersion, latest)) {
-      updateStatus.value = `发现新版本 v${latest}${releases[0].prerelease ? ' [预发布]' : ''}`
-      const asset = releases[0].assets?.find((a: any) =>
-        a.name?.endsWith('.exe') || a.name?.endsWith('.msi') || a.name?.endsWith('.AppImage') || a.name?.endsWith('.dmg')
-      )
+      latestVersion.value = latest
+      updateStatus.value = `发现新版本 v${latest}${latestRelease.prerelease ? ' [预发布]' : ''}`
+      const assets = Array.isArray(latestRelease.assets) ? latestRelease.assets as Record<string, unknown>[] : []
+      const asset = assets.find((a) => {
+        const name = String(a.name || '')
+        return name.endsWith('.exe') || name.endsWith('.msi') || name.endsWith('.AppImage') || name.endsWith('.dmg')
+      })
       if (asset) {
-        // 检查 SHA256 校验文件
-        const sha256Asset = releases[0].assets?.find((a: any) =>
-          a.name?.toLowerCase().endsWith('.sha256') || a.name?.toLowerCase().includes('checksum')
-        )
-        if (sha256Asset) {
-          const shaRes = await fetch(sha256Asset.browser_download_url)
-          const shaText = await shaRes.text()
-          const expectedHash = shaText.trim().split(/\s+/)[0] || ''
-          if (expectedHash) {
-            await downloadAndInstall(asset.browser_download_url, asset.name, expectedHash)
-          } else {
-            await downloadAndInstall(asset.browser_download_url, asset.name)
+        const downloadUrl = String(asset.browser_download_url || '')
+        const assetName = String(asset.name || 'update')
+        if (downloadUrl) {
+          pendingDownloadUrl = downloadUrl
+          pendingFileName = assetName
+          pendingSha256 = undefined
+
+          const sha256Asset = assets.find((a) => {
+            const name = String(a.name || '').toLowerCase()
+            return name.endsWith('.sha256') || name.includes('checksum')
+          })
+          if (sha256Asset) {
+            const shaUrl = String(sha256Asset.browser_download_url || '')
+            if (shaUrl) {
+              try {
+                const shaRes = await fetch(shaUrl)
+                const shaText = await shaRes.text()
+                const expectedHash = shaText.trim().split(/\s+/)[0] || ''
+                if (expectedHash) pendingSha256 = expectedHash
+              } catch {
+                // ignore
+              }
+            }
           }
-        } else {
-          updateError.value = '未找到校验文件，跳过自动下载，请从 GitHub Releases 手动下载'
+          showDownloadConfirm.value = true
         }
       } else {
         updateError.value = '未找到安装包'
@@ -120,26 +151,47 @@ async function checkForUpdate(): Promise<void> {
     } else {
       updateStatus.value = '已是最新版本'
     }
-  } catch (err: any) {
-    updateError.value = '检查失败: ' + (err.message || '网络错误')
+  } catch (err: unknown) {
+    const e = err as Error
+    updateError.value = '检查失败: ' + (e.message || '网络错误')
   } finally {
     checking.value = false
   }
 }
 
+function confirmDownload(): void {
+  showDownloadConfirm.value = false
+  if (pendingDownloadUrl && pendingFileName) {
+    downloadAndInstall(pendingDownloadUrl, pendingFileName, pendingSha256)
+  }
+}
+
 function compareVersions(current: string, latest: string): boolean {
-  const a = current.split('.').map(Number)
-  const b = latest.split('.').map(Number)
-  for (let i = 0; i < Math.max(a.length, b.length); i++) {
-    if ((b[i] || 0) > (a[i] || 0)) return true
-    if ((b[i] || 0) < (a[i] || 0)) return false
+  // 修复：剥离预发布后缀（如 -beta、-rc.1），只比较数字部分
+  const cleanCurrent = current.split('-')[0] || current
+  const cleanLatest = latest.split('-')[0] || latest
+  const a = cleanCurrent.split('.').map((s) => {
+    const n = Number(s)
+    return isNaN(n) ? 0 : n
+  })
+  const b = cleanLatest.split('.').map((s) => {
+    const n = Number(s)
+    return isNaN(n) ? 0 : n
+  })
+  const maxLen = Math.max(a.length, b.length)
+  for (let i = 0; i < maxLen; i++) {
+    const av = a[i] ?? 0
+    const bv = b[i] ?? 0
+    if (bv > av) return true
+    if (bv < av) return false
   }
   return false
 }
 
 async function computeSHA256(data: Uint8Array): Promise<string> {
   try {
-    const hashBuffer = await crypto.subtle.digest('SHA-256', data)
+    const buffer = data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength) as ArrayBuffer
+    const hashBuffer = await crypto.subtle.digest('SHA-256', buffer)
     const hashArray = Array.from(new Uint8Array(hashBuffer))
     return hashArray.map((b) => b.toString(16).padStart(2, '0')).join('')
   } catch {
@@ -147,55 +199,145 @@ async function computeSHA256(data: Uint8Array): Promise<string> {
   }
 }
 
+function saveBlobAndClose(blob: Blob, fileName: string): void {
+  const blobUrl = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = blobUrl
+  a.download = fileName
+  document.body.appendChild(a)
+  a.click()
+  document.body.removeChild(a)
+  URL.revokeObjectURL(blobUrl)
+  updateStatus.value = '下载完成，即将关闭程序进行安装'
+  setTimeout(async () => { try { await windowApi.close() } catch {} }, 1500)
+}
+
+async function downloadStreaming(
+  downloadUrl: string,
+  fileName: string,
+  total: number,
+  expectedSHA256?: string,
+): Promise<void> {
+  const response = await fetch(downloadUrl)
+  if (!response.ok) throw new Error('下载失败 HTTP ' + response.status)
+  const reader = response.body!.getReader()
+  const chunks: Uint8Array[] = []
+  let received = 0
+  while (true) {
+    const { done, value } = await reader.read()
+    if (done) break
+    chunks.push(value)
+    received += value.length
+    if (total > 0) downloadProgress.value = Math.round((received / total) * 100)
+  }
+
+  const allData = new Uint8Array(received)
+  let offset = 0
+  for (const chunk of chunks) {
+    allData.set(chunk, offset)
+    offset += chunk.length
+  }
+
+  if (expectedSHA256) {
+    const actualHash = await computeSHA256(allData)
+    if (actualHash && actualHash.toLowerCase() !== expectedSHA256.toLowerCase()) {
+      updateError.value = 'SHA256 校验失败，文件可能被篡改，已停止下载'
+      return
+    }
+  }
+
+  const blob = new Blob([allData.buffer as ArrayBuffer])
+  saveBlobAndClose(blob, fileName)
+}
+
+async function downloadWithChunks(
+  downloadUrl: string,
+  fileName: string,
+  total: number,
+  chunkSize: number,
+  concurrency: number,
+  expectedSHA256?: string,
+): Promise<void> {
+  const totalChunks = Math.ceil(total / chunkSize)
+  const chunkData: Uint8Array[] = new Array(totalChunks)
+  const downloaded = new Array(totalChunks).fill(false)
+  let completedChunks = 0
+  let nextChunkIndex = 0
+
+  async function downloadChunk(index: number): Promise<void> {
+    if (index >= totalChunks || downloaded[index]) return
+    downloaded[index] = true
+    const start = index * chunkSize
+    const end = Math.min(start + chunkSize, total) - 1
+
+    const response = await fetch(downloadUrl, {
+      headers: { Range: `bytes=${start}-${end}` },
+    })
+    if (response.status !== 206 && response.status !== 200) {
+      throw new Error(`分片下载失败 HTTP ${response.status}`)
+    }
+    const buffer = await response.arrayBuffer()
+    const data = new Uint8Array(buffer)
+    chunkData[index] = data
+    completedChunks++
+    downloadProgress.value = Math.round((completedChunks / totalChunks) * 100)
+  }
+
+  async function worker(): Promise<void> {
+    while (nextChunkIndex < totalChunks) {
+      const index = nextChunkIndex
+      nextChunkIndex++
+      await downloadChunk(index)
+    }
+  }
+
+  const workers: Promise<void>[] = []
+  for (let i = 0; i < Math.min(concurrency, totalChunks); i++) {
+    workers.push(worker())
+  }
+  await Promise.all(workers)
+
+  const allData = new Uint8Array(total)
+  let offset = 0
+  for (const chunk of chunkData) {
+    if (chunk !== undefined) {
+      allData.set(chunk, offset)
+      offset += chunk.length
+    }
+  }
+
+  if (offset !== total) {
+    throw new Error(`下载不完整: 期望 ${total} 字节，实际 ${offset} 字节`)
+  }
+
+  if (expectedSHA256) {
+    const actualHash = await computeSHA256(allData)
+    if (actualHash && actualHash.toLowerCase() !== expectedSHA256.toLowerCase()) {
+      updateError.value = 'SHA256 校验失败，文件可能被篡改，已停止下载'
+      return
+    }
+  }
+
+  const blob = new Blob([allData.buffer as ArrayBuffer])
+  saveBlobAndClose(blob, fileName)
+}
+
 async function downloadAndInstall(downloadUrl: string, fileName: string, expectedSHA256?: string): Promise<void> {
   downloading.value = true
   downloadProgress.value = 0
   try {
-    const response = await fetch(downloadUrl)
-    if (!response.ok) throw new Error('下载失败')
-    const total = Number(response.headers.get('content-length') || 0)
-    const reader = response.body!.getReader()
-    const chunks: Uint8Array[] = []
-    let received = 0
-    while (true) {
-      const { done, value } = await reader.read()
-      if (done) break
-      chunks.push(value)
-      received += value.length
-      if (total > 0) downloadProgress.value = Math.round((received / total) * 100)
-    }
+    const headRes = await fetch(downloadUrl, { method: 'HEAD' })
+    const total = Number(headRes.headers.get('content-length') || 0)
+    const acceptRanges = headRes.headers.get('accept-ranges') || ''
 
-    // 合并数据
-    const allData = new Uint8Array(received)
-    let offset = 0
-    for (const chunk of chunks) {
-      allData.set(chunk, offset)
-      offset += chunk.length
+    if (total > MIN_CHUNKED_SIZE && acceptRanges.toLowerCase() === 'bytes') {
+      await downloadWithChunks(downloadUrl, fileName, total, CHUNK_SIZE, CONCURRENT_CHUNKS, expectedSHA256)
+    } else {
+      await downloadStreaming(downloadUrl, fileName, total, expectedSHA256)
     }
-
-    // SHA256 校验
-    if (expectedSHA256) {
-      const actualHash = await computeSHA256(allData)
-      if (actualHash && actualHash.toLowerCase() !== expectedSHA256.toLowerCase()) {
-        updateError.value = 'SHA256 校验失败，文件可能被篡改，已停止下载'
-        downloading.value = false
-        return
-      }
-    }
-
-    const blob = new Blob([allData])
-    const blobUrl = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = blobUrl
-    a.download = fileName
-    document.body.appendChild(a)
-    a.click()
-    document.body.removeChild(a)
-    URL.revokeObjectURL(blobUrl)
-    updateStatus.value = '下载完成，即将关闭程序进行安装'
-    setTimeout(async () => { try { await windowApi.close() } catch {} }, 1500)
-  } catch (err: any) {
-    updateError.value = '下载失败: ' + err.message
+  } catch (err: unknown) {
+    const e = err as Error
+    updateError.value = '下载失败: ' + e.message
   } finally {
     downloading.value = false
   }
@@ -212,7 +354,7 @@ async function downloadAndInstall(downloadUrl: string, fileName: string, expecte
 .about-tab.active { color: var(--brand); border-bottom-color: var(--brand); }
 .about-content { padding: 48px 32px; background: var(--bg-card); border: 1px solid var(--border-color); border-radius: var(--radius-lg); text-align: center; box-shadow: var(--shadow-sm); }
 .about-logo { display: flex; align-items: center; justify-content: center; gap: 14px; margin-bottom: 16px; }
-.logo-icon { width: 52px; height: 52px; filter: drop-shadow(0 2px 8px rgba(212,160,23,0.2)); }
+.logo-icon { width: 52px; height: 52px; }
 .logo-name { font-size: 26px; font-weight: 600; color: var(--text-primary); letter-spacing: 0.04em; }
 .about-version { font-size: 15px; color: var(--brand); margin: 6px 0; font-weight: 500; }
 .about-desc { font-size: 14px; color: var(--text-secondary); margin: 6px 0; line-height: 1.5; }
@@ -233,7 +375,6 @@ async function downloadAndInstall(downloadUrl: string, fileName: string, expecte
 .about-markdown :deep(li) { margin-bottom: 4px; }
 .about-markdown :deep(code) { background: var(--bg-hover); padding: 2px 6px; border-radius: 4px; font-family: var(--font-mono); font-size: 13px; }
 .about-markdown :deep(pre) { background: var(--bg); padding: 16px; border-radius: var(--radius-md); overflow-x: auto; margin: 0 0 12px; }
-.about-markdown :deep(pre code) { background: none; padding: 0; }
 .about-markdown :deep(a) { color: var(--brand); }
 .about-markdown :deep(a.md-anchor) { color: var(--brand); cursor: pointer; }
 .about-markdown :deep(blockquote) { border-left: 3px solid var(--brand); margin: 0 0 12px; padding: 4px 16px; color: var(--text-muted); }
@@ -243,4 +384,3 @@ async function downloadAndInstall(downloadUrl: string, fileName: string, expecte
 .about-markdown :deep(th) { background: var(--bg-hover); font-weight: 600; }
 .about-markdown :deep(img) { max-width: 100%; }
 </style>
-

@@ -43,11 +43,14 @@ export class AnalyzeByXPath {
       const rules = ruleAnalyzer.splitRule('&&', '||', '%%')
 
       if (rules.length === 1) {
-        return this.root.evaluateXPath(rules[0]) || []
+        const r0 = rules[0]
+        if (r0 === undefined) return []
+        return this.root.evaluateXPath(r0) || []
       }
 
       const results: DomNode[][] = []
       for (const rl of rules) {
+        if (rl === undefined) continue
         const temp = this.getElements(rl)
         if (temp.length > 0) {
           results.push(temp)
@@ -58,10 +61,13 @@ export class AnalyzeByXPath {
       if (results.length === 0) return []
       if (ruleAnalyzer.elementsType === '%%') {
         const merged: DomNode[] = []
-        const baseLen = results[0].length
+        const first = results[0]
+        if (!first) return []
+        const baseLen = first.length
         for (let i = 0; i < baseLen; i++) {
           for (const r of results) {
-            if (i < r.length) merged.push(r[i])
+            const el = r[i]
+            if (i < r.length && el) merged.push(el)
           }
         }
         return merged

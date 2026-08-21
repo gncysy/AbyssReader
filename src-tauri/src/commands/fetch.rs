@@ -2,6 +2,8 @@ use crate::error::Result;
 use crate::network::http::execute_http_request;
 use std::collections::HashMap;
 
+const DEFAULT_TIMEOUT_SECS: u64 = 30;
+
 #[tauri::command]
 pub async fn fetch_url(
     url: String,
@@ -17,9 +19,8 @@ pub async fn fetch_url(
     _body_js: Option<String>,
 ) -> Result<String> {
     let method_str = method.unwrap_or_else(|| "GET".into());
-    let timeout = timeout_secs.unwrap_or(30);
+    let timeout = timeout_secs.unwrap_or(DEFAULT_TIMEOUT_SECS);
 
-    // MID-1 修复：WebView 请求统一委托给 webview.rs 的 fetch_webview 命令
     if use_webview == Some(true) {
         let app = crate::js_runtime::ops::get_app_handle()
             .ok_or_else(|| crate::error::AbyssError::WebViewError("AppHandle 未初始化".into()))?;
@@ -51,9 +52,9 @@ pub async fn download_binary(
     use reqwest::Client;
 
     let client = Client::builder()
-        .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+        .user_agent(crate::utils::DEFAULT_UA)
         .danger_accept_invalid_certs(true)
-        .timeout(std::time::Duration::from_secs(30))
+        .timeout(std::time::Duration::from_secs(DEFAULT_TIMEOUT_SECS))
         .build()
         .map_err(|e| crate::error::AbyssError::NetworkError(e.to_string()))?;
 
@@ -101,7 +102,7 @@ pub async fn proxy_image(url: String, source_json: String) -> Result<String> {
 
     let client = Client::builder()
         .danger_accept_invalid_certs(true)
-        .timeout(std::time::Duration::from_secs(30))
+        .timeout(std::time::Duration::from_secs(DEFAULT_TIMEOUT_SECS))
         .build()
         .map_err(|e| crate::error::AbyssError::NetworkError(e.to_string()))?;
 

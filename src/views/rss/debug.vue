@@ -7,13 +7,12 @@
         <input v-model="searchInput" type="text" placeholder="输入关键词或 URL..." class="input-search" style="width:280px" @keyup.enter="runDebug" />
         <button class="btn-primary" :disabled="running" @click="runDebug">{{ running ? '执行中...' : '调试' }}</button>
       </div>
-      <div class="toolbar-right"><label style="display:flex;align-items:center;gap:4px;font-size:12px;color:var(--text-muted)"><input type="checkbox" v-model="showDetailLog" /> 详细日志</label></div>
     </div>
     <div v-if="status" class="status-bar" :class="status.type">{{ status.message }}</div>
     <div class="log-container">
       <div class="log-header"><span>日志 ({{ filteredLogs.length }})</span><span style="font-size:11px;color:var(--text-muted)">{{ running ? '● 运行中' : '○ 就绪' }}</span></div>
       <div class="log-list" ref="logListRef">
-        <div v-for="(log, idx) in filteredLogs" :key="idx" class="log-entry" :class="'log-' + log.level"><span class="log-time">{{ log.time }}</span><span class="log-module">{{ log.module || 'debug' }}</span><span class="log-message">{{ log.message }}</span></div>
+        <div v-for="(log, idx) in filteredLogs" :key="idx" class="log-entry" :class="'log-' + log.level"><span class="log-time">{{ log.time }}</span><span class="log-module">{{ log.module }}</span><span class="log-message">{{ log.message }}</span></div>
         <div v-if="filteredLogs.length === 0" class="log-empty">暂无日志，点击"调试"开始</div>
       </div>
     </div>
@@ -34,12 +33,18 @@ import { useRoute } from 'vue-router'
 import { useMessage, NModal } from 'naive-ui'
 import { store, network } from '@/services'
 import { createAnalyzer } from '@engine/parser/index.js'
+import { asArray } from '@/services/store.js'
 import BackButton from '@/components/common/BackButton.vue'
 import CustomDropdown from '@/components/settings/CustomDropdown.vue'
 import { onLog, logHistory, type LogEntry } from '@engine/log/index.js'
 import type { RssSource, RssArticle } from '@/types'
+import type { EngineBookSource } from '@engine/types.js'
 
 const MAX_LOGS = 500
+
+function toEngineBookSource(source: RssSource): EngineBookSource {
+  return source as unknown as EngineBookSource
+}
 
 const route = useRoute()
 const msg = useMessage()
@@ -47,7 +52,6 @@ const source = ref<RssSource | null>(null)
 const searchInput = ref('')
 const selectedSortIndex = ref(-1)
 const running = ref(false)
-const showDetailLog = ref(false)
 const status = ref<{ type: string; message: string } | null>(null)
 const showHtmlModal = ref(false)
 const htmlContent = ref('')
@@ -58,8 +62,7 @@ const logs = ref<LogEntry[]>([])
 let unsubscribe: (() => void) | null = null
 
 const filteredLogs = computed(() => {
-  if (showDetailLog.value) return logs.value
-  return logs.value.filter((l) => l.level !== 'debug' || l.module === 'rss-debug')
+  return logs.value.filter((l) => l.level !== 'debug')
 })
 
 const sortOptions = computed(() => {
@@ -67,8 +70,10 @@ const sortOptions = computed(() => {
   const lines = source.value.sortUrl.split('\n').filter((l) => l.includes('::'))
   const opts: { label: string; value: number }[] = []
   for (let i = 0; i < lines.length; i++) {
-    const idx = lines[i].indexOf('::')
-    opts.push({ label: lines[i].substring(0, idx), value: i })
+    const line = lines[i]
+    if (!line) continue
+    const idx = line.indexOf('::')
+    opts.push({ label: line.substring(0, idx), value: i })
   }
   if (opts.length === 0) opts.push({ label: '无分类', value: -1 })
   return opts
@@ -84,10 +89,10 @@ function pushLog(entry: LogEntry): void {
 
 function clearLogs(): void { logs.value = [] }
 
-function addLog(level: string, message: string, module = 'rss-debug'): void {
+function addLog(level: string, message: string): void {
   const now = new Date()
   const time = now.toTimeString().slice(0, 8)
-  pushLog({ time, level: level as LogEntry['level'], module: module as LogEntry['module'], message, source: 'frontend' })
+  pushLog({ time, level: level as LogEntry['level'], module: 'engine', message, source: 'frontend' })
 }
 
 const logHandler = (entry: LogEntry) => { pushLog(entry) }
@@ -97,17 +102,19 @@ async function loadSource(): Promise<void> {
   if (!sourceUrl) { msg.warning('未指定订阅源'); return }
   try {
     const data = await store.get('rssSources')
-    const sources: RssSource[] = Array.isArray(data) ? data : []
+    const sources = asArray<RssSource>(data)
     source.value = sources.find((s) => s.sourceUrl === sourceUrl) || null
     if (!source.value) {
       msg.error('未找到订阅源')
     } else {
       addLog('info', `加载订阅源: ${source.value.sourceName}`)
       const validSorts = sortOptions.value.filter((o) => o.value !== -1)
-      if (validSorts.length > 0) selectedSortIndex.value = validSorts[0].value
+      const firstSort = validSorts[0]
+      if (firstSort !== undefined) selectedSortIndex.value = firstSort.value
     }
-  } catch (err: any) {
-    msg.error('加载失败: ' + err.message)
+  } catch (err: unknown) {
+    const e = err as Error
+    msg.error('加载失败: ' + e.message)
   }
 }
 
@@ -127,9 +134,10 @@ async function runDebug(): Promise<void> {
     if (!targetUrl.startsWith('http://') && !targetUrl.startsWith('https://')) {
       if (selectedSortIndex.value >= 0 && source.value.sortUrl) {
         const lines = source.value.sortUrl.split('\n').filter((l) => l.includes('::'))
-        if (selectedSortIndex.value < lines.length) {
-          const idx = lines[selectedSortIndex.value].indexOf('::')
-          targetUrl = lines[selectedSortIndex.value].substring(idx + 2).replace(/\{\{key\}\}/g, encodeURIComponent(keyword))
+        const line = lines[selectedSortIndex.value]
+        if (line) {
+          const idx = line.indexOf('::')
+          targetUrl = line.substring(idx + 2).replace(/\{\{key\}\}/g, encodeURIComponent(keyword))
         }
       }
     }
@@ -140,55 +148,39 @@ async function runDebug(): Promise<void> {
     htmlContent.value = htmlStr
     addLog('debug', `获取到 ${htmlStr.length} 字符`)
 
-    const analyzer = createAnalyzer(source.value)
+    const analyzer = createAnalyzer(toEngineBookSource(source.value))
     analyzer.setContent(htmlStr, targetUrl)
 
     let listRule = source.value.ruleArticles || ''
-    let reverse = false
-    if (listRule.startsWith('-')) { reverse = true; listRule = listRule.substring(1) }
-    if (listRule.startsWith('+')) { listRule = listRule.substring(1) }
+    if (listRule.startsWith('-')) listRule = listRule.substring(1)
+    if (listRule.startsWith('+')) listRule = listRule.substring(1)
 
     if (!listRule) {
       status.value = { type: 'warning', message: '未配置列表规则' }
-      addLog('warn', '未配置列表规则')
       running.value = false
       return
     }
 
-    addLog('debug', `列表规则: ${listRule}`)
     const elements = await analyzer.getElements(listRule)
-    addLog('debug', `获取到 ${elements.length} 个元素`)
-
     if (!Array.isArray(elements) || elements.length === 0) {
       status.value = { type: 'warning', message: '未找到匹配元素，请检查规则' }
-      addLog('warn', '未找到匹配元素')
       running.value = false
       return
     }
 
     const titleRule = source.value.ruleTitle || ''
     const linkRule = source.value.ruleLink || ''
-    const descRule = source.value.ruleDescription || ''
-    const imageRule = source.value.ruleImage || ''
-    const dateRule = source.value.rulePubDate || ''
 
     const results: RssArticle[] = []
     for (const item of elements) {
       if (item === null || item === undefined) continue
-      const itemAnalyzer = createAnalyzer(source.value)
+      const itemAnalyzer = createAnalyzer(toEngineBookSource(source.value))
       itemAnalyzer.setContent(item, targetUrl)
-
       const title = (await itemAnalyzer.getString(titleRule)) || ''
       if (!title) continue
-
-      const link = (await itemAnalyzer.getString(linkRule, { isUrl: true } as any)) || ''
-      const description = descRule ? (await itemAnalyzer.getString(descRule)) || null : null
-      const image = imageRule ? (await itemAnalyzer.getString(imageRule)) || null : null
-      const pubDate = dateRule ? (await itemAnalyzer.getString(dateRule)) || null : null
-
-      results.push({ title: String(title), link, description, image, pubDate, sort: '', origin: source.value!.sourceUrl })
+      const link = (await itemAnalyzer.getString(linkRule, { isUrl: true } as Record<string, unknown>)) || ''
+      results.push({ title: String(title), link, sort: '', origin: source.value!.sourceUrl })
     }
-    if (reverse) results.reverse()
 
     resultItems.value = results
     addLog('info', `解析完成，共 ${results.length} 条`)
@@ -197,11 +189,10 @@ async function runDebug(): Promise<void> {
       showResultModal.value = true
     } else {
       status.value = { type: 'warning', message: '解析结果为空，请检查规则' }
-      addLog('warn', '解析结果为空')
     }
-  } catch (err: any) {
-    status.value = { type: 'error', message: '执行失败: ' + err.message }
-    addLog('error', '执行失败: ' + err.message)
+  } catch (err: unknown) {
+    const e = err as Error
+    status.value = { type: 'error', message: '执行失败: ' + e.message }
   } finally {
     running.value = false
   }
@@ -225,7 +216,6 @@ onUnmounted(() => { if (unsubscribe) { unsubscribe(); unsubscribe = null } })
 .source-name-badge { font-size: 12px; padding: 3px 12px; border-radius: 9999px; background: var(--bg-active); color: var(--brand); font-weight: 500; }
 .debug-toolbar { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 12px; flex-wrap: wrap; flex-shrink: 0; }
 .toolbar-left { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
-.toolbar-right { display: flex; align-items: center; gap: 8px; }
 .status-bar { padding: 8px 14px; border-radius: var(--radius-sm); font-size: 13px; margin-bottom: 12px; flex-shrink: 0; }
 .status-bar.info { background: rgba(52,152,219,0.08); border: 1px solid rgba(52,152,219,0.2); color: #3498db; }
 .status-bar.success { background: rgba(76,175,80,0.08); border: 1px solid rgba(76,175,80,0.2); color: #4caf50; }

@@ -17,26 +17,40 @@ pub async fn execute_js_rule(
 ) -> Result<JsExecutionResponse> {
     let code = preprocess_code(&code);
     let mut context = context;
-    let _ = timeout_ms;
+    let timeout_ms = timeout_ms.unwrap_or(30000);
 
     let ua = crate::storage::store_get("userAgent").unwrap_or_default();
     let ua = if let Some(ref u) = ua {
         if u.is_empty() {
-            "Mozilla/5.0 (Linux; Android 13; zh-cn; V2304A) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/120.0.6099.231 Mobile Safari/537.36"
+            crate::utils::DEFAULT_MOBILE_UA
         } else {
             u.as_str()
         }
     } else {
-        "Mozilla/5.0 (Linux; Android 13; zh-cn; V2304A) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/120.0.6099.231 Mobile Safari/537.36"
+        crate::utils::DEFAULT_MOBILE_UA
     };
     crate::js_runtime::ops::set_global_ua(ua.to_string());
     if let Some(obj) = context.as_object_mut() {
         obj.insert("userAgent".into(), serde_json::Value::String(ua.to_string()));
     }
     let context_json = serde_json::to_string(&context).unwrap_or_else(|_| "{}".into());
-    match runtime::execute(&code, &context_json) {
-        Ok(result) => Ok(JsExecutionResponse { success: true, result, error: None }),
-        Err(e) => Ok(JsExecutionResponse { success: false, result: String::new(), error: Some(e) }),
+
+    // 使用 tokio::time::timeout 实现真正的超时控制
+    let timeout_result = tokio::time::timeout(
+        std::time::Duration::from_millis(timeout_ms),
+        async {
+            runtime::execute(&code, &context_json)
+        },
+    ).await;
+
+    match timeout_result {
+        Ok(Ok(result)) => Ok(JsExecutionResponse { success: true, result, error: None }),
+        Ok(Err(e)) => Ok(JsExecutionResponse { success: false, result: String::new(), error: Some(e) }),
+        Err(_) => Ok(JsExecutionResponse {
+            success: false,
+            result: String::new(),
+            error: Some(format!("JS 执行超时（超过 {}ms）", timeout_ms)),
+        }),
     }
 }
 
@@ -54,18 +68,14 @@ fn preprocess_code(code: &str) -> String {
         .to_string()
 }
 
-/// 解析 Legado 风格的 URL 字符串：url,{headers:{...},method:"POST",body:"..."}
-/// 返回 (clean_url, headers, method, body)
 fn parse_legado_url(url_str: &str) -> (String, Option<serde_json::Value>, String, Option<String>) {
     let mut clean_url = url_str.to_string();
     let mut headers = None;
     let mut method = "GET".to_string();
     let mut body = None;
 
-    // 只在末尾查找 ,{，且后面必须能解析为完整 JSON
     if let Some(brace_idx) = url_str.rfind(",{") {
         let json_part = &url_str[brace_idx + 1..];
-        // 验证 JSON 部分是否完整
         if let Ok(json) = serde_json::from_str::<serde_json::Value>(json_part) {
             if let Some(h) = json.get("headers").cloned() {
                 headers = Some(h);
@@ -82,7 +92,6 @@ fn parse_legado_url(url_str: &str) -> (String, Option<serde_json::Value>, String
             }
             clean_url = url_str[..brace_idx].to_string();
         }
-        // 如果 JSON 解析失败，保持原 URL 不变
     }
 
     (clean_url, headers, method, body)
@@ -97,7 +106,6 @@ pub async fn dict_query(
 ) -> Result<JsExecutionResponse> {
     let timeout = timeout_secs.unwrap_or(20);
 
-    // 执行 urlRule
     let url_result = if url_rule.starts_with("@js:") || url_rule.starts_with("<js>") {
         let js_code = preprocess_code(&url_rule);
         let ctx = serde_json::json!({ "result": "", "key": key, "baseUrl": "", "source": {}, "book": {} });
@@ -160,7 +168,6 @@ pub async fn dict_query(
         });
     }
 
-    // 执行 showRule
     let has_js = show_rule.contains("@js:") || show_rule.contains("<js>");
     if has_js {
         if let Some(js_code) = extract_js_from_show_rule(&show_rule) {
@@ -183,7 +190,6 @@ pub async fn dict_query(
         }
     }
 
-    // 纯 CSS 规则降级
     use scraper::{Html, Selector};
     let doc = Html::parse_document(&html);
     let parts: Vec<&str> = show_rule.split('@').collect();

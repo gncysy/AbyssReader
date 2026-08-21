@@ -1,4 +1,5 @@
 pub mod ajax;
+pub mod common;
 pub mod crypto;
 pub mod dom;
 pub mod io;
@@ -6,6 +7,7 @@ pub mod storage;
 pub mod webview_manager;
 
 pub use ajax::*;
+pub use common::*;
 pub use crypto::*;
 pub use dom::*;
 pub use io::*;
@@ -87,21 +89,9 @@ pub fn emit_log(level: &str, msg: &str) {
         let (module, source, message) = if msg.starts_with('{') {
             if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(msg) {
                 (
-                    parsed
-                        .get("module")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("explore")
-                        .to_string(),
-                    parsed
-                        .get("source")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("rust")
-                        .to_string(),
-                    parsed
-                        .get("message")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or(msg)
-                        .to_string(),
+                    parsed.get("module").and_then(|v| v.as_str()).unwrap_or("explore").to_string(),
+                    parsed.get("source").and_then(|v| v.as_str()).unwrap_or("rust").to_string(),
+                    parsed.get("message").and_then(|v| v.as_str()).unwrap_or(msg).to_string(),
                 )
             } else {
                 ("explore".to_string(), "rust".to_string(), msg.to_string())
@@ -134,7 +124,7 @@ pub fn get_ua() -> String {
             return ua.clone();
         }
     }
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36".to_string()
+    crate::utils::DEFAULT_UA.to_string()
 }
 
 static COOKIE_SAVE_PATH: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
@@ -173,17 +163,20 @@ deno_core::extension!(
     abyss_java,
     ops = [
         ajax::op_java_ajax, ajax::op_java_web_js,
-        crypto::op_java_base64_encode, crypto::op_java_base64_decode, crypto::op_java_md5_encode,
+        crypto::op_java_base64_encode, crypto::op_java_base64_decode, crypto::op_java_base64_decode_bytes, crypto::op_java_md5_encode,
         crypto::op_java_aes_base64_decode, crypto::op_java_aes_base64_encode,
         crypto::op_java_des_base64_decode, crypto::op_java_des_base64_encode,
         crypto::op_java_rsa_set_public_key, crypto::op_java_rsa_set_private_key,
         crypto::op_java_rsa_encrypt, crypto::op_java_rsa_decrypt, crypto::op_java_sign,
+        crypto::op_java_aes_decrypt_bytes, crypto::op_java_aes_encrypt_bytes,
+        crypto::op_java_des_decrypt_bytes, crypto::op_java_des_encrypt_bytes,
         dom::op_jsoup_before, dom::op_jsoup_after, dom::op_jsoup_prepend, dom::op_jsoup_append,
         io::op_jsoup_parse, io::op_jsoup_select, io::op_jsoup_text, io::op_jsoup_own_text, io::op_jsoup_attr, io::op_jsoup_html, io::op_jsoup_outer_html, io::op_jsoup_remove, io::op_jsoup_size, io::op_jsoup_get, io::op_jsoup_each_text, io::op_jsoup_children, io::op_jsoup_tag_name, io::op_java_cache_file, io::op_java_download_file,
         io::op_java_read_txt_file, io::op_java_read_file_bytes_base64,
         io::op_java_delete_file, io::op_java_get_txt_in_folder,
         io::op_java_file_exists, io::op_java_unarchive_file, io::op_java_zip_content,
         io::op_java_query_ttf, io::op_java_get_verification_code,
+        io::op_java_str_to_bytes, io::op_java_bytes_to_str,
         storage::op_java_put, storage::op_java_get,
         storage::op_java_get_cookie, storage::op_java_set_cookie,
         storage::op_java_save_cookies, storage::op_java_load_cookies,

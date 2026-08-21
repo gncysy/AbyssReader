@@ -78,12 +78,11 @@
               </button>
             </footer>
           </div>
-          <!-- 换源弹窗 -->
           <n-modal v-model:show="showChangeSource" preset="card" title="换源" style="max-width:650px" :bordered="false">
             <div class="cs-wrapper">
               <button class="btn-primary" @click="handleSearchForChange" :disabled="changingSource" style="padding:10px 18px;font-size:14px;width:100%;flex-shrink:0">{{ changingSource ? '搜索中... (' + searchDone + '/' + searchTotal + ')' : '开始换源搜索' }}</button>
               <div v-if="changeSourceResults.length > 0" class="change-source-list">
-                <div v-for="item in changeSourceResults" :key="item.bookUrl + item._sourceName" class="change-source-item" @click="handleConfirmChangeSource(item)">
+                <div v-for="item in changeSourceResults" :key="String(item.bookUrl) + String(item._sourceName)" class="change-source-item" @click="handleConfirmChangeSource(item)">
                   <div class="cs-item-main"><span class="cs-item-name">{{ item.name }}</span><span class="cs-item-author">{{ item.author }}</span></div>
                   <div class="cs-item-meta"><span class="cs-item-source">{{ item._sourceName }}</span><span v-if="item.lastChapter" class="cs-item-chapter">{{ item.lastChapter }}</span></div>
                 </div>
@@ -92,19 +91,12 @@
               <div v-else style="color:var(--text-muted);text-align:center;padding:20px;flex-shrink:0">点击按钮并发搜索所有书源</div>
             </div>
           </n-modal>
-          <!-- 更换封面弹窗 -->
           <n-modal v-model:show="showCoverPicker" preset="card" title="选择封面" style="max-width:650px;max-height:80vh" :bordered="false">
             <div class="cover-picker-wrapper">
               <div v-if="coverPickerLoading" style="display:flex;justify-content:center;padding:40px"><LoadingSpinner /></div>
               <div v-else-if="coverOptions.length === 0" style="color:var(--text-muted);text-align:center;padding:30px">未找到同名书籍，请检查书源</div>
               <div v-else class="cover-picker-grid">
-                <div
-                  v-for="(item, idx) in coverOptions"
-                  :key="idx"
-                  class="cover-picker-item"
-                  :class="{ active: item.isCurrent }"
-                  @click="selectCover(item)"
-                >
+                <div v-for="(item, idx) in coverOptions" :key="idx" class="cover-picker-item" :class="{ active: item.isCurrent }" @click="selectCover(item)">
                   <img :src="item.coverUrl || '/images/cover.jpg'" loading="lazy" @error="(e) => (e.target as HTMLImageElement).src = '/images/cover.jpg'" />
                   <div class="cover-picker-label">{{ item.label }}</div>
                   <div v-if="item.isCurrent" class="cover-picker-badge">当前</div>
@@ -112,7 +104,6 @@
               </div>
             </div>
           </n-modal>
-          <!-- 变量弹窗 -->
           <n-modal v-model:show="showSourceVarModal" preset="dialog" title="设置源变量" positive-text="保存" @positive-click="saveSourceVar">
             <n-input v-model:value="sourceVarInput" type="textarea" placeholder='输入源变量值（书源 JS 中通过 java.get("key") 获取）' :autosize="{ minRows: 3, maxRows: 8 }" />
           </n-modal>
@@ -121,7 +112,7 @@
           </n-modal>
         </div>
       </Transition>
-      <ConfirmDialog v-model:visible="showRemoveConfirm" title="确认移出" :content="`确定将《${book?.name}》移出书架？`" confirm-text="移出" @confirm="handleRemoveFromShelf" />
+      <ConfirmDialog v-model:visible="showRemoveConfirm" title="确认移出" :content="`确定将《${book?.name ?? ''}》移出书架？`" confirm-text="移出" @confirm="handleRemoveFromShelf" />
     </n-config-provider>
   </Teleport>
 </template>
@@ -144,16 +135,16 @@ const { naiveTheme, themeOverrides } = useNaiveTheme()
 const detail = useBookDetail(props.book, props.source)
 
 const {
-  currentChapterId, hasReadingProgress, isLoggedIn,
+  currentChapterId, hasReadingProgress,
   showRemoveConfirm, showMoreMenu, showSourceVarModal, showBookVarModal,
   sourceVarInput, bookVarInput,
-  showCoverPicker, coverPickerLoading, coverOptions,
   needsLogin, isInShelf,
   mainCover, fallbackCoverUrls,
   displayAuthor, fullIntroHtml,
   loadedKind, loadedWordCount, loadedLastChapter,
   chapters, loadingToc,
   showChangeSource, changeSourceResults, changingSource, searchDone, searchTotal,
+  showCoverPicker, coverPickerLoading, coverOptions,
   init, handleChapterClick, handleRead, handleAddToShelf, handleRemoveFromShelf,
   handleChangeSource, handleSearchForChange, handleConfirmChangeSource,
   handleSearchKind, toggleMoreMenu, handleLoginFromMenu,
@@ -218,7 +209,7 @@ onUnmounted(() => { document.removeEventListener('keydown', handleEscape); docum
 .cs-item-author { font-size:12px; color:var(--text-muted) }
 .cs-item-meta { display:flex; gap:12px; margin-top:3px; font-size:11px; color:var(--text-muted) }
 .cs-item-source { color:var(--brand) }
-
+.cs-item-chapter { color:var(--text-muted) }
 .cover-picker-wrapper { padding: 4px 0; }
 .cover-picker-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(100px, 1fr)); gap: 14px; max-height: 55vh; overflow-y: auto; padding: 4px; }
 .cover-picker-item { position: relative; cursor: pointer; border-radius: var(--radius-md); overflow: hidden; border: 2px solid var(--border-color); transition: border-color 0.2s, transform 0.2s; aspect-ratio: 2/3; background: var(--bg-hover); }

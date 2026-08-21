@@ -12,17 +12,21 @@ export const useInfoMapStore = defineStore('infoMap', () => {
   const maps = ref<Record<string, InfoMapEntry>>({})
 
   function getMap(sourceUrl: string): InfoMapEntry {
-    if (!maps.value[sourceUrl]) {
-      let savedData: Record<string, string> = {}
-      try {
-        const raw = localStorage.getItem(`infoMap_${sourceUrl}`)
-        if (raw) savedData = JSON.parse(raw)
-      } catch {
-        // ignore
-      }
-      maps.value[sourceUrl] = { data: savedData, needSave: false, saveTime: 0 }
+    const existing = maps.value[sourceUrl]
+    if (existing) return existing
+
+    let savedData: Record<string, string> = {}
+    try {
+      const raw = localStorage.getItem(`infoMap_${sourceUrl}`)
+      if (raw) savedData = JSON.parse(raw)
+    } catch {
+      // ignore
     }
-    return maps.value[sourceUrl]
+
+    const newEntry: InfoMapEntry = { data: savedData, needSave: false, saveTime: 0 }
+    // 修复：通过重新赋值触发响应式更新
+    maps.value = { ...maps.value, [sourceUrl]: newEntry }
+    return newEntry
   }
 
   function get(sourceUrl: string, key: string): string {
@@ -80,7 +84,10 @@ export const useInfoMapStore = defineStore('infoMap', () => {
       clearTimeout(timer)
       saveTimers.delete(sourceUrl)
     }
-    delete maps.value[sourceUrl]
+    // 修复：通过重新赋值触发响应式更新
+    const next = { ...maps.value }
+    delete next[sourceUrl]
+    maps.value = next
     try {
       localStorage.removeItem(`infoMap_${sourceUrl}`)
     } catch {

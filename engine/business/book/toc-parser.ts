@@ -3,7 +3,7 @@
 // ============================================
 
 import { getString, getElements, resolveUrl } from '../../index.js'
-import type { EngineBookSource, EngineChapter } from '../../types.js'
+import type { EngineBookSource, EngineBook, EngineChapter, ParseContext } from '../../types.js'
 
 const WORD_COUNT_REGEX = /(?:^|字数[：:、]?|\s+)([0-9万千百\.]{1,6}字)/
 
@@ -12,7 +12,7 @@ function isJsonString(str: string): boolean {
   return (t.startsWith('{') && t.endsWith('}')) || (t.startsWith('[') && t.endsWith(']'))
 }
 
-function safeParseJson(str: string): any {
+function safeParseJson(str: string): unknown {
   try {
     return JSON.parse(str)
   } catch {
@@ -20,22 +20,30 @@ function safeParseJson(str: string): any {
   }
 }
 
-function parseJsonChapters(list: any[], baseUrl: string): EngineChapter[] {
+function getRuleString(rule: Record<string, unknown> | null | undefined, key: string): string {
+  if (!rule) return ''
+  const val = rule[key]
+  return typeof val === 'string' ? val : ''
+}
+
+function parseJsonChapters(list: unknown[], baseUrl: string): EngineChapter[] {
   const chapters: EngineChapter[] = []
   for (const item of list) {
-    const title = item.chapterName || item.title || item.name || ''
-    const hasChapterId = item.chapterId !== undefined && item.chapterId !== null
+    if (typeof item !== 'object' || item === null) continue
+    const obj = item as Record<string, unknown>
+    const title = obj.chapterName || obj.title || obj.name || ''
+    const hasChapterId = obj.chapterId !== undefined && obj.chapterId !== null
     const url = hasChapterId
-      ? '/chapter/' + String(item.chapterId)
-      : (item.url || item.path || '')
+      ? '/chapter/' + String(obj.chapterId)
+      : (obj.url || obj.path || '')
     if (title) {
       chapters.push({
         id: chapters.length,
         title: String(title),
         url: resolveUrl(String(url), baseUrl),
         index: chapters.length,
-        isVip: !!(item.isFree === 0 || item.isVip),
-        isPay: !!(item.isChapterBuy || item.isPay),
+        isVip: !!(obj.isFree === 0 || obj.isVip),
+        isPay: !!(obj.isChapterBuy || obj.isPay),
       })
     }
   }
@@ -47,11 +55,11 @@ function parseJsonChapters(list: any[], baseUrl: string): EngineChapter[] {
 }
 
 export async function parseTocPage(
-  book: any,
+  book: Partial<EngineBook>,
   baseUrl: string,
   redirectUrl: string,
   body: string,
-  tocRule: NonNullable<EngineBookSource['ruleToc']>,
+  tocRule: Record<string, unknown>,
   listRule: string,
   bookSource: EngineBookSource,
   getNextUrl: boolean,
@@ -59,7 +67,7 @@ export async function parseTocPage(
   const chapters: EngineChapter[] = []
   const nextUrls: string[] = []
 
-  const baseCtx = {
+  const baseCtx: ParseContext = {
     source: bookSource,
     baseUrl: bookSource.bookSourceUrl || baseUrl,
     book: book || {},
@@ -67,12 +75,13 @@ export async function parseTocPage(
   }
 
   const isJson = isJsonString(body)
-  const parsedData = isJson ? safeParseJson(body) : body
+  const parsedData: unknown = isJson ? safeParseJson(body) : body
   const elements = await getElements(parsedData, listRule, baseCtx)
 
-  if (getNextUrl && tocRule.nextTocUrl) {
+  const nextTocUrlRule = getRuleString(tocRule, 'nextTocUrl')
+  if (getNextUrl && nextTocUrlRule) {
     try {
-      const results = await getElements(parsedData, tocRule.nextTocUrl, { ...baseCtx, isUrl: true })
+      const results = await getElements(parsedData, nextTocUrlRule, { ...baseCtx, isUrl: true })
       if (Array.isArray(results)) {
         for (const item of results) {
           if (item && typeof item === 'string' && item.trim() && item.trim() !== redirectUrl) {
@@ -89,12 +98,12 @@ export async function parseTocPage(
   }
 
   if (Array.isArray(elements) && elements.length > 0) {
-    const nameRule = tocRule.chapterName || ''
-    const urlRule = tocRule.chapterUrl || ''
-    const vipRule = tocRule.isVip || ''
-    const payRule = tocRule.isPay || ''
-    const isVolumeRule = tocRule.isVolume || ''
-    const upTimeRule = tocRule.updateTime || ''
+    const nameRule = getRuleString(tocRule, 'chapterName')
+    const urlRule = getRuleString(tocRule, 'chapterUrl')
+    const vipRule = getRuleString(tocRule, 'isVip')
+    const payRule = getRuleString(tocRule, 'isPay')
+    const isVolumeRule = getRuleString(tocRule, 'isVolume')
+    const upTimeRule = getRuleString(tocRule, 'updateTime')
 
     const hasDeferredJs = urlRule.includes('@js:') || urlRule.includes('<js>')
     let firstRule = ''
@@ -106,14 +115,14 @@ export async function parseTocPage(
     for (const item of elements) {
       if (item === null || item === undefined) continue
 
-      const itemCtx = { ...baseCtx, result: item }
+      const itemCtx: ParseContext = { ...baseCtx, result: item }
 
       const title = (await getString(item, nameRule, itemCtx)) || ''
       if (!title) continue
 
       let url = ''
       let deferredJs: string | undefined
-      let deferredResult: any
+      let deferredResult: unknown
 
       if (hasDeferredJs) {
         if (firstRule) {
@@ -133,7 +142,7 @@ export async function parseTocPage(
       let tag = info
       if (!isVolume) {
         const wcMatch = WORD_COUNT_REGEX.exec(info)
-        if (wcMatch) {
+        if (wcMatch && wcMatch[1]) {
           wordCount = wcMatch[1].trim()
           tag = info.replace(wcMatch[0], '')
         }
@@ -158,7 +167,7 @@ export async function parseTocPage(
         wordCount: wordCount,
         _deferredJs: deferredJs,
         _deferredResult: deferredResult,
-      } as any as EngineChapter)
+      })
     }
   }
   return { chapters, nextUrls }
@@ -168,8 +177,12 @@ export function parseTocJson(body: string, redirectUrl: string): EngineChapter[]
   const isJson = isJsonString(body)
   if (!isJson) return []
   const parsed = safeParseJson(body)
-  if (parsed?.data?.list && Array.isArray(parsed.data.list)) {
-    return parseJsonChapters(parsed.data.list, redirectUrl)
+  if (typeof parsed === 'object' && parsed !== null) {
+    const obj = parsed as Record<string, unknown>
+    const dataObj = obj.data as Record<string, unknown> | undefined
+    if (dataObj && Array.isArray(dataObj.list)) {
+      return parseJsonChapters(dataObj.list, redirectUrl)
+    }
   }
   return []
 }
@@ -177,8 +190,8 @@ export function parseTocJson(body: string, redirectUrl: string): EngineChapter[]
 export function dedupChapters(chapters: EngineChapter[]): EngineChapter[] {
   const seen = new Map<string, EngineChapter>()
   for (const ch of chapters) {
-    const key = ch.url || ch.title
-    if (!seen.has(key)) seen.set(key, ch)
+    const key = (ch.url || ch.title) ?? ''
+    if (key && !seen.has(key)) seen.set(key, ch)
   }
   return Array.from(seen.values())
 }

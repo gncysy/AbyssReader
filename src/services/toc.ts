@@ -4,7 +4,6 @@
 
 import { parseTocPage, parseTocJson, dedupChapters } from '@engine/business/book/index.js'
 import { analyzeUrl } from '@engine/url/index.js'
-import { getGlobalHttpClient } from '@engine/network/client.js'
 import { parseSourceHeader } from '@engine/business/source/helper.js'
 import { cache as cacheService } from './cache.js'
 import { fetchWithWebviewFallback } from './fetch.js'
@@ -13,17 +12,26 @@ import { handleError } from '@/utils/error-handler.js'
 import { engine } from './engine.js'
 import { shouldExecuteInDeno, evaluateRule } from './rule-evaluator.js'
 import type { Book, BookSource, Chapter } from '@/types'
+import type { EngineBookSource, EngineChapter } from '@engine/types.js'
 import { NETWORK, READER } from '@/constants/index.js'
 
 const MAX_CONCURRENT_PAGES = 5
+
+function toEngineBookSource(source: BookSource): EngineBookSource {
+  return source as unknown as EngineBookSource
+}
+
+function toChapter(ch: EngineChapter): Chapter {
+  return ch as unknown as Chapter
+}
 
 export async function loadTocFromCache(source: BookSource, book?: Book): Promise<Chapter[] | null> {
   if (!book) return null
   try {
     const raw = await cacheService.getToc(getTocCacheKey(source, book))
     if (raw) {
-      const parsed = JSON.parse(raw)
-      if (Array.isArray(parsed) && parsed.length > 0) return parsed
+      const parsed = JSON.parse(raw) as unknown
+      if (Array.isArray(parsed) && parsed.length > 0) return parsed as Chapter[]
     }
   } catch {
     // ignore
@@ -54,79 +62,17 @@ async function runPreUpdateJs(source: BookSource, book: Book): Promise<void> {
       result: '',
     })
     logInfo('engine', 'frontend', '[目录] preUpdateJs 执行完成')
-  } catch (e: any) {
-    logError('engine', 'frontend', `[目录] preUpdateJs 执行失败: ${e?.message || e}`)
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : String(e)
+    logError('engine', 'frontend', `[目录] preUpdateJs 执行失败: ${msg}`)
   }
 }
 
-/**
- * 执行 header 规则（与 content.ts 中相同，正确解析 JSON 和 JS 格式）
- */
-async function executeHeaderRule(source: BookSource, baseUrl: string): Promise<Record<string, string>> {
-  const headers: Record<string, string> = {}
-  if (!source.header) return headers
-
-  try {
-    const headerStr = source.header
-    if (headerStr.startsWith('@js:') || headerStr.startsWith('<js>')) {
-      const { getJsRuntime } = await import('@engine/parser/js-executor.js')
-      const runtime = getJsRuntime()
-      if (runtime) {
-        const result = await runtime.execute(headerStr, {
-          source,
-          baseUrl,
-          result: '',
-          book: {},
-        })
-        if (result && typeof result === 'string') {
-          let parsed: any = null
-          try {
-            parsed = JSON.parse(result)
-          } catch {
-            try {
-              parsed = JSON.parse(result.replace(/'/g, '"'))
-            } catch {
-              // ignore
-            }
-          }
-          if (parsed && typeof parsed === 'object') {
-            for (const [key, value] of Object.entries(parsed)) {
-              if (value !== null && value !== undefined) {
-                headers[key] = String(value)
-              }
-            }
-          }
-        }
-      }
-    } else {
-      try {
-        const parsed = JSON.parse(headerStr)
-        for (const [key, value] of Object.entries(parsed)) {
-          if (value !== null && value !== undefined) {
-            headers[key] = String(value)
-          }
-        }
-      } catch {
-        try {
-          const parsed = JSON.parse(headerStr.replace(/'/g, '"'))
-          for (const [key, value] of Object.entries(parsed)) {
-            if (value !== null && value !== undefined) {
-              headers[key] = String(value)
-            }
-          }
-        } catch {
-          // ignore
-        }
-      }
-    }
-  } catch (e: any) {
-    logError('engine', 'frontend', '[目录] header 规则执行失败: ' + (e?.message || e))
-  }
-
+async function executeHeaderRule(source: BookSource): Promise<Record<string, string>> {
+  const headers = await parseSourceHeader(toEngineBookSource(source))
   if (!headers['User-Agent'] && !headers['user-agent']) {
     headers['User-Agent'] = 'Mozilla/5.0 (Linux; Android 15; V2304A Build/AP3A.240905.015.A2; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/132.0.6834.163 Mobile Safari/537.36'
   }
-
   return headers
 }
 
@@ -134,14 +80,19 @@ async function fetchPage(
   url: string,
   headers: Record<string, string>,
   source: BookSource,
-  book: any,
+  book: Book,
   method: 'GET' | 'POST' = 'GET',
   body: string | null = null,
 ): Promise<{ html: string; redirectUrl: string } | null> {
   try {
     const needsAnalyze = url.includes('@js:') || url.includes('<js>') || url.includes('{{') || url.includes(',{')
     if (needsAnalyze) {
-      const analysis = await analyzeUrl(url, { source, book: book || {}, baseUrl: source.bookSourceUrl || '', headerMap: headers })
+      const analysis = await analyzeUrl(url, {
+        source: toEngineBookSource(source),
+        book: book || {},
+        baseUrl: source.bookSourceUrl || '',
+        headerMap: headers,
+      })
       let bodyStr: string | null = null
       if (analysis.method === 'POST' && analysis.body) bodyStr = typeof analysis.body === 'string' ? analysis.body : JSON.stringify(analysis.body)
       const html = await fetchWithWebviewFallback(analysis.url, {
@@ -195,7 +146,6 @@ async function concurrentMap<T, R>(
 
 export async function fetchToc(
   source: BookSource, tocUrl: string, book?: Book,
-  formatJsExecutor?: (js: string, context: Record<string, any>) => Promise<string>
 ): Promise<Chapter[]> {
   if (!tocUrl) {
     logError('engine', 'frontend', '[目录] tocUrl 为空')
@@ -221,9 +171,8 @@ export async function fetchToc(
 
   logInfo('engine', 'frontend', `[目录] 开始 url=${tocUrl.substring(0, 100)}`)
 
-  // 修复：使用 executeHeaderRule 替代 parseSourceHeader
-  const headers = await executeHeaderRule(source, source.bookSourceUrl || '')
-  const bookData = book || {}
+  const headers = await executeHeaderRule(source)
+  const bookData = book || { name: '', author: '', bookUrl: tocUrl }
 
   let listRule = tocRule.chapterList || ''
   let reverse = false
@@ -238,15 +187,26 @@ export async function fetchToc(
     if (!result) return []
     const { html, redirectUrl } = result
 
-    let pageChapters: Chapter[]
-    let nextUrls: string[]
+    let pageChapters: Chapter[] = []
+    let nextUrls: string[] = []
+
+    const engineSource = toEngineBookSource(source)
+    const tocRuleObj = tocRule as unknown as Record<string, unknown>
+
     if (shouldExecuteInDeno(listRule)) {
-      const response = await evaluateRule(listRule, html, { source, baseUrl: source.bookSourceUrl, book: bookData, redirectUrl }, { forceDeno: true })
-      pageChapters = Array.isArray(response) ? response : []
-      nextUrls = []
+      const response = await evaluateRule(listRule, html, {
+        source: engineSource,
+        baseUrl: source.bookSourceUrl,
+        book: bookData,
+        redirectUrl,
+      }, { forceDeno: true })
+      pageChapters = Array.isArray(response) ? (response as Chapter[]) : []
     } else {
-      const parsed = await parseTocPage(bookData, tocUrl, redirectUrl, html, tocRule, listRule, source, true)
-      pageChapters = parsed.chapters
+      const parsed = await parseTocPage(
+        bookData as Record<string, unknown>,
+        tocUrl, redirectUrl, html, tocRuleObj, listRule, engineSource, true
+      )
+      pageChapters = parsed.chapters.map(toChapter)
       nextUrls = parsed.nextUrls
     }
 
@@ -272,11 +232,20 @@ export async function fetchToc(
           const nextResult = await fetchPage(nextUrl, headers, source, bookData)
           if (!nextResult) return [] as Chapter[]
           if (shouldExecuteInDeno(listRule)) {
-            const response = await evaluateRule(listRule, nextResult.html, { source, baseUrl: source.bookSourceUrl, book: bookData, redirectUrl: nextResult.redirectUrl }, { forceDeno: true })
-            return Array.isArray(response) ? response : []
+            const response = await evaluateRule(listRule, nextResult.html, {
+              source: engineSource,
+              baseUrl: source.bookSourceUrl,
+              book: bookData,
+              redirectUrl: nextResult.redirectUrl,
+            }, { forceDeno: true })
+            return Array.isArray(response) ? (response as Chapter[]) : []
           }
-          const { chapters: np } = await parseTocPage(bookData, nextUrl, nextResult.redirectUrl, nextResult.html, tocRule, listRule, source, uniqueNextUrls.length > 1)
-          return np
+          const { chapters: np } = await parseTocPage(
+            bookData as Record<string, unknown>,
+            nextUrl, nextResult.redirectUrl, nextResult.html, tocRuleObj, listRule, engineSource,
+            uniqueNextUrls.length > 1
+          )
+          return np.map(toChapter)
         },
         MAX_CONCURRENT_PAGES
       )
@@ -285,23 +254,21 @@ export async function fetchToc(
 
     if (chapterList.length === 0) {
       const jsonChapters = parseTocJson(html, redirectUrl)
-      chapterList.push(...jsonChapters)
+      chapterList.push(...jsonChapters.map(toChapter))
     }
 
     if (chapterList.length > 0) {
-      const deduped = dedupChapters(chapterList)
-      deduped.reverse()
-      deduped.forEach((ch, idx) => { ch.index = idx; ch.id = idx })
-      if (tocRule.formatJs && formatJsExecutor) {
-        await applyFormatJs(deduped, tocRule.formatJs, formatJsExecutor, source)
-      }
+      const deduped = dedupChapters(chapterList as unknown as EngineChapter[])
+      const finalChapters = deduped.map(toChapter)
+      // 修复：移除无条件的 reverse()。reverse 已在上方按书源规则处理
+      finalChapters.forEach((ch, idx) => { ch.index = idx; ch.id = idx })
 
       if (book) {
-        await saveTocToCache(source, book, deduped)
+        await saveTocToCache(source, book, finalChapters)
       }
 
-      logInfo('engine', 'frontend', `[目录] 完成 ${deduped.length} 章`)
-      return deduped
+      logInfo('engine', 'frontend', `[目录] 完成 ${finalChapters.length} 章`)
+      return finalChapters
     }
     return []
   } catch (err) {
@@ -312,29 +279,5 @@ export async function fetchToc(
       userMessage: '获取目录失败，请检查书源或网络',
     })
     return []
-  }
-}
-
-async function applyFormatJs(
-  chs: Chapter[], formatJs: string,
-  executor: (js: string, context: Record<string, any>) => Promise<string>,
-  source: BookSource
-): Promise<void> {
-  if (!formatJs || chs.length === 0) return
-  const jsCode = formatJs.replace(/^@js:\s*/, '').replace(/^<js>/, '').replace(/<\/js>$/, '').trim()
-  if (!jsCode) return
-  for (let i = 0; i < chs.length; i++) {
-    try {
-      const result = await executor(jsCode, {
-        index: i + 1,
-        chapter: chs[i],
-        title: chs[i].title,
-        source,
-        baseUrl: source.bookSourceUrl || '',
-      })
-      if (result && result.trim()) chs[i].title = result.trim()
-    } catch {
-      // ignore
-    }
   }
 }

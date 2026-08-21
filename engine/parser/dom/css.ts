@@ -22,6 +22,11 @@ function normalizeCssSelector(expression: string): string {
     .trim()
 }
 
+function safeCharAt(str: string, index: number): string {
+  const ch = str[index]
+  return ch !== undefined ? ch : ''
+}
+
 function elementsSingle(parent: DomNode, rule: string): DomNode[] {
   const rus = rule.trim()
   if (!rus) return []
@@ -40,7 +45,7 @@ function elementsSingle(parent: DomNode, rule: string): DomNode[] {
     let curInt: number | null = null
 
     while (len-- >= 0) {
-      const rl = rus[len]
+      const rl = safeCharAt(rus, len)
       if (rl === ' ') continue
       if (rl >= '0' && rl <= '9') { l = rl + l; continue }
       if (rl === '-') { curMinus = true; continue }
@@ -54,7 +59,13 @@ function elementsSingle(parent: DomNode, rule: string): DomNode[] {
           if (curInt === null) break
           indexes.push(curInt)
         } else {
-          indexes.push([curInt, curList[curList.length - 1], curList.length === 2 ? curList[0] : 1])
+          const endVal = curList[curList.length - 1]
+          const stepVal = curList.length === 2 ? curList[0] : 1
+          indexes.push([
+            curInt,
+            endVal !== undefined ? endVal : null,
+            stepVal !== undefined && stepVal !== null ? stepVal : 1,
+          ])
           curList.length = 0
         }
         if (rl === '!') {
@@ -77,7 +88,7 @@ function elementsSingle(parent: DomNode, rule: string): DomNode[] {
     let curMinus = false
 
     while (len-- >= 0) {
-      const rl = rus[len]
+      const rl = safeCharAt(rus, len)
       if (rl === ' ') continue
       if (rl >= '0' && rl <= '9') { l = rl + l; continue }
       if (rl === '-') { curMinus = true; continue }
@@ -134,10 +145,8 @@ function finishSelect(
       case 'class': elements = parent.getElementsByClassName ? parent.getElementsByClassName(rest) : []; break
       case 'tag': elements = parent.getElementsByTagName ? parent.getElementsByTagName(rest) : []; break
       case 'id': {
-        // 正确匹配 id 属性
         const el = parent.querySelector ? parent.querySelector('#' + rest) : null
         elements = el ? [el] : []
-        // 如果 querySelector 不支持，尝试遍历
         if (elements.length === 0 && parent.querySelectorAll) {
           const all = parent.querySelectorAll('*')
           elements = all.filter((e) => e.getAttribute && e.getAttribute('id') === rest)
@@ -173,12 +182,14 @@ function finishSelect(
   if (indexes.length === 0) {
     for (let ix = indexDefault.length - 1; ix >= 0; ix--) {
       const it = indexDefault[ix]
+      if (it === undefined) continue
       if (it >= 0 && it < len) indexSet.add(it)
       else if (it < 0 && len >= -it) indexSet.add(it + len)
     }
   } else {
     for (let ix = indexes.length - 1; ix >= 0; ix--) {
       const item = indexes[ix]
+      if (item === undefined) continue
       if (Array.isArray(item)) {
         const [startX, endX, stepX] = item
         let start = startX ?? 0
@@ -208,7 +219,8 @@ function finishSelect(
 
   const result: DomNode[] = []
   for (const i of indexSet) {
-    if (i < len && elements[i]) result.push(elements[i])
+    const el = elements[i]
+    if (i < len && el) result.push(el)
   }
   return result
 }
@@ -271,14 +283,18 @@ function getResultList(root: DomNode, ruleStr: string): string[] | null {
   for (let i = 0; i < last; i++) {
     const nextElements: DomNode[] = []
     for (const elt of elements) {
-      const selected = elementsSingle(elt, validRules[i])
+      const rule = validRules[i]
+      if (rule === undefined) continue
+      const selected = elementsSingle(elt, rule)
       for (const s of selected) nextElements.push(s)
     }
     elements = nextElements
     if (elements.length === 0) return null
   }
 
-  return getResultLast(elements, validRules[last])
+  const lastRule = validRules[last]
+  if (lastRule === undefined) return null
+  return getResultLast(elements, lastRule)
 }
 
 function getElementsRecursive(temp: DomNode, ruleStr: string, depth = 0): DomNode[] {
@@ -321,7 +337,7 @@ function getElementsRecursive(temp: DomNode, ruleStr: string, depth = 0): DomNod
       for (const rl of validRlSegments) {
         const nextElements: DomNode[] = []
         for (const et of current) {
-          if (!et || typeof et !== 'object' || !('querySelectorAll' in (et as any))) {
+          if (!et || typeof et !== 'object' || !('querySelectorAll' in et)) {
             continue
           }
           const subElements = getElementsRecursive(et, rl, depth + 1)
@@ -332,7 +348,8 @@ function getElementsRecursive(temp: DomNode, ruleStr: string, depth = 0): DomNod
       }
       el = current
     } else if (validRlSegments.length === 1) {
-      el = elementsSingle(temp, validRlSegments[0])
+      const rl = validRlSegments[0]
+      if (rl === undefined) { el = [] } else { el = elementsSingle(temp, rl) }
     } else {
       el = []
     }
@@ -348,10 +365,13 @@ function combineElementResults(results: DomNode[][], elementsType: string): DomN
   if (results.length === 0) return []
   if (elementsType === '%%') {
     const merged: DomNode[] = []
-    const baseLen = results[0].length
+    const first = results[0]
+    if (!first) return []
+    const baseLen = first.length
     for (let i = 0; i < baseLen; i++) {
       for (const es of results) {
-        if (i < es.length) merged.push(es[i])
+        const el = es[i]
+        if (i < es.length && el) merged.push(el)
       }
     }
     return merged
@@ -408,7 +428,8 @@ export class AnalyzeByCSS {
       const maxLen = Math.max(...results.map((r) => r.length), 0)
       for (let i = 0; i < maxLen; i++) {
         for (const list of results) {
-          if (i < list.length) merged.push(list[i])
+          const val = list[i]
+          if (i < list.length && val !== undefined) merged.push(val)
         }
       }
       return merged
@@ -458,7 +479,7 @@ export class AnalyzeByCSS {
     let i = 0
 
     while (i < rule.length) {
-      const ch = rule[i]
+      const ch = safeCharAt(rule, i)
       if (ch === '(' || ch === '[' || ch === '{') depth++
       else if (ch === ')' || ch === ']' || ch === '}') depth--
 
@@ -487,18 +508,28 @@ export class AnalyzeByCSS {
   private applyPseudo(elements: DomNode[], rule: string): DomNode[] {
     const ltMatch = rule.match(/:lt\((\d+)\)/)
     if (ltMatch) {
-      const n = parseInt(ltMatch[1])
-      return elements.slice(0, n)
+      const nStr = ltMatch[1]
+      if (nStr !== undefined) {
+        const n = parseInt(nStr)
+        return elements.slice(0, n)
+      }
     }
     const gtMatch = rule.match(/:gt\((\d+)\)/)
     if (gtMatch) {
-      const n = parseInt(gtMatch[1])
-      return elements.slice(n + 1)
+      const nStr = gtMatch[1]
+      if (nStr !== undefined) {
+        const n = parseInt(nStr)
+        return elements.slice(n + 1)
+      }
     }
     const eqMatch = rule.match(/:eq\((\d+)\)/)
     if (eqMatch) {
-      const n = parseInt(eqMatch[1])
-      return n >= 0 && n < elements.length ? [elements[n]] : []
+      const nStr = eqMatch[1]
+      if (nStr !== undefined) {
+        const n = parseInt(nStr)
+        const el = elements[n]
+        return n >= 0 && n < elements.length && el ? [el] : []
+      }
     }
     return elements
   }

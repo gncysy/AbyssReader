@@ -5,31 +5,40 @@ use std::sync::LazyLock;
 use tokio::sync::Mutex;
 use reqwest::Method;
 
-static CLIENT_CACHE: LazyLock<Mutex<HashMap<String, Client>>> = LazyLock::new(|| Mutex::new(HashMap::new()));
+struct CachedClient {
+    client: Client,
+    created_at: std::time::Instant,
+}
 
-// SEC-1 修复：增强内网 IP 检测
+// 修复：缓存 key 包含域名+超时时间，不同超时要求使用不同 Client
+static CLIENT_CACHE: LazyLock<Mutex<HashMap<String, CachedClient>>> = LazyLock::new(|| Mutex::new(HashMap::new()));
+
+const CLIENT_CACHE_TTL_SECS: u64 = 600; // 10 分钟
+
+fn get_cache_key(domain: &str, timeout: u64) -> String {
+    format!("{}:{}", domain, timeout)
+}
+
 fn is_blocked_host(hostname: &str) -> bool {
     let blocked = ["127.0.0.1", "localhost", "::1", "0.0.0.0", "localhost."];
     if blocked.contains(&hostname.to_lowercase().as_str()) {
         return true;
     }
-
-    // 处理 IPv6 映射 IPv4：::ffff:127.0.0.1
     if let Some(ipv4_part) = hostname.strip_prefix("::ffff:") {
         return is_blocked_ipv4(ipv4_part);
     }
-
     if let Ok(addr) = hostname.parse::<std::net::Ipv4Addr>() {
         return is_blocked_ipv4(&addr.to_string());
     }
-
     if let Ok(addr) = hostname.parse::<std::net::Ipv6Addr>() {
         let octets = addr.octets();
-        // ::1
         if octets.iter().all(|&b| b == 0) || (octets[0] == 0 && octets[1] == 0 && octets[15] == 1) {
             return true;
         }
-        // IPv4-mapped
+        // 修复：IPv6 唯一本地地址 fc00::/7 和链路本地 fe80::/10
+        if octets[0] & 0xfe == 0xfc || octets[0] & 0xfe == 0xfe && octets[1] & 0xc0 == 0x80 {
+            return true;
+        }
         if octets[0] == 0 && octets[1] == 0 && octets[2] == 0 && octets[3] == 0 &&
            octets[4] == 0 && octets[5] == 0 && octets[6] == 0 && octets[7] == 0 &&
            octets[8] == 0 && octets[9] == 0 && octets[10] == 0xff && octets[11] == 0xff {
@@ -56,6 +65,10 @@ fn is_blocked_ipv4(ip: &str) -> bool {
             return true;
         }
         if octets[0] == 0 {
+            return true;
+        }
+        // 修复：100.64.0.0/10 运营商级 NAT
+        if octets[0] == 100 && octets[1] >= 64 && octets[1] <= 127 {
             return true;
         }
     }
@@ -125,16 +138,11 @@ pub async fn execute_http_request(
     );
 
     let parsed = url::Url::parse(&cleaned_url).map_err(|e| {
-        crate::js_runtime::ops::emit_log(
-            "error",
-            &format!("[http] URL 解析失败: {} -> {}", cleaned_url, e),
-        );
         AbyssError::ConfigError(format!("无效 URL: {} -> {}", cleaned_url, e))
     })?;
 
     if let Some(host) = parsed.host_str() {
         if is_blocked_host(host) {
-            crate::js_runtime::ops::emit_log("error", &format!("[http] 阻止内网地址: {}", host));
             return Err(AbyssError::ConfigError(format!("禁止访问内网地址: {}", host)));
         }
     }
@@ -143,34 +151,38 @@ pub async fn execute_http_request(
     let timeout = if timeout_secs == 0 { 30 } else { timeout_secs };
     let ua = crate::js_runtime::ops::get_ua();
     let ua = if ua.is_empty() {
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+        crate::utils::DEFAULT_UA
     } else {
         &ua
     };
 
-    let mut cache = CLIENT_CACHE.lock().await;
-    let client = if let Some(c) = cache.get(&domain) {
-        c.clone()
-    } else {
-        match Client::builder()
-            .user_agent(ua)
-            .danger_accept_invalid_certs(true)
-            .redirect(reqwest::redirect::Policy::limited(5))
-            .timeout(std::time::Duration::from_secs(timeout))
-            .build()
-        {
-            Ok(c) => {
-                cache.insert(domain.clone(), c.clone());
-                c
+    let cache_key = get_cache_key(&domain, timeout);
+
+    let client = {
+        let mut cache = CLIENT_CACHE.lock().await;
+
+        // 检查是否有有效缓存
+        if let Some(cached) = cache.get(&cache_key) {
+            if cached.created_at.elapsed().as_secs() < CLIENT_CACHE_TTL_SECS {
+                cached.client.clone()
+            } else {
+                // 过期，重建
+                let new_client = build_client(ua, timeout);
+                cache.insert(cache_key.clone(), CachedClient {
+                    client: new_client.clone(),
+                    created_at: std::time::Instant::now(),
+                });
+                new_client
             }
-            Err(_) => {
-                let c = Client::new();
-                cache.insert(domain.clone(), c.clone());
-                c
-            }
+        } else {
+            let new_client = build_client(ua, timeout);
+            cache.insert(cache_key.clone(), CachedClient {
+                client: new_client.clone(),
+                created_at: std::time::Instant::now(),
+            });
+            new_client
         }
     };
-    drop(cache);
 
     let method_upper = method.to_uppercase();
     let mut req = match method_upper.as_str() {
@@ -203,10 +215,6 @@ pub async fn execute_http_request(
 
     let start = std::time::Instant::now();
     let response = req.send().await.map_err(|e| {
-        crate::js_runtime::ops::emit_log(
-            "error",
-            &format!("[http] 请求失败: {} -> {}", cleaned_url, e),
-        );
         AbyssError::NetworkError(e.to_string())
     })?;
 
@@ -221,12 +229,10 @@ pub async fn execute_http_request(
     save_cookies_from_response(&cleaned_url, &resp_headers);
 
     if status < 200 || status >= 300 {
-        crate::js_runtime::ops::emit_log("warn", &format!("[http] 非 2xx 状态码: {}", status));
         return Err(AbyssError::NetworkError(format!("HTTP {}", status)));
     }
 
     let bytes = response.bytes().await.map_err(|e| {
-        crate::js_runtime::ops::emit_log("error", &format!("[http] 读取响应失败: {}", e));
         AbyssError::NetworkError(e.to_string())
     })?;
 
@@ -262,6 +268,16 @@ pub async fn execute_http_request(
         ),
     );
     Ok(content)
+}
+
+fn build_client(ua: &str, timeout: u64) -> Client {
+    Client::builder()
+        .user_agent(ua)
+        .danger_accept_invalid_certs(true)
+        .redirect(reqwest::redirect::Policy::limited(5))
+        .timeout(std::time::Duration::from_secs(timeout))
+        .build()
+        .unwrap_or_else(|_| Client::new())
 }
 
 pub fn execute_http_request_blocking(

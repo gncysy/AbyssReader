@@ -1,62 +1,56 @@
 // ============================================
 // JSONPath 解析器 — 对齐 Legado AnalyzeByJSonPath
+// 使用自实现的 SimpleJSONPath，零外部依赖
 // ============================================
 
-import jsonpath from 'jsonpath'
+import { SimpleJSONPath } from './simple-jsonpath.js'
 import { RuleAnalyzer } from '../rule-analyzer.js'
 
 export class AnalyzeByJSONPath {
   private data: unknown
+  private queryEngine: SimpleJSONPath
 
   constructor(content: unknown) {
     if (typeof content === 'string') {
+      const trimmed = content.trim()
+      if (!trimmed) {
+        this.data = {}
+        this.queryEngine = new SimpleJSONPath(this.data)
+        return
+      }
+      const noBom = trimmed.replace(/^\uFEFF/, '')
       try {
-        this.data = JSON.parse(content)
+        this.data = JSON.parse(noBom)
       } catch {
         // 非 JSON 字符串，包装为 { result: content }
         this.data = { result: content }
       }
     } else if (content === null || content === undefined) {
       this.data = {}
-    } else if (typeof content === 'object') {
-      this.data = content
     } else {
-      // 数字/布尔等其他类型，包装为 { result: content }
-      this.data = { result: content }
+      this.data = content
     }
+    this.queryEngine = new SimpleJSONPath(this.data)
   }
 
-  getString(rule: string, resolver?: (inner: string) => string): string | null {
+  getString(rule: string, _resolver?: (inner: string) => string): string | null {
     if (!rule) return null
 
     const ruleAnalyzer = new RuleAnalyzer(rule, true)
     const rules = ruleAnalyzer.splitRule('&&', '||')
 
     if (rules.length === 1) {
-      ruleAnalyzer.reSetPos()
-      const processed = ruleAnalyzer.innerRule('{$.', 1, 1, (inner) => {
-        return resolver ? resolver(inner) : (this.getString(inner, resolver) || '')
-      })
-      if (!processed) {
-        try {
-          const val = jsonpath.query(this.data as object, rule)
-          if (Array.isArray(val)) {
-            if (val.length === 1 && Array.isArray(val[0])) {
-              return val[0].map((v) => String(v)).join('\n')
-            }
-            return val.map((v) => String(v)).join('\n')
-          }
-          return String(val)
-        } catch {
-          return null
-        }
-      }
-      return processed
+      const r0 = rules[0]
+      if (r0 === undefined) return null
+      const results = this.queryEngine.query(r0)
+      if (results.length === 0) return null
+      return results.map((v) => String(v)).join('\n')
     }
 
     const textList: string[] = []
     for (const rl of rules) {
-      const temp = this.getString(rl, resolver)
+      if (rl === undefined) continue
+      const temp = this.getString(rl, _resolver)
       if (temp) {
         textList.push(temp)
         if (ruleAnalyzer.elementsType === '||') break
@@ -71,40 +65,31 @@ export class AnalyzeByJSONPath {
     const rules = ruleAnalyzer.splitRule('&&', '||', '%%')
 
     if (rules.length === 1) {
-      ruleAnalyzer.reSetPos()
-      const processed = ruleAnalyzer.innerRule('{$.', 1, 1, (inner) => this.getString(inner) || '')
-      if (!processed) {
-        try {
-          const val = jsonpath.query(this.data as object, rule)
-          if (Array.isArray(val)) {
-            if (val.length === 1 && Array.isArray(val[0])) {
-              return val[0].map((v) => String(v))
-            }
-            return val.map((v) => String(v))
-          }
-          return [String(val)]
-        } catch {
-          return []
-        }
-      }
-      return [processed]
+      const r0 = rules[0]
+      if (r0 === undefined) return []
+      const results = this.queryEngine.query(r0)
+      return results.map((v) => String(v))
     }
 
     const results: string[][] = []
     for (const rl of rules) {
+      if (rl === undefined) continue
       const temp = this.getStringList(rl)
       if (temp.length > 0) {
         results.push(temp)
         if (ruleAnalyzer.elementsType === '||') break
+      } else {
+        results.push([])
       }
     }
     if (results.length === 0) return []
     if (ruleAnalyzer.elementsType === '%%') {
       const merged: string[] = []
-      const baseLen = results[0].length
-      for (let i = 0; i < baseLen; i++) {
+      const maxLen = Math.max(...results.map((r) => r.length), 0)
+      for (let i = 0; i < maxLen; i++) {
         for (const r of results) {
-          if (i < r.length) merged.push(r[i])
+          const val = r[i]
+          if (i < r.length && val !== undefined) merged.push(val)
         }
       }
       return merged
@@ -113,35 +98,24 @@ export class AnalyzeByJSONPath {
   }
 
   getObject(rule: string): unknown {
-    try {
-      return jsonpath.query(this.data as object, rule)
-    } catch {
-      return null
-    }
+    const results = this.queryEngine.query(rule)
+    return results.length > 0 ? results[0] : null
   }
 
-  getList(rule: string): any[] {
+  getList(rule: string): unknown[] {
     if (!rule) return []
     const ruleAnalyzer = new RuleAnalyzer(rule, true)
     const rules = ruleAnalyzer.splitRule('&&', '||', '%%')
 
     if (rules.length === 1) {
-      try {
-        const result = jsonpath.query(this.data as object, rules[0])
-        if (Array.isArray(result)) {
-          if (result.length === 1 && Array.isArray(result[0])) {
-            return result[0]
-          }
-          return result
-        }
-        return result ? [result] : []
-      } catch {
-        return []
-      }
+      const r0 = rules[0]
+      if (r0 === undefined) return []
+      return this.queryEngine.query(r0)
     }
 
-    const results: any[][] = []
+    const results: unknown[][] = []
     for (const rl of rules) {
+      if (rl === undefined) continue
       const temp = this.getList(rl)
       if (temp.length > 0) {
         results.push(temp)
@@ -150,15 +124,16 @@ export class AnalyzeByJSONPath {
     }
     if (results.length === 0) return []
     if (ruleAnalyzer.elementsType === '%%') {
-      const merged: any[] = []
-      const baseLen = results[0].length
-      for (let i = 0; i < baseLen; i++) {
+      const merged: unknown[] = []
+      const maxLen = Math.max(...results.map((r) => r.length), 0)
+      for (let i = 0; i < maxLen; i++) {
         for (const r of results) {
-          if (i < r.length && r[i] !== null && r[i] !== undefined) merged.push(r[i])
+          const val = r[i]
+          if (i < r.length && val !== null && val !== undefined) merged.push(val)
         }
       }
       return merged
     }
-    return ([] as any[]).concat(...results)
+    return ([] as unknown[]).concat(...results)
   }
 }

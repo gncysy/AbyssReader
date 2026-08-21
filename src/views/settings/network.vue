@@ -29,7 +29,14 @@ const presetOptions = [
 const selectedPreset = ref(DEFAULT_UA)
 const customUA = ref(DEFAULT_UA)
 
-onMounted(async () => { const saved = await store.get('userAgent'); if (saved) { customUA.value = saved; const match = presetOptions.find((o) => o.value === saved); selectedPreset.value = match ? saved : '__custom__' } })
+onMounted(async () => {
+  const saved = await store.get('userAgent')
+  if (typeof saved === 'string' && saved) {
+    customUA.value = saved
+    const match = presetOptions.find((o) => o.value === saved)
+    selectedPreset.value = match ? saved : '__custom__'
+  }
+})
 watch(selectedPreset, (val) => { if (val !== '__custom__') customUA.value = val })
 async function saveUA(): Promise<void> { const ua = customUA.value.trim(); if (!ua) return; await store.set('userAgent', ua); msg.success('User-Agent 已保存') }
 async function resetUA(): Promise<void> { selectedPreset.value = DEFAULT_UA; customUA.value = DEFAULT_UA; await store.set('userAgent', DEFAULT_UA); msg.success('已恢复默认 UA') }

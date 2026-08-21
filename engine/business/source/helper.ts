@@ -2,20 +2,21 @@
 // 书源辅助 — parseHeader 等纯函数
 // ============================================
 
-import type { BookSource } from '../../types.js'
+import type { EngineBookSource, EngineBook } from '../../types.js'
 
 export function parseHeader(header: string | null | undefined): Record<string, string> | null {
   if (!header) return null
-  if (typeof header !== 'string') return header as any
+  if (typeof header !== 'string') return header as unknown as Record<string, string>
   try {
-    return JSON.parse(header)
+    return JSON.parse(header) as Record<string, string>
   } catch {
     return null
   }
 }
 
-export function parseSourcesFromJson(jsonStr: any): any[] {
-  let data = jsonStr
+export function parseSourcesFromJson(jsonStr: unknown): EngineBookSource[] {
+  let data: unknown = jsonStr
+
   if (typeof jsonStr === 'object' && jsonStr !== null) {
     data = jsonStr
   } else if (typeof jsonStr === 'string') {
@@ -29,35 +30,45 @@ export function parseSourcesFromJson(jsonStr: any): any[] {
     return []
   }
 
-  if (Array.isArray(data)) return data
+  if (Array.isArray(data)) return data as EngineBookSource[]
 
-  if (data.bookSourceUrl || data.bookSourceName || data.ruleSearch || data.searchUrl) return [data]
-
-  const wrapperKeys = ['sources', 'bookSources', 'list', 'items', 'result']
-  for (const key of wrapperKeys) {
-    if (data[key] && Array.isArray(data[key])) return data[key]
-  }
-
-  if (data.data && typeof data.data === 'object') {
-    const inner = data.data
-    if (!Array.isArray(inner)) {
-      for (const key of wrapperKeys) {
-        if (inner[key] && Array.isArray(inner[key])) return inner[key]
-      }
-    } else {
-      return inner
+  if (typeof data === 'object' && data !== null) {
+    const obj = data as Record<string, unknown>
+    if (obj.bookSourceUrl || obj.bookSourceName || obj.ruleSearch || obj.searchUrl) {
+      return [obj as unknown as EngineBookSource]
     }
-  }
 
-  for (const value of Object.values(data)) {
-    if (Array.isArray(value) && value.length > 0) {
-      const first = value[0]
-      if (
-        typeof first === 'object' &&
-        first !== null &&
-        (first.bookSourceUrl || first.bookSourceName || first.ruleSearch || first.searchUrl)
-      ) {
-        return value
+    const wrapperKeys = ['sources', 'bookSources', 'list', 'items', 'result']
+    for (const key of wrapperKeys) {
+      const value = obj[key]
+      if (Array.isArray(value)) return value as EngineBookSource[]
+    }
+
+    if (obj.data && typeof obj.data === 'object') {
+      const inner = obj.data as Record<string, unknown>
+      if (!Array.isArray(inner)) {
+        for (const key of wrapperKeys) {
+          const value = inner[key]
+          if (Array.isArray(value)) return value as EngineBookSource[]
+        }
+      } else {
+        return inner as unknown as EngineBookSource[]
+      }
+    }
+
+    for (const value of Object.values(obj)) {
+      if (Array.isArray(value) && value.length > 0) {
+        const first = value[0]
+        if (
+          typeof first === 'object' &&
+          first !== null &&
+          ((first as Record<string, unknown>).bookSourceUrl ||
+            (first as Record<string, unknown>).bookSourceName ||
+            (first as Record<string, unknown>).ruleSearch ||
+            (first as Record<string, unknown>).searchUrl)
+        ) {
+          return value as EngineBookSource[]
+        }
       }
     }
   }
@@ -66,8 +77,8 @@ export function parseSourcesFromJson(jsonStr: any): any[] {
 }
 
 export async function parseSourceHeader(
-  source: BookSource,
-  book?: any,
+  source: EngineBookSource,
+  book?: Partial<EngineBook>,
 ): Promise<Record<string, string>> {
   const result: Record<string, string> = {}
   try {
@@ -83,10 +94,20 @@ export async function parseSourceHeader(
             book: book || {},
           })
           try {
-            Object.assign(result, JSON.parse(headerResult))
+            const parsed = JSON.parse(headerResult) as Record<string, unknown>
+            for (const [key, value] of Object.entries(parsed)) {
+              if (value !== null && value !== undefined) {
+                result[key] = String(value)
+              }
+            }
           } catch {
             try {
-              Object.assign(result, JSON.parse(headerResult.replace(/'/g, '"')))
+              const parsed = JSON.parse(headerResult.replace(/'/g, '"')) as Record<string, unknown>
+              for (const [key, value] of Object.entries(parsed)) {
+                if (value !== null && value !== undefined) {
+                  result[key] = String(value)
+                }
+              }
             } catch {
               // ignore
             }
@@ -94,10 +115,20 @@ export async function parseSourceHeader(
         }
       } else {
         try {
-          Object.assign(result, JSON.parse(source.header))
+          const parsed = JSON.parse(source.header) as Record<string, unknown>
+          for (const [key, value] of Object.entries(parsed)) {
+            if (value !== null && value !== undefined) {
+              result[key] = String(value)
+            }
+          }
         } catch {
           try {
-            Object.assign(result, JSON.parse((source.header || '{}').replace(/'/g, '"')))
+            const parsed = JSON.parse((source.header || '{}').replace(/'/g, '"')) as Record<string, unknown>
+            for (const [key, value] of Object.entries(parsed)) {
+              if (value !== null && value !== undefined) {
+                result[key] = String(value)
+              }
+            }
           } catch {
             // ignore
           }

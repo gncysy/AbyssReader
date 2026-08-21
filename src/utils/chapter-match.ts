@@ -25,10 +25,10 @@ function chineseToNumber(str: string): number {
 
   let result = 0
   let temp = 0
-  let unit = 1
 
   for (let i = str.length - 1; i >= 0; i--) {
     const ch = str[i]
+    if (ch === undefined) return -1
     const num = CN_NUM_MAP[ch]
     if (num === undefined) return -1
 
@@ -36,15 +36,12 @@ function chineseToNumber(str: string): number {
       if (temp === 0) temp = 1
       result += temp * num
       temp = 0
-      unit = num
     } else {
       temp = num
     }
   }
 
-  // 处理最后一位数字
   if (temp > 0) result += temp
-  // 处理"十"开头的情况（如"十五" = 15）
   if (str.startsWith('十')) result += 10
 
   return result
@@ -55,13 +52,19 @@ function getChapterNum(chapterName: string | null | undefined): number {
   const name1 = fullToHalf(chapterName).replace(/\s/g, '')
   const match1 = CHAPTER_NUM_PATTERN1.exec(name1)
   if (match1) {
-    const num = chineseToNumber(match1[1])
-    if (num >= 0) return num
+    const m1 = match1[1]
+    if (m1 !== undefined) {
+      const num = chineseToNumber(m1)
+      if (num >= 0) return num
+    }
   }
   const match2 = CHAPTER_NUM_PATTERN2.exec(name1)
   if (match2) {
-    const num = chineseToNumber(match2[1])
-    if (num >= 0) return num
+    const m2 = match2[1]
+    if (m2 !== undefined) {
+      const num = chineseToNumber(m2)
+      if (num >= 0) return num
+    }
   }
   return -1
 }
@@ -125,7 +128,9 @@ export function findChapterIndex(
 
   if (oldName.length > 0) {
     for (let i = min; i <= max; i++) {
-      const newName = getPureChapterName(newChapterList[i]?.title)
+      const item = newChapterList[i]
+      if (!item) continue
+      const newName = getPureChapterName(item.title)
       const sim = jaccardSimilarity(oldName, newName)
       if (sim > nameSim) { nameSim = sim; newIndex = i }
     }
@@ -133,7 +138,9 @@ export function findChapterIndex(
 
   if (nameSim < NAME_SIMILARITY_THRESHOLD && oldChapterNum > 0) {
     for (let i = min; i <= max; i++) {
-      const temp = getChapterNum(newChapterList[i]?.title)
+      const item = newChapterList[i]
+      if (!item) continue
+      const temp = getChapterNum(item.title)
       if (temp === oldChapterNum) { newIndex = i; break }
       if (Math.abs(temp - oldChapterNum) < Math.abs(newNum - oldChapterNum)) {
         newNum = temp

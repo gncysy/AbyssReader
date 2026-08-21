@@ -3,6 +3,10 @@ import { ref, computed } from 'vue'
 import type { Book, BookSource } from '@/types'
 import { store } from '@/services'
 
+function isBookArray(value: unknown): value is Book[] {
+  return Array.isArray(value)
+}
+
 export const useBookshelfStore = defineStore('bookshelf', () => {
   const books = ref<Book[]>([])
   const loading = ref(false)
@@ -14,7 +18,7 @@ export const useBookshelfStore = defineStore('bookshelf', () => {
   const showReader = ref(false)
   const readerBook = ref<Book | null>(null)
   const readerSource = ref<BookSource | null>(null)
-  const readerChapters = ref<any[]>([])
+  const readerChapters = ref<unknown[]>([])
 
   const filteredBooks = computed(() => {
     let result = books.value
@@ -34,7 +38,8 @@ export const useBookshelfStore = defineStore('bookshelf', () => {
   async function loadBooks(): Promise<void> {
     loading.value = true
     try {
-      books.value = (await store.get('bookshelf')) || []
+      const raw = await store.get('bookshelf')
+      books.value = isBookArray(raw) ? raw : []
     } catch {
       books.value = []
     } finally {
@@ -56,7 +61,8 @@ export const useBookshelfStore = defineStore('bookshelf', () => {
 
   async function addBook(book: Book): Promise<boolean> {
     if (hasBook(book.bookUrl)) return false
-    const all = (await store.get('bookshelf')) || []
+    const raw = await store.get('bookshelf')
+    const all = isBookArray(raw) ? [...raw] : []
     const newBook: Book = {
       ...book,
       group: book.group || 0,
@@ -72,24 +78,29 @@ export const useBookshelfStore = defineStore('bookshelf', () => {
     }
     all.unshift(newBook)
     await store.set('bookshelf', all)
-    books.value = [...all]
+    books.value = all
     return true
   }
 
   async function removeBookByUrl(bookUrl: string): Promise<void> {
-    const all = (await store.get('bookshelf')) || []
-    const filtered = all.filter((b: Book) => b.bookUrl !== bookUrl)
+    const raw = await store.get('bookshelf')
+    const all = isBookArray(raw) ? [...raw] : []
+    const filtered = all.filter((b) => b.bookUrl !== bookUrl)
     await store.set('bookshelf', filtered)
-    books.value = [...filtered]
+    books.value = filtered
   }
 
   async function updateBook(bookUrl: string, fields: Partial<Book>): Promise<void> {
-    const all = (await store.get('bookshelf')) || []
-    const index = all.findIndex((b: Book) => b.bookUrl === bookUrl)
+    const raw = await store.get('bookshelf')
+    const all = isBookArray(raw) ? [...raw] : []
+    const index = all.findIndex((b) => b.bookUrl === bookUrl)
     if (index !== -1) {
-      all[index] = { ...all[index], ...fields }
+      const existing = all[index]
+      if (existing) {
+        all[index] = { ...existing, ...fields }
+      }
       await store.set('bookshelf', all)
-      books.value = [...all]
+      books.value = all
       if (detailBook.value && detailBook.value.bookUrl === bookUrl) {
         detailBook.value = { ...detailBook.value, ...fields }
       }
@@ -110,7 +121,7 @@ export const useBookshelfStore = defineStore('bookshelf', () => {
     if (detailBook.value && detailBook.value.bookUrl === bookUrl && detailBook.value.kind) {
       return detailBook.value.kind
     }
-    const found = books.value.find((b: Book) => b.bookUrl === bookUrl)
+    const found = books.value.find((b) => b.bookUrl === bookUrl)
     return found?.kind || ''
   }
 
@@ -125,7 +136,7 @@ export const useBookshelfStore = defineStore('bookshelf', () => {
     detailBook.value = null
   }
 
-  function openReader(book: Book, source: BookSource | null, chapters?: any[]): void {
+  function openReader(book: Book, source: BookSource | null, chapters?: unknown[]): void {
     readerBook.value = book
     readerSource.value = source
     readerChapters.value = chapters || []

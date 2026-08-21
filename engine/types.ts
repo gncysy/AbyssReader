@@ -2,26 +2,25 @@
 // 引擎类型 — 单一数据源（零外部依赖）
 // ============================================
 
-// ─── 轻量书源类型（引擎层自用，不含 UI 字段） ───
 export interface EngineBookSource {
   bookSourceName?: string
   bookSourceUrl?: string
+  name?: string
   bookSourceType?: number
   bookSourceGroup?: string | null
   bookUrlPattern?: string | null
   header?: string | null
   searchUrl?: string | null
   exploreUrl?: string | null
-  ruleSearch?: Record<string, any> | null
-  ruleBookInfo?: Record<string, any> | null
-  ruleToc?: Record<string, any> | null
-  ruleContent?: Record<string, any> | null
-  ruleExplore?: Record<string, any> | null
+  ruleSearch?: Record<string, unknown> | null
+  ruleBookInfo?: Record<string, unknown> | null
+  ruleToc?: Record<string, unknown> | null
+  ruleContent?: string | Record<string, unknown> | null
+  ruleExplore?: Record<string, unknown> | null
   enabled?: boolean
-  [key: string]: any
+  [key: string]: unknown
 }
 
-// ─── 轻量书籍类型（引擎层自用） ───
 export interface EngineBook {
   name?: string
   author?: string
@@ -32,10 +31,9 @@ export interface EngineBook {
   lastChapter?: string | null
   tocUrl?: string | null
   wordCount?: string | null
-  [key: string]: any
+  [key: string]: unknown
 }
 
-// ─── 轻量章节类型（引擎层自用） ───
 export interface EngineChapter {
   id?: number
   title?: string
@@ -43,10 +41,13 @@ export interface EngineChapter {
   index?: number
   isVip?: boolean
   isPay?: boolean
-  [key: string]: any
+  updateTime?: string | undefined
+  wordCount?: string | undefined
+  _deferredJs?: string | undefined
+  _deferredResult?: unknown
+  [key: string]: unknown
 }
 
-// ─── 规则上下文 ───
 export interface ParseContext {
   source?: EngineBookSource
   book?: Partial<EngineBook>
@@ -56,14 +57,13 @@ export interface ParseContext {
   page?: number
   key?: string
   isUrl?: boolean
-  result?: any
-  src?: any
+  result?: unknown
+  src?: unknown
+  [key: string]: unknown
 }
 
-// ─── 规则模式 ───
-export type RuleMode = 'css' | 'json' | 'xpath' | 'js' | 'regex' | 'webjs'
+export type RuleMode = 'css' | 'json' | 'xpath' | 'js' | 'regex' | 'webjs' | 'default'
 
-// ─── 单个规则 ───
 export interface SourceRule {
   mode: RuleMode
   rule: string
@@ -74,7 +74,6 @@ export interface SourceRule {
   _combineType?: '&&' | '||' | '%%'
 }
 
-// ─── URL 解析结果 ───
 export interface UrlAnalysis {
   url: string
   method: 'GET' | 'POST'
@@ -90,24 +89,22 @@ export interface UrlAnalysis {
   webViewDelayTime: number
 }
 
-// ─── 网络请求 ───
 export interface RequestConfig {
   url: string
-  method?: 'GET' | 'POST' | 'PUT' | 'DELETE' | 'HEAD'
-  headers?: Record<string, string>
-  body?: any
-  timeout?: number
-  retry?: number
-  followRedirect?: boolean
-  responseType?: 'text' | 'arraybuffer' | 'json'
-  charset?: string
-  useWebView?: boolean
-  webJs?: string | null
-  sourceType?: number
-  bodyJs?: string | null
+  method?: 'GET' | 'POST' | 'PUT' | 'DELETE' | 'HEAD' | undefined
+  headers?: Record<string, string> | undefined
+  body?: unknown
+  timeout?: number | undefined
+  retry?: number | undefined
+  followRedirect?: boolean | undefined
+  responseType?: 'text' | 'arraybuffer' | 'json' | undefined
+  charset?: string | undefined
+  useWebView?: boolean | undefined
+  webJs?: string | null | undefined
+  sourceType?: number | undefined
+  bodyJs?: string | null | undefined
 }
 
-// ─── 响应数据 ───
 export interface ResponseData {
   status: number
   data: string | ArrayBuffer
@@ -116,14 +113,12 @@ export interface ResponseData {
   duration: number
 }
 
-// ─── JS 运行时接口 ───
 export interface JsRuntime {
-  execute(code: string, context: Record<string, any>): Promise<string>
-  setCookieJar?(jar: any): void
+  execute(code: string, context: Record<string, unknown>): Promise<string>
+  setCookieJar?(jar: unknown): void
   clearCache?(): void
 }
 
-// ─── 解析器接口 ───
 export interface DomParser {
   parse(html: string, baseUrl?: string): DomNode
 }
@@ -139,5 +134,5 @@ export interface DomNode {
 }
 
 export interface JsonPathQuery {
-  query(obj: any, path: string): any
+  query(obj: unknown, path: string): unknown
 }

@@ -4,6 +4,7 @@
 
 import { ref, computed } from 'vue'
 import { fetchToc, loadTocFromCache, saveTocToCache } from '@/services/toc.js'
+import { logInfo } from '@engine/log/index.js'
 import type { Book, BookSource, Chapter } from '@/types'
 
 const TOC_PAGE_SIZE = 200
@@ -46,38 +47,26 @@ export function useToc() {
     tocUrl: string,
     book?: Book
   ): Promise<Chapter[]> {
-    // 第一步：查缓存
-    const cached = await loadTocFromCache(source, book)
-
-    if (cached && cached.length > 0) {
-      chapters.value = cached
-      loadingToc.value = false
-    }
-
-    // 第二步：后台刷新
+    loadingToc.value = true
     try {
+      // 直接调用 fetchToc，它内部已处理缓存逻辑
       const fresh = await fetchToc(source, tocUrl, book)
-
-      if (fresh && fresh.length > 0) {
-        const cachedJson = JSON.stringify(cached || [])
-        const freshJson = JSON.stringify(fresh)
-
-        if (cachedJson !== freshJson) {
-          chapters.value = fresh
-          if (book) {
-            await saveTocToCache(source, book, fresh)
-          }
+      chapters.value = fresh
+      return fresh
+    } catch (err) {
+      // fetchToc 失败时降级到缓存
+      if (book) {
+        const cached = await loadTocFromCache(source, book)
+        if (cached && cached.length > 0) {
+          chapters.value = cached
+          return cached
         }
       }
-    } catch (err) {
-      if (!cached || cached.length === 0) {
-        console.warn('[useToc] 目录加载失败:', err)
-      }
+      chapters.value = []
+      return []
     } finally {
       loadingToc.value = false
     }
-
-    return chapters.value
   }
 
   return {

@@ -5,13 +5,18 @@
 import { invoke } from '@tauri-apps/api/core'
 import { store } from './store.js'
 
+export interface RssSourceRecord {
+  sourceUrl: string
+  [key: string]: unknown
+}
+
 export const rss = {
-  getSources: async (): Promise<any[]> => {
+  getSources: async (): Promise<RssSourceRecord[]> => {
     const data = await store.get('rssSources')
-    return Array.isArray(data) ? data : []
+    return Array.isArray(data) ? (data as RssSourceRecord[]) : []
   },
 
-  saveSources: async (sources: any[]): Promise<void> => {
+  saveSources: async (sources: RssSourceRecord[]): Promise<void> => {
     await store.set('rssSources', sources)
   },
 

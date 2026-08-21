@@ -4,15 +4,25 @@
 
 import { invoke } from '@tauri-apps/api/core'
 
+export interface FetchOptions {
+  method?: string
+  headers?: Record<string, string>
+  body?: string
+  timeout?: number
+  responseType?: string
+  sourceType?: number
+}
+
+export interface FetchWebViewOptions {
+  headers?: Record<string, string>
+  webJs?: string
+  timeout?: number
+  sourceType?: number
+  preserveStyle?: boolean
+}
+
 export const network = {
-  fetch: (url: string, options?: {
-    method?: string
-    headers?: Record<string, string>
-    body?: string
-    timeout?: number
-    responseType?: string
-    sourceType?: number
-  }): Promise<string> =>
+  fetch: (url: string, options?: FetchOptions): Promise<string> =>
     invoke('fetch_url', {
       url,
       method: options?.method || 'GET',
@@ -24,13 +34,7 @@ export const network = {
       preserveStyle: false,
     }),
 
-  fetchWebView: (url: string, options?: {
-    headers?: Record<string, string>
-    webJs?: string
-    timeout?: number
-    sourceType?: number
-    preserveStyle?: boolean
-  }): Promise<string> =>
+  fetchWebView: (url: string, options?: FetchWebViewOptions): Promise<string> =>
     invoke('fetch_url', {
       url,
       method: 'GET',

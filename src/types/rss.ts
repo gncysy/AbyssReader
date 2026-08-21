@@ -5,49 +5,49 @@
 export interface RssSource {
   sourceName: string
   sourceUrl: string
-  sourceIcon?: string | null
-  sourceGroup?: string | null
-  sourceComment?: string | null
-  variableComment?: string | null
+  sourceIcon?: string | null | undefined
+  sourceGroup?: string | null | undefined
+  sourceComment?: string | null | undefined
+  variableComment?: string | null | undefined
   enabled: boolean
-  enabledCookieJar?: boolean
-  singleUrl?: boolean
-  enableJs?: boolean
-  loadWithBaseUrl?: boolean
-  showWebLog?: boolean
-  preload?: boolean
-  cacheFirst?: boolean
-  sortUrl?: string | null
-  customOrder?: number
-  ruleArticles?: string | null
-  ruleNextPage?: string | null
-  ruleTitle?: string | null
-  rulePubDate?: string | null
-  ruleDescription?: string | null
-  ruleImage?: string | null
-  ruleLink?: string | null
-  ruleContent?: string | null
-  contentWhitelist?: string | null
-  contentBlacklist?: string | null
-  shouldOverrideUrlLoading?: string | null
-  style?: string | null
-  injectJs?: string | null
-  preloadJs?: string | null
-  startHtml?: string | null
-  startStyle?: string | null
-  startJs?: string | null
-  coverDecodeJs?: string | null
-  header?: string | null
-  concurrentRate?: string | null
-  jsLib?: string | null
-  loginUrl?: string | null
-  loginUi?: string | null
-  loginCheckJs?: string | null
-  articleStyle?: number
-  type?: number
-  lastUpdateTime?: number
-  searchUrl?: string | null
-  [key: string]: any
+  enabledCookieJar?: boolean | undefined
+  singleUrl?: boolean | undefined
+  enableJs?: boolean | undefined
+  loadWithBaseUrl?: boolean | undefined
+  showWebLog?: boolean | undefined
+  preload?: boolean | undefined
+  cacheFirst?: boolean | undefined
+  sortUrl?: string | null | undefined
+  customOrder?: number | undefined
+  ruleArticles?: string | null | undefined
+  ruleNextPage?: string | null | undefined
+  ruleTitle?: string | null | undefined
+  rulePubDate?: string | null | undefined
+  ruleDescription?: string | null | undefined
+  ruleImage?: string | null | undefined
+  ruleLink?: string | null | undefined
+  ruleContent?: string | null | undefined
+  contentWhitelist?: string | null | undefined
+  contentBlacklist?: string | null | undefined
+  shouldOverrideUrlLoading?: string | null | undefined
+  style?: string | null | undefined
+  injectJs?: string | null | undefined
+  preloadJs?: string | null | undefined
+  startHtml?: string | null | undefined
+  startStyle?: string | null | undefined
+  startJs?: string | null | undefined
+  coverDecodeJs?: string | null | undefined
+  header?: string | null | undefined
+  concurrentRate?: string | null | undefined
+  jsLib?: string | null | undefined
+  loginUrl?: string | null | undefined
+  loginUi?: string | null | undefined
+  loginCheckJs?: string | null | undefined
+  articleStyle?: number | undefined
+  type?: number | undefined
+  lastUpdateTime?: number | undefined
+  searchUrl?: string | null | undefined
+  [key: string]: unknown
 }
 
 export interface RssArticle {

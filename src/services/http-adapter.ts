@@ -10,10 +10,10 @@ function formatError(err: unknown): string {
     return err.message || String(err)
   }
   if (typeof err === 'string') return err
-  if (err && typeof err === 'object') {
-    const anyErr = err as any
-    if (typeof anyErr.message === 'string') return anyErr.message
-    if (typeof anyErr.error === 'string') return anyErr.error
+  if (err !== null && typeof err === 'object') {
+    const obj = err as Record<string, unknown>
+    if (typeof obj.message === 'string') return obj.message
+    if (typeof obj.error === 'string') return obj.error
     try {
       return JSON.stringify(err)
     } catch {
@@ -21,6 +21,10 @@ function formatError(err: unknown): string {
     }
   }
   return String(err)
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
 }
 
 export const tauriHttpAdapter: HttpClientAdapter = {
@@ -55,4 +59,16 @@ export const tauriHttpAdapter: HttpClientAdapter = {
       throw new Error(formatError(err))
     }
   },
+}
+
+export function parseJsonSafe(raw: string): unknown {
+  try {
+    return JSON.parse(raw)
+  } catch {
+    return null
+  }
+}
+
+export function isRecordValue(value: unknown): value is Record<string, unknown> {
+  return isRecord(value)
 }

@@ -7,7 +7,6 @@ use parking_lot::Mutex;
 #[string]
 pub fn op_java_base64_encode(#[string] input: String) -> String {
     use base64::Engine;
-    // 对齐 Legado：使用 NO_WRAP（不换行）
     base64::engine::general_purpose::STANDARD_NO_PAD.encode(input.as_bytes())
 }
 
@@ -23,15 +22,23 @@ pub fn op_java_base64_decode(#[string] input: String) -> String {
     .to_string()
 }
 
+// 修复：移除 #[serde]，让 Vec<u8> 映射为 Uint8Array（而不是 JSON 数组）
+#[op2]
+pub fn op_java_base64_decode_bytes(#[string] input: String) -> Vec<u8> {
+    use base64::Engine;
+    base64::engine::general_purpose::STANDARD
+        .decode(input.as_bytes())
+        .unwrap_or_default()
+}
+
 #[op2]
 #[string]
 pub fn op_java_md5_encode(#[string] input: String) -> String {
     format!("{:x}", md5::compute(input.as_bytes()))
 }
 
-// MID-4 修复：解析 key/iv 字节，支持 hex 编码
+// 解析 key/iv 字节，支持 hex 编码
 fn parse_key_bytes(s: &str, expected_len: usize) -> Vec<u8> {
-    // 检测 hex 编码（长度正好是 expected_len * 2 且全部为 hex 字符）
     if s.len() == expected_len * 2 && s.chars().all(|c| c.is_ascii_hexdigit()) {
         let mut bytes = Vec::with_capacity(expected_len);
         for i in 0..expected_len {
@@ -48,7 +55,6 @@ fn parse_key_bytes(s: &str, expected_len: usize) -> Vec<u8> {
         }
     }
 
-    // UTF-8 截断/填充
     let mut bytes = vec![0u8; expected_len];
     let src = s.as_bytes();
     let len = src.len().min(expected_len);
@@ -301,5 +307,124 @@ pub fn op_java_sign(#[string] source: String, #[string] data: String, #[string] 
     match signing_key.try_sign(data.as_bytes()) {
         Ok(sig) => base64::engine::general_purpose::STANDARD.encode(sig.to_bytes()),
         Err(e) => format!("error: {}", e),
+    }
+}
+
+// ─── 字节级 AES-CBC 解密（返回原始字节） ───
+
+// 修复：移除 #[serde]，让 Vec<u8> 映射为 Uint8Array
+#[op2]
+pub fn op_java_aes_decrypt_bytes(
+    #[buffer] data: &[u8],
+    #[buffer] key: &[u8],
+    #[buffer] iv: &[u8],
+) -> Vec<u8> {
+    use aes::Aes256;
+    use cbc::cipher::{BlockDecryptMut, KeyIvInit};
+    use cbc::cipher::block_padding::Pkcs7;
+
+    let mut key_arr = [0u8; 32];
+    let key_len = key.len().min(32);
+    key_arr[..key_len].copy_from_slice(&key[..key_len]);
+
+    let mut iv_arr = [0u8; 16];
+    let iv_len = iv.len().min(16);
+    iv_arr[..iv_len].copy_from_slice(&iv[..iv_len]);
+
+    let cipher = cbc::Decryptor::<Aes256>::new(&key_arr.into(), &iv_arr.into());
+    let mut buf = data.to_vec();
+    if let Ok(decrypted) = cipher.decrypt_padded_mut::<Pkcs7>(&mut buf) {
+        decrypted.to_vec()
+    } else {
+        Vec::new()
+    }
+}
+
+#[op2]
+pub fn op_java_aes_encrypt_bytes(
+    #[buffer] data: &[u8],
+    #[buffer] key: &[u8],
+    #[buffer] iv: &[u8],
+) -> Vec<u8> {
+    use aes::Aes256;
+    use cbc::cipher::{BlockEncryptMut, KeyIvInit};
+    use cbc::cipher::block_padding::Pkcs7;
+
+    let mut key_arr = [0u8; 32];
+    let key_len = key.len().min(32);
+    key_arr[..key_len].copy_from_slice(&key[..key_len]);
+
+    let mut iv_arr = [0u8; 16];
+    let iv_len = iv.len().min(16);
+    iv_arr[..iv_len].copy_from_slice(&iv[..iv_len]);
+
+    let block_size = 16;
+    let mut buf = data.to_vec();
+    buf.resize(buf.len() + block_size, 0);
+
+    let cipher = cbc::Encryptor::<Aes256>::new(&key_arr.into(), &iv_arr.into());
+    if let Ok(encrypted) = cipher.encrypt_padded_mut::<Pkcs7>(&mut buf, data.len()) {
+        encrypted.to_vec()
+    } else {
+        Vec::new()
+    }
+}
+
+// ─── 字节级 DES-CBC 解密（返回原始字节） ───
+
+#[op2]
+pub fn op_java_des_decrypt_bytes(
+    #[buffer] data: &[u8],
+    #[buffer] key: &[u8],
+    #[buffer] iv: &[u8],
+) -> Vec<u8> {
+    use des::Des;
+    use cbc::cipher::{BlockDecryptMut, KeyIvInit};
+    use cbc::cipher::block_padding::Pkcs7;
+
+    let mut key_arr = [0u8; 8];
+    let key_len = key.len().min(8);
+    key_arr[..key_len].copy_from_slice(&key[..key_len]);
+
+    let mut iv_arr = [0u8; 8];
+    let iv_len = iv.len().min(8);
+    iv_arr[..iv_len].copy_from_slice(&iv[..iv_len]);
+
+    let cipher = cbc::Decryptor::<Des>::new(&key_arr.into(), &iv_arr.into());
+    let mut buf = data.to_vec();
+    if let Ok(decrypted) = cipher.decrypt_padded_mut::<Pkcs7>(&mut buf) {
+        decrypted.to_vec()
+    } else {
+        Vec::new()
+    }
+}
+
+#[op2]
+pub fn op_java_des_encrypt_bytes(
+    #[buffer] data: &[u8],
+    #[buffer] key: &[u8],
+    #[buffer] iv: &[u8],
+) -> Vec<u8> {
+    use des::Des;
+    use cbc::cipher::{BlockEncryptMut, KeyIvInit};
+    use cbc::cipher::block_padding::Pkcs7;
+
+    let mut key_arr = [0u8; 8];
+    let key_len = key.len().min(8);
+    key_arr[..key_len].copy_from_slice(&key[..key_len]);
+
+    let mut iv_arr = [0u8; 8];
+    let iv_len = iv.len().min(8);
+    iv_arr[..iv_len].copy_from_slice(&iv[..iv_len]);
+
+    let block_size = 8;
+    let mut buf = data.to_vec();
+    buf.resize(buf.len() + block_size, 0);
+
+    let cipher = cbc::Encryptor::<Des>::new(&key_arr.into(), &iv_arr.into());
+    if let Ok(encrypted) = cipher.encrypt_padded_mut::<Pkcs7>(&mut buf, data.len()) {
+        encrypted.to_vec()
+    } else {
+        Vec::new()
     }
 }

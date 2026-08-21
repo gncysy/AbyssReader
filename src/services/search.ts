@@ -3,26 +3,36 @@
 // ============================================
 
 import { parseSearchItem, parseInfoItem, matchesBookUrlPattern } from '@engine/business/search/parser.js'
-import { analyzeUrl, resolveUrl } from '@engine/url/index.js'
-import { getGlobalHttpClient } from '@engine/network/client.js'
+import { analyzeUrl } from '@engine/url/index.js'
 import { parseSourceHeader } from '@engine/business/source/helper.js'
 import { getElements, getString } from '@engine/parser/index.js'
 import { logInfo, logError } from '@engine/log/index.js'
 import { handleError } from '@/utils/error-handler.js'
 import { shouldExecuteInDeno, evaluateRule } from './rule-evaluator.js'
 import { fetchWithWebviewFallback } from './fetch.js'
-import type { Book, BookSource, ParseContext } from '@/types'
+import type { Book, BookSource } from '@/types'
+import type { EngineBook, EngineBookSource, ParseContext } from '@engine/types.js'
 import { NETWORK } from '@/constants/index.js'
+
+interface SearchOptions {
+  page?: number | undefined
+  signal?: AbortSignal | undefined
+  filter?: ((name: string, author: string, kind: string | null) => boolean) | null | undefined
+  shouldBreak?: ((size: number) => boolean) | null | undefined
+}
+
+function toEngineBookSource(source: BookSource): EngineBookSource {
+  return source as unknown as EngineBookSource
+}
+
+function toBook(engineBook: EngineBook): Book {
+  return engineBook as unknown as Book
+}
 
 export async function search(
   source: BookSource,
   keyword: string,
-  options: {
-    page?: number
-    signal?: AbortSignal
-    filter?: ((name: string, author: string, kind: string | null) => boolean) | null
-    shouldBreak?: ((size: number) => boolean) | null
-  } = {},
+  options: SearchOptions = {},
 ): Promise<Book[]> {
   const page = options.page || 1
   const searchUrl = source.searchUrl || ''
@@ -31,10 +41,10 @@ export async function search(
     return []
   }
 
-  logInfo('search', 'frontend', `[搜索] 开始 keyword=${keyword}`)
-  const headerMap = await parseSourceHeader(source)
+  const engineSource = toEngineBookSource(source)
+  const headerMap = await parseSourceHeader(engineSource)
   const urlAnalysis = await analyzeUrl(searchUrl, {
-    key: keyword, page, source, baseUrl: source.bookSourceUrl || '', headerMap,
+    key: keyword, page, source: engineSource, baseUrl: source.bookSourceUrl || '', headerMap,
   })
 
   try {
@@ -52,18 +62,11 @@ export async function search(
     const rule = source.ruleSearch
     if (!rule || !rule.bookList) return []
 
-    // checkKeyWord 校验
-    if (rule.checkKeyWord) {
-      const checkResult = await getString(html, rule.checkKeyWord, { source, baseUrl, result: html } as ParseContext)
-      if (!checkResult || checkResult.trim() === '') {
-        logInfo('search', 'frontend', '[搜索] checkKeyWord 校验失败，页面可能无效')
-        return []
-      }
-    }
+    const ctx: ParseContext = { source: engineSource, baseUrl, key: keyword, page, book: {} }
 
     if (source.bookUrlPattern && matchesBookUrlPattern(urlAnalysis.url, source.bookUrlPattern)) {
-      const book = await parseInfoItem(source, baseUrl, html, urlAnalysis.url, keyword, page, options.filter || null)
-      return book ? [book] : []
+      const book = await parseInfoItem(engineSource, baseUrl, html, keyword, page)
+      return book ? [toBook(book)] : []
     }
 
     let listRule = rule.bookList || ''
@@ -71,9 +74,7 @@ export async function search(
     if (listRule.startsWith('-')) { reverse = true; listRule = listRule.substring(1) }
     if (listRule.startsWith('+')) { listRule = listRule.substring(1) }
 
-    const ctx: ParseContext = { source, baseUrl, key: keyword, page, book: {} }
-
-    let collections: any[]
+    let collections: unknown[]
     if (shouldExecuteInDeno(listRule)) {
       const result = await evaluateRule(listRule, html, ctx)
       collections = Array.isArray(result) ? result : []
@@ -81,18 +82,20 @@ export async function search(
       collections = await getElements(html, listRule, ctx)
     }
 
-    if ((!collections || !Array.isArray(collections) || collections.length === 0) && !source.bookUrlPattern) {
-      const book = await parseInfoItem(source, baseUrl, html, urlAnalysis.url, keyword, page, options.filter || null)
-      return book ? [book] : []
+    if (!Array.isArray(collections) || collections.length === 0) {
+      if (!source.bookUrlPattern) {
+        const book = await parseInfoItem(engineSource, baseUrl, html, keyword, page)
+        return book ? [toBook(book)] : []
+      }
+      return []
     }
-    if (!collections || !Array.isArray(collections) || collections.length === 0) return []
 
     const books: Book[] = []
     for (const item of collections) {
       if (options.signal?.aborted) break
 
-      const book = await parseSearchItem(
-        item, source, baseUrl,
+      const engineBook = await parseSearchItem(
+        item, engineSource, baseUrl,
         rule.name || '',
         rule.author || '',
         rule.kind || '',
@@ -103,14 +106,11 @@ export async function search(
         rule.bookUrl || '',
         keyword,
         page,
-        options.filter || null
+        options.filter ?? null
       )
 
-      if (book) {
-        if (book.coverUrl) {
-          logInfo('search', 'frontend', `[搜索] 书籍封面: ${book.name} -> ${book.coverUrl}`)
-        }
-        books.push(book as Book)
+      if (engineBook) {
+        books.push(toBook(engineBook))
       }
     }
 
@@ -121,7 +121,6 @@ export async function search(
       if (!seen.has(key)) { seen.add(key); uniqueBooks.push(book) }
     }
     if (reverse) uniqueBooks.reverse()
-    logInfo('search', 'frontend', `[搜索] 完成 ${uniqueBooks.length} 本书`)
     return uniqueBooks
   } catch (err) {
     handleError(err, {
@@ -149,7 +148,10 @@ export async function batchSearch(
       if (!source) break
       const key = `${source.bookSourceName || source.bookSourceUrl || 'unknown'}::${source.bookSourceUrl || ''}`
       try {
-        results.set(key, await search(source, keyword, { page: options.page, signal: options.signal }))
+        const searchOptions: SearchOptions = {}
+        if (options.signal !== undefined) searchOptions.signal = options.signal
+        if (options.page !== undefined) searchOptions.page = options.page
+        results.set(key, await search(source, keyword, searchOptions))
       } catch {
         results.set(key, [])
       }

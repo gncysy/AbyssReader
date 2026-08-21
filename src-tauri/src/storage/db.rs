@@ -8,7 +8,9 @@ use std::sync::LazyLock;
 
 static DB: OnceCell<Mutex<Connection>> = OnceCell::new();
 
+// LRU 缓存：HashMap 存储数据，Vec 记录插入顺序
 static KV_CACHE: LazyLock<Mutex<HashMap<String, String>>> = LazyLock::new(|| Mutex::new(HashMap::new()));
+static KV_CACHE_ORDER: LazyLock<Mutex<Vec<String>>> = LazyLock::new(|| Mutex::new(Vec::new()));
 
 const CACHE_MAX_ENTRIES: usize = 100;
 
@@ -20,8 +22,14 @@ pub fn init_db(db_path: &str) -> Result<()> {
     )?;
     conn.execute("CREATE INDEX IF NOT EXISTS idx_kv_store_key ON kv_store(key)", [])?;
     DB.set(Mutex::new(conn)).map_err(|_| AbyssError::DbError("DB already initialized".into()))?;
-    let mut cache = KV_CACHE.lock();
-    cache.clear();
+    {
+        let mut cache = KV_CACHE.lock();
+        cache.clear();
+    }
+    {
+        let mut order = KV_CACHE_ORDER.lock();
+        order.clear();
+    }
     Ok(())
 }
 
@@ -29,11 +37,42 @@ fn get_conn() -> Result<parking_lot::MutexGuard<'static, Connection>> {
     Ok(DB.get().ok_or_else(|| AbyssError::DbError("DB not initialized".into()))?.lock())
 }
 
+/// LRU 淘汰：移除最久未使用的条目
+fn evict_lru_if_needed() {
+    let mut order = KV_CACHE_ORDER.lock();
+    if order.len() >= CACHE_MAX_ENTRIES {
+        if let Some(oldest_key) = order.first().cloned() {
+            order.remove(0);
+            let mut cache = KV_CACHE.lock();
+            cache.remove(&oldest_key);
+        }
+    }
+}
+
+/// 标记 key 为最近使用（移到 order 末尾）
+fn touch_key(key: &str) {
+    let mut order = KV_CACHE_ORDER.lock();
+    if let Some(pos) = order.iter().position(|k| k == key) {
+        order.remove(pos);
+    }
+    order.push(key.to_string());
+}
+
+/// 将 key 加入缓存并标记为最近使用
+fn insert_key(key: &str) {
+    evict_lru_if_needed();
+    touch_key(key);
+}
+
 pub fn store_get(key: &str) -> Result<Option<String>> {
+    // 注意：这里不能使用 mut，因为只做 get 操作
     {
         let cache = KV_CACHE.lock();
         if let Some(value) = cache.get(key) {
-            return Ok(Some(value.clone()));
+            let result = value.clone();
+            drop(cache);
+            touch_key(key);
+            return Ok(Some(result));
         }
     }
 
@@ -48,12 +87,9 @@ pub fn store_get(key: &str) -> Result<Option<String>> {
 
     if let Some(ref value) = result {
         let mut cache = KV_CACHE.lock();
-        if cache.len() >= CACHE_MAX_ENTRIES {
-            if let Some(first_key) = cache.keys().next().cloned() {
-                cache.remove(&first_key);
-            }
-        }
         cache.insert(key.to_string(), value.clone());
+        drop(cache);
+        insert_key(key);
     }
 
     Ok(result)
@@ -66,19 +102,22 @@ pub fn store_set(key: &str, value: &str) -> Result<()> {
         rusqlite::params![key, value],
     )?;
     let mut cache = KV_CACHE.lock();
-    if cache.len() >= CACHE_MAX_ENTRIES {
-        if let Some(first_key) = cache.keys().next().cloned() {
-            cache.remove(&first_key);
-        }
-    }
     cache.insert(key.to_string(), value.to_string());
+    drop(cache);
+    insert_key(key);
     Ok(())
 }
 
 pub fn store_delete(key: &str) -> Result<()> {
     let conn = get_conn()?;
     conn.execute("DELETE FROM kv_store WHERE key = ?", rusqlite::params![key])?;
-    KV_CACHE.lock().remove(key);
+    let mut cache = KV_CACHE.lock();
+    cache.remove(key);
+    drop(cache);
+    let mut order = KV_CACHE_ORDER.lock();
+    if let Some(pos) = order.iter().position(|k| k == key) {
+        order.remove(pos);
+    }
     Ok(())
 }
 

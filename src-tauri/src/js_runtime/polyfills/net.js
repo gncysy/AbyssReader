@@ -18,7 +18,8 @@
 
     function makeResponse(raw, originalUrl) {
         var parsed = parseAjaxResponse(raw);
-        return {
+
+        var responseObj = {
             _raw: raw,
             _parsed: parsed,
             headers: function(name) {
@@ -46,8 +47,41 @@
             statusCode: function() { return parsed.status || 0; },
             url: function() { return { toString: function() { return parsed.url || originalUrl || ''; } }; },
             body: function() { return parsed.body || ''; },
-            toString: function() { return parsed.body || ''; }
+            toString: function() { return parsed.body || ''; },
+            // 修复：添加 raw() 方法，返回模拟的 okhttp Response 对象
+            raw: function() {
+                return {
+                    body: function() { return parsed.body || ''; },
+                    headers: function(name) {
+                        var h = parsed.headers || {};
+                        if (name) {
+                            var lower = String(name).toLowerCase();
+                            for (var k in h) {
+                                if (k.toLowerCase() === lower) return h[k];
+                            }
+                            return '';
+                        }
+                        return h;
+                    },
+                    header: function(name) {
+                        var h = parsed.headers || {};
+                        if (name) {
+                            var lower = String(name).toLowerCase();
+                            for (var k in h) {
+                                if (k.toLowerCase() === lower) return h[k];
+                            }
+                            return null;
+                        }
+                        return h;
+                    },
+                    statusCode: function() { return parsed.status || 0; },
+                    url: function() { return { toString: function() { return parsed.url || originalUrl || ''; } }; },
+                    toString: function() { return parsed.body || ''; }
+                };
+            }
         };
+
+        return responseObj;
     }
 
     j.ajax = function(url, callTimeout) {
@@ -58,7 +92,6 @@
 
         var hasOptions = urlStr.indexOf(',{') !== -1;
 
-        // 自动附加 Cookie
         if (!hasOptions) {
             var autoHeaders = {};
             var source = globalThis.__sandbox_data && globalThis.__sandbox_data.source;
@@ -80,7 +113,6 @@
                 }
             }
 
-            // 自动附加 Cookie
             try {
                 var baseUrl = source ? (source.bookSourceUrl || '') : '';
                 var cookieStr = globalThis.cookie ? globalThis.cookie.getCookie(baseUrl, '') : '';
@@ -92,7 +124,6 @@
 
             if (callTimeout) autoHeaders['_callTimeout'] = String(callTimeout);
 
-            // 修复：使用 JSON.stringify 构造标准 JSON
             var optionObj = { headers: autoHeaders };
             urlStr = urlStr + ',' + JSON.stringify(optionObj);
         }
@@ -101,7 +132,6 @@
         var respObj = makeResponse(rawResult, urlStr);
         var body = respObj.body();
 
-        // 自动保存 Cookie（从响应头）
         try {
             var setCookieHeader = respObj.headers('Set-Cookie') || respObj.headers('set-cookie');
             if (setCookieHeader) {

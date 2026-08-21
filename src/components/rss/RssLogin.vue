@@ -7,16 +7,16 @@
         <template v-if="item.type === 'text'"><span class="login-ui-label">{{ item.name || '' }}</span></template>
         <template v-else-if="item.type === 'input'">
           <span class="login-ui-label">{{ item.name || '' }}</span>
-          <input v-model="formData[item.name]" :type="item.inputType || 'text'" class="login-ui-input" :placeholder="item.placeholder || ''" @keyup.enter="executeAction(item.action)" />
+          <input v-model="formData[item.name || '']" :type="typeof item.inputType === 'string' ? item.inputType : 'text'" class="login-ui-input" :placeholder="typeof item.placeholder === 'string' ? item.placeholder : ''" @keyup.enter="executeAction(item.action)" />
         </template>
         <template v-else-if="item.type === 'password'">
           <span class="login-ui-label">{{ item.name || '' }}</span>
-          <input v-model="formData[item.name]" type="password" class="login-ui-input" :placeholder="item.placeholder || ''" @keyup.enter="executeAction(item.action)" />
+          <input v-model="formData[item.name || '']" type="password" class="login-ui-input" :placeholder="typeof item.placeholder === 'string' ? item.placeholder : ''" @keyup.enter="executeAction(item.action)" />
         </template>
         <template v-else-if="item.type === 'toggle'">
           <span class="login-ui-label">{{ item.name || '' }}</span>
           <div class="login-ui-toggle-group">
-            <button v-for="c in item.chars || []" :key="c" class="login-ui-toggle-btn" :class="{ active: formData[item.name] === c }" @click="formData[item.name] = c">{{ c }}</button>
+            <button v-for="c in (item.chars || [])" :key="c" class="login-ui-toggle-btn" :class="{ active: formData[item.name || ''] === c }" @click="formData[item.name || ''] = c">{{ c }}</button>
           </div>
         </template>
         <template v-else-if="item.type === 'button'">
@@ -47,6 +47,17 @@ import { executeJsRule } from '@/services/engine.js'
 import type { RssSource } from '@/types'
 import LoadingSpinner from '@/components/common/LoadingSpinner.vue'
 
+interface LoginUiItem {
+  type?: string
+  name?: string
+  inputType?: string
+  placeholder?: string
+  action?: string
+  default?: string
+  chars?: string[]
+  [key: string]: unknown
+}
+
 const msg = useMessage()
 const props = defineProps<{ source: RssSource | null }>()
 const emit = defineEmits<{ success: []; close: [] }>()
@@ -56,7 +67,7 @@ const loading = ref(false)
 const checking = ref(false)
 const executing = ref(false)
 const error = ref('')
-const loginUiItems = ref<any[]>([])
+const loginUiItems = ref<LoginUiItem[]>([])
 const formData = ref<Record<string, string>>({})
 const sourceKey = ref('')
 
@@ -84,10 +95,10 @@ async function loadLoginUi(source: RssSource): Promise<void> {
     const uiStr = source.loginUi || ''
     const cleaned = uiStr.replace(/^@js:\s*/, '').replace(/^<js>/, '').replace(/<\/js>$/, '').trim()
     try {
-      const parsed = JSON.parse(cleaned)
+      const parsed = JSON.parse(cleaned) as unknown
       if (Array.isArray(parsed)) {
-        loginUiItems.value = parsed
-        initFormData(parsed)
+        loginUiItems.value = parsed as LoginUiItem[]
+        initFormData(loginUiItems.value)
         loading.value = false
         return
       }
@@ -97,23 +108,24 @@ async function loadLoginUi(source: RssSource): Promise<void> {
     const result = await executeRssLoginJs(cleaned, source, { timeoutMs: 10000 })
     if (result.success) {
       try {
-        const parsed = JSON.parse(result.result)
+        const parsed = JSON.parse(result.result) as unknown
         if (Array.isArray(parsed)) {
-          loginUiItems.value = parsed
-          initFormData(parsed)
+          loginUiItems.value = parsed as LoginUiItem[]
+          initFormData(loginUiItems.value)
         }
       } catch {
         // ignore
       }
     }
-  } catch (err: any) {
-    error.value = '加载登录界面失败: ' + err.message
+  } catch (err: unknown) {
+    const e = err as Error
+    error.value = '加载登录界面失败: ' + e.message
   } finally {
     loading.value = false
   }
 }
 
-function initFormData(items: any[]): void {
+function initFormData(items: LoginUiItem[]): void {
   for (const item of items) {
     const name = item.name || ''
     if (!name) continue
@@ -121,7 +133,8 @@ function initFormData(items: any[]): void {
       formData.value[name] = item.default || ''
     }
     if (item.type === 'toggle') {
-      formData.value[name] = item.default || (item.chars?.[0] || '')
+      const chars = item.chars || []
+      formData.value[name] = item.default || (chars.length > 0 ? (chars[0] || '') : '')
     }
   }
 }
@@ -142,17 +155,18 @@ async function executeAction(action?: string): Promise<void> {
     })
     if (result.success) {
       const res = result.result
-      if (res && (res.includes('success') || res === 'true')) {
+      if (res.includes('success') || res === 'true') {
         msg.success('操作成功')
         await checkLogin()
-      } else if (res && res.startsWith('error:')) {
+      } else if (res.startsWith('error:')) {
         error.value = res.substring(6)
       } else {
         msg.info(res || '操作完成')
       }
     }
-  } catch (err: any) {
-    error.value = err.message || '执行失败'
+  } catch (err: unknown) {
+    const e = err as Error
+    error.value = e.message || '执行失败'
   } finally {
     executing.value = false
   }
@@ -162,18 +176,12 @@ async function openLoginUrl(): Promise<void> {
   if (!props.source?.loginUrl) return
   try {
     const url = props.source.loginUrl
-    const result = await loginWebview(url, props.source.sourceName || '登录', 300)
-    if (result && typeof result === 'string') {
-      if (result.includes('cookies') || result.includes('success')) {
-        msg.success('登录成功')
-        await checkLogin()
-      } else {
-        msg.info('登录窗口已关闭')
-        await checkLogin()
-      }
-    }
-  } catch (err: any) {
-    error.value = err.message || '打开登录页失败'
+    await loginWebview(url, props.source.sourceName || '登录', 300)
+    msg.info('登录窗口已关闭')
+    await checkLogin()
+  } catch (err: unknown) {
+    const e = err as Error
+    error.value = e.message || '打开登录页失败'
   }
 }
 
@@ -190,14 +198,13 @@ async function checkLogin(): Promise<void> {
         timeoutMs: 10000,
       })
       if (result.success) {
-        if (result.result === 'true' || result.result === true || result.result === 1) {
+        if (result.result === 'true') {
           msg.success('登录成功！')
           emit('success')
           close()
           return
-        } else {
-          error.value = '未登录，请完成登录操作'
         }
+        error.value = '未登录，请完成登录操作'
       }
     } else {
       const cookie = await executeJsRule('cookie.getCookie(baseUrl)', {
@@ -212,8 +219,9 @@ async function checkLogin(): Promise<void> {
       }
       error.value = '未检测到登录状态，请完成登录'
     }
-  } catch (err: any) {
-    error.value = err.message || '检测失败'
+  } catch (err: unknown) {
+    const e = err as Error
+    error.value = e.message || '检测失败'
   } finally {
     checking.value = false
   }

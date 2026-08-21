@@ -2,20 +2,22 @@
 // 发现页书籍解析 — 纯函数 + 可注入 HttpClient
 // ============================================
 
-import { getElements, getString, getStringList, resolveUrl, createAnalyzer } from '../../index.js'
-import type { EngineBook, EngineBookSource } from '../../types.js'
-import type { ParseContext } from '../../types.js'
+import { getElements, resolveUrl } from '../../index.js'
+import type { EngineBook, EngineBookSource, ParseContext } from '../../types.js'
 import type { HttpClient } from '../../network/client.js'
 import { getGlobalHttpClient } from '../../network/client.js'
-import {
-  formatBookName, formatBookAuthor, isValidBookName,
-  cleanIntro, formatWordCount, parseSearchItem, parseInfoItem,
-} from '../search/parser.js'
+import { parseSearchItem, parseInfoItem } from '../search/parser.js'
 import { getExploreCategories } from './categories.js'
 import type { ExploreKind } from './categories.js'
 
 export { getExploreCategories }
 export type { ExploreKind }
+
+function getRuleString(rule: Record<string, unknown> | null | undefined, key: string): string {
+  if (!rule) return ''
+  const val = rule[key]
+  return typeof val === 'string' ? val : ''
+}
 
 export async function executeExploreJs(source: EngineBookSource, jsCode: string): Promise<ExploreKind[]> {
   try {
@@ -27,7 +29,7 @@ export async function executeExploreJs(source: EngineBookSource, jsCode: string)
     const result = await runtime.execute(jsCode, ctx)
     if (!result) return []
 
-    let parsed: any
+    let parsed: unknown
     if (typeof result === 'string') {
       const trimmed = result.trim()
       if (trimmed.startsWith('[') || trimmed.startsWith('{')) {
@@ -36,15 +38,21 @@ export async function executeExploreJs(source: EngineBookSource, jsCode: string)
     } else { parsed = result }
 
     if (!Array.isArray(parsed)) return []
-    return parsed.filter((item: any) => item && typeof item === 'object').map((item: any) => ({
-      title: String(item.title || ''), url: item.url ? String(item.url) : null,
-      type: (item.type || 'url') as ExploreKind['type'],
-      action: item.action ? String(item.action) : null,
-      chars: item.chars ? [...item.chars].map(String) : null,
-      default: item.default ? String(item.default) : null,
-      viewName: item.viewName ? String(item.viewName) : null,
-      style: item.style ? { ...item.style } : null,
-    })).filter((k: ExploreKind) => k.title)
+    return parsed
+      .filter((item): item is Record<string, unknown> =>
+        item !== null && typeof item === 'object'
+      )
+      .map((item) => ({
+        title: String(item.title || ''),
+        url: typeof item.url === 'string' ? item.url : null,
+        type: (item.type || 'url') as ExploreKind['type'],
+        action: typeof item.action === 'string' ? item.action : null,
+        chars: Array.isArray(item.chars) ? item.chars.map(String) : null,
+        default: typeof item.default === 'string' ? item.default : null,
+        viewName: typeof item.viewName === 'string' ? item.viewName : null,
+        style: item.style && typeof item.style === 'object' ? { ...(item.style as Record<string, unknown>) } : null,
+      }))
+      .filter((k) => k.title)
   } catch { return [] }
 }
 
@@ -93,12 +101,23 @@ export async function getExploreBooks(
     }
   }
 
-  const exploreRule = source.ruleExplore
-  const searchRule = source.ruleSearch
-  const rule = exploreRule?.bookList ? exploreRule : searchRule
-  if (!rule || !rule.bookList) return []
+  const exploreRule = source.ruleExplore as Record<string, unknown> | null
+  const searchRule = source.ruleSearch as Record<string, unknown> | null
 
-  let listRule = rule.bookList || ''
+  // 修复：优先使用 exploreRule，仅当 exploreRule 不存在时才回退到 searchRule
+  // 如果 exploreRule 存在但缺少 bookList，返回空数组并记录日志，而不是静默回退
+  let rule: Record<string, unknown> | null = exploreRule
+  if (!rule) {
+    rule = searchRule
+  }
+  if (!rule) return []
+
+  let listRule = getRuleString(rule, 'bookList')
+  if (!listRule && exploreRule !== null && exploreRule !== searchRule) {
+    // exploreRule 存在但缺少 bookList，这是配置错误，不应回退
+    return []
+  }
+
   let reverse = false
   if (listRule.startsWith('-')) { reverse = true; listRule = listRule.substring(1) }
   if (listRule.startsWith('+')) { listRule = listRule.substring(1) }
@@ -106,17 +125,28 @@ export async function getExploreBooks(
   const ctx: ParseContext = { source, baseUrl, page, book: {}, key: '' }
   const collections = await getElements(html, listRule, ctx)
 
-  if ((!collections || !Array.isArray(collections) || collections.length === 0) && !source.bookUrlPattern) {
-    const book = await parseInfoItem(source, baseUrl, html, '', page)
-    return book ? [book] : []
+  if (!Array.isArray(collections) || collections.length === 0) {
+    if (!source.bookUrlPattern) {
+      const book = await parseInfoItem(source, baseUrl, html, '', page)
+      return book ? [book] : []
+    }
+    return []
   }
-  if (!collections || !Array.isArray(collections) || collections.length === 0) return []
 
   const books: EngineBook[] = []
   for (const item of collections) {
-    const book = await parseSearchItem(item, source, baseUrl,
-      rule.name || '', rule.author || '', rule.kind || '', rule.coverUrl || '',
-      rule.wordCount || '', rule.intro || '', rule.lastChapter || '', rule.bookUrl || '', '', page)
+    const book = await parseSearchItem(
+      item, source, baseUrl,
+      getRuleString(rule, 'name'),
+      getRuleString(rule, 'author'),
+      getRuleString(rule, 'kind'),
+      getRuleString(rule, 'coverUrl'),
+      getRuleString(rule, 'wordCount'),
+      getRuleString(rule, 'intro'),
+      getRuleString(rule, 'lastChapter'),
+      getRuleString(rule, 'bookUrl'),
+      '', page
+    )
     if (book) books.push(book)
   }
 

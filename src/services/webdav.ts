@@ -8,17 +8,27 @@ import { invoke } from '@tauri-apps/api/core'
 const PASSWORD_SALT = 'moYue-reader-webdav-salt-v1'
 const KEY_DERIVE_ITERATIONS = 50000
 
+interface BackupItem {
+  filename: string
+  date: string
+  deviceName: string
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+}
+
 async function getDefaultDeviceName(): Promise<string> {
   try {
-    const hostname: string = await invoke('get_hostname')
-    if (hostname && hostname.trim()) return hostname.trim()
+    const hostname = await invoke('get_hostname')
+    if (typeof hostname === 'string' && hostname.trim()) return hostname.trim()
   } catch {
     // ignore
   }
   return 'desktop'
 }
 
-export const DEFAULT_WEBDAV_CONFIG = {
+export const DEFAULT_WEBDAV_CONFIG: Record<string, unknown> = {
   server: '',
   username: '',
   password: '',
@@ -27,7 +37,6 @@ export const DEFAULT_WEBDAV_CONFIG = {
   enabled: false,
 }
 
-// BUG-3 修复：使用设备名 + 固定盐派生密钥（不依赖密码本身，支持可逆解密）
 async function deriveKeyFromDevice(): Promise<CryptoKey> {
   const enc = new TextEncoder()
   const deviceName = await getDeviceName()
@@ -52,9 +61,9 @@ async function deriveKeyFromDevice(): Promise<CryptoKey> {
   )
 }
 
-export async function encryptConfig(config: any): Promise<any> {
+export async function encryptConfig(config: Record<string, unknown>): Promise<Record<string, unknown>> {
   const encoded = { ...config }
-  if (encoded.password) {
+  if (typeof encoded.password === 'string' && encoded.password) {
     try {
       const key = await deriveKeyFromDevice()
       const enc = new TextEncoder()
@@ -75,9 +84,9 @@ export async function encryptConfig(config: any): Promise<any> {
   return encoded
 }
 
-export async function decryptConfig(config: any): Promise<any> {
+export async function decryptConfig(config: Record<string, unknown>): Promise<Record<string, unknown>> {
   const decoded = { ...config }
-  if (decoded.password) {
+  if (typeof decoded.password === 'string' && decoded.password) {
     try {
       const combined = new Uint8Array(
         atob(decoded.password).split('').map(c => c.charCodeAt(0))
@@ -88,11 +97,10 @@ export async function decryptConfig(config: any): Promise<any> {
       const decrypted = await crypto.subtle.decrypt(
         { name: 'AES-GCM', iv },
         key,
-        encrypted
+        encrypted as BufferSource
       )
       decoded.password = new TextDecoder().decode(decrypted)
     } catch {
-      // 解密失败：可能是旧版本或其他设备的数据，保留原值让用户重新输入
       decoded.password = ''
     }
   }
@@ -104,43 +112,51 @@ export async function getDeviceName(): Promise<string> {
 }
 
 export async function webdavRequest(
-  config: any,
+  config: Record<string, unknown>,
   method: string,
   path: string,
-  body: any = null,
-  headers: any = {},
+  body: unknown = null,
+  headers: Record<string, string> = {},
 ): Promise<{ status: number; data: string }> {
-  const base = config.server.replace(/\/+$/, '')
-  const folder = (config.folder || 'legado').replace(/^\/+/, '').replace(/\/+$/, '')
+  const base = typeof config.server === 'string' ? config.server.replace(/\/+$/, '') : ''
+  const folder = typeof config.folder === 'string' ? config.folder.replace(/^\/+/, '').replace(/\/+$/, '') : 'legado'
   const cleanPath = path.replace(/^\/+/, '')
   const url = base + '/' + folder + '/' + cleanPath
-  const auth = btoa(config.username + ':' + config.password)
+  const username = typeof config.username === 'string' ? config.username : ''
+  const password = typeof config.password === 'string' ? config.password : ''
+  const auth = btoa(username + ':' + password)
   const allHeaders = { Authorization: 'Basic ' + auth, ...headers }
 
-  const res = await network.fetch(url, { method, headers: allHeaders, body, timeout: 30000 })
+  const bodyStr = typeof body === 'string' ? body : null
+  const fetchOptions: { method: string; headers: Record<string, string>; timeout: number; body?: string } = {
+    method,
+    headers: allHeaders,
+    timeout: 30000,
+  }
+  if (bodyStr !== null && bodyStr !== undefined) {
+    fetchOptions.body = bodyStr
+  }
+  const res = await network.fetch(url, fetchOptions)
   return { status: 200, data: typeof res === 'string' ? res : JSON.stringify(res) }
 }
 
-export async function listBackups(config: any): Promise<
-  { filename: string; date: string; deviceName: string }[]
-> {
+export async function listBackups(config: Record<string, unknown>): Promise<BackupItem[]> {
   try {
     const res = await webdavRequest(config, 'PROPFIND', '', null, { Depth: '1' })
     const xml = res.data
     if (!xml.includes('<d:multistatus') && !xml.includes('<D:multistatus')) return []
 
-    const items: { filename: string; date: string; deviceName: string }[] = []
+    const items: BackupItem[] = []
 
-    // 使用 DOMParser 解析 WebDAV XML
     try {
       const parser = new DOMParser()
       const doc = parser.parseFromString(xml, 'application/xml')
-      const responses = doc.querySelectorAll('response, \\*|response')
+      const responses = doc.querySelectorAll('response, *|response')
 
       responses.forEach((resp) => {
-        const href = resp.querySelector('href, \\*|href')?.textContent || ''
-        const displayName = resp.querySelector('displayname, \\*|displayname')?.textContent || ''
-        const lastModified = resp.querySelector('getlastmodified, \\*|getlastmodified')?.textContent || ''
+        const href = resp.querySelector('href, *|href')?.textContent || ''
+        const displayName = resp.querySelector('displayname, *|displayname')?.textContent || ''
+        const lastModified = resp.querySelector('getlastmodified, *|getlastmodified')?.textContent || ''
 
         const name = displayName || href.split('/').filter(Boolean).pop() || ''
         if (!name || (!name.endsWith('.zip') && !name.endsWith('.json'))) return
@@ -161,11 +177,12 @@ export async function listBackups(config: any): Promise<
           resp.match(/<href[^>]*>([^<]+)<\/href>/i)
         if (!nameMatch) continue
         const rawName = nameMatch[1]
+        if (!rawName) continue
         const name = rawName.split('/').filter(Boolean).pop() || ''
         if (!name || (!name.endsWith('.zip') && !name.endsWith('.json'))) continue
 
         const dateMatch = resp.match(/<(?:d|D):getlastmodified>([^<]+)<\/(?:d|D):getlastmodified>/)
-        const date = dateMatch ? dateMatch[1] : ''
+        const date = dateMatch && dateMatch[1] !== undefined ? dateMatch[1] : ''
         const nameWithoutExt = name.replace(/\.(zip|json)$/, '')
         const parts = nameWithoutExt.split('-')
         const deviceName = parts.length >= 3 ? parts.slice(2).join('-') : 'unknown'
@@ -179,29 +196,31 @@ export async function listBackups(config: any): Promise<
   }
 }
 
-export async function getLatestBackup(config: any): Promise<{
-  filename: string; date: string; deviceName: string
-} | null> {
+export async function getLatestBackup(config: Record<string, unknown>): Promise<BackupItem | null> {
   const list = await listBackups(config)
-  return list.length > 0 ? list[0] : null
+  return list.length > 0 ? (list[0] || null) : null
 }
 
 export async function restoreBackup(
-  config: any,
+  config: Record<string, unknown>,
   filename: string,
 ): Promise<{ success: boolean; message: string }> {
   try {
-    const base = config.server.replace(/\/+$/, '')
-    const folder = (config.folder || 'legado').replace(/^\/+/, '').replace(/\/+$/, '')
+    const base = typeof config.server === 'string' ? config.server.replace(/\/+$/, '') : ''
+    const folder = typeof config.folder === 'string' ? config.folder.replace(/^\/+/, '').replace(/\/+$/, '') : 'legado'
     const url = base + '/' + folder + '/' + filename
-    const auth = btoa(config.username + ':' + config.password)
+    const username = typeof config.username === 'string' ? config.username : ''
+    const password = typeof config.password === 'string' ? config.password : ''
+    const auth = btoa(username + ':' + password)
     const headers = { Authorization: 'Basic ' + auth }
 
     if (filename.endsWith('.json')) {
       const res = await network.fetch(url, { method: 'GET', headers, timeout: 30000 })
       const data = JSON.parse(typeof res === 'string' ? res : JSON.stringify(res))
-      for (const [key, value] of Object.entries(data)) {
-        await store.set(key, value)
+      if (isRecord(data)) {
+        for (const [key, value] of Object.entries(data)) {
+          await store.set(key, value)
+        }
       }
       return { success: true, message: '恢复成功' }
     }
@@ -217,14 +236,19 @@ export async function restoreBackup(
     for (const file of jsonFiles) {
       const content = await file.async('string')
       try {
-        const parsed = JSON.parse(content)
+        const parsed = JSON.parse(content) as unknown
         const key = file.name.replace(/\.json$/, '').replace(/^.*\//, '')
         if (key === 'replaceRule') {
-          const existing = (await store.get('replaceRule')) || []
+          const rawExisting = await store.get('replaceRule')
+          const existing = Array.isArray(rawExisting) ? [...rawExisting] : []
           const incoming = Array.isArray(parsed) ? parsed : []
           const merged = [...existing]
           for (const rule of incoming) {
-            if (!merged.find((r: any) => r.name === rule.name && r.pattern === rule.pattern)) {
+            const r = rule as Record<string, unknown>
+            if (!merged.find((er) => {
+              const e = er as Record<string, unknown>
+              return e.name === r.name && e.pattern === r.pattern
+            })) {
               merged.push(rule)
             }
           }
@@ -238,17 +262,19 @@ export async function restoreBackup(
     }
 
     return { success: true, message: '恢复成功' }
-  } catch (err: any) {
-    return { success: false, message: '恢复失败: ' + err.message }
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err)
+    return { success: false, message: '恢复失败: ' + msg }
   }
 }
 
 export async function fullSync(
-  config: any,
-  localData?: any,
+  config: Record<string, unknown>,
+  localData?: Record<string, unknown>,
 ): Promise<{ success: boolean; message: string }> {
   try {
-    const dataToSync = localData || (await store.getAll())
+    const allData = localData || await store.getAll()
+    const dataToSync = isRecord(allData) ? allData : {}
     const JSZip = (await import('jszip')).default
     const zip = new JSZip()
 
@@ -269,12 +295,13 @@ export async function fullSync(
     if (syncedCount === 0) return { success: false, message: '没有数据可同步' }
 
     const zipData = await zip.generateAsync({ type: 'base64' })
-    const device = config.deviceName || (await getDeviceName())
+    const device = typeof config.deviceName === 'string' ? config.deviceName : await getDeviceName()
     const filename = `backup${new Date().toISOString().slice(0, 10)}-${device}.zip`
 
     await webdavRequest(config, 'PUT', filename, zipData, { 'Content-Type': 'application/zip' })
     return { success: true, message: `备份上传成功: ${filename} (${syncedCount} 个文件)` }
-  } catch (err: any) {
-    return { success: false, message: err.message }
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err)
+    return { success: false, message: msg }
   }
 }

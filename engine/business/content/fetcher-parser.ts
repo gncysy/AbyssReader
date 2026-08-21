@@ -3,7 +3,7 @@
 // ============================================
 
 import { getString, getElements, resolveUrl } from '../../index.js'
-import { getDomProvider } from '../../parser/dom/provider.js'
+import type { EngineBookSource, EngineBook, EngineChapter, ParseContext } from '../../types.js'
 
 const NBSP_REGEX = /(&nbsp;)+/g
 const ESP_REGEX = /&ensp;|&emsp;/g
@@ -25,7 +25,7 @@ export function injectImageStyle(html: string, imageStyle: string | null | undef
   else if (imageStyle === 'SINGLE' || imageStyle === 'single') style = 'display:block;max-width:100%;height:auto;margin:0 auto;'
   else if (imageStyle === 'center' || imageStyle === 'CENTER') style = 'display:block;margin:0 auto;max-width:100%;height:auto;'
   else if (imageStyle.startsWith('{')) {
-    try { const p = JSON.parse(imageStyle.replace(/'/g, '"')); style = p.style || p.css || '' } catch { style = imageStyle }
+    try { const p = JSON.parse(imageStyle.replace(/'/g, '"')) as Record<string, unknown>; style = (typeof p.style === 'string' ? p.style : (typeof p.css === 'string' ? p.css : '')) } catch { style = imageStyle }
   } else style = imageStyle
   if (!style) return html
   return html.replace(/<img\s/g, '<img style="' + style + '" ')
@@ -70,18 +70,40 @@ export function stripHtml(html: string): string {
 
 const CONTENT_MIN_LENGTH = 50
 
+interface ContentRuleLike {
+  content?: string | null
+  sourceRegex?: string | null
+  imageStyle?: string | null
+  nextContentUrl?: string | null
+  [key: string]: unknown
+}
+
 export async function parseContentPage(
-  book: any, baseUrl: string, redirectUrl: string, body: string,
-  contentRule: any, chapter: any,
-  bookSource: any, nextChapterUrl: string | null | undefined, getNextPageUrl: boolean
+  book: Partial<EngineBook>,
+  baseUrl: string,
+  redirectUrl: string,
+  body: string,
+  contentRule: ContentRuleLike,
+  chapter: Partial<EngineChapter>,
+  bookSource: EngineBookSource,
+  nextChapterUrl: string | null | undefined,
+  getNextPageUrl: boolean
 ): Promise<{ content: string; nextUrls: string[] }> {
-  const ctx = { source: bookSource, baseUrl: bookSource.bookSourceUrl || baseUrl, book: book || {}, chapter: chapter || {}, nextChapterUrl: nextChapterUrl || '', result: body }
+  const ctx: ParseContext = {
+    source: bookSource,
+    baseUrl: bookSource.bookSourceUrl || baseUrl,
+    book: book || {},
+    chapter: chapter || {},
+    nextChapterUrl: nextChapterUrl || '',
+    result: body,
+  }
   const nextUrls: string[] = []
   let workingBody = body
 
-  if (contentRule.sourceRegex) {
+  const sourceRegex = contentRule.sourceRegex || ''
+  if (sourceRegex) {
     try {
-      const e = await getString(body, contentRule.sourceRegex, ctx)
+      const e = await getString(body, sourceRegex, ctx)
       if (e && e.trim()) { workingBody = e; ctx.result = workingBody }
     } catch {}
   }
@@ -91,8 +113,6 @@ export async function parseContentPage(
   const selector = contentRule.content || ''
   if (selector) {
     try {
-      // 修复：使用引擎 getString 处理 Legado 规则语法（id.content@html 等）
-      // 而不是直接 querySelectorAll
       content = await getString(workingBody, selector, ctx) || ''
     } catch {
       content = ''
@@ -117,11 +137,15 @@ export async function parseContentPage(
     }
   }
 
-  if (getNextPageUrl && contentRule.nextContentUrl) {
+  const nextContentUrlRule = contentRule.nextContentUrl || ''
+  if (getNextPageUrl && nextContentUrlRule) {
     try {
-      const r = await getElements(workingBody, contentRule.nextContentUrl, { ...ctx, isUrl: true })
-      if (Array.isArray(r)) for (const u of r) { if (u && typeof u === 'string' && u.trim()) nextUrls.push(u.trim()) }
-      else if (r && typeof r === 'string' && r.trim()) nextUrls.push(r.trim())
+      const r = await getElements(workingBody, nextContentUrlRule, { ...ctx, isUrl: true })
+      if (Array.isArray(r)) {
+        for (const u of r) {
+          if (u && typeof u === 'string' && u.trim()) nextUrls.push(u.trim())
+        }
+      }
     } catch {}
   }
 

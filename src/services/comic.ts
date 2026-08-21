@@ -5,13 +5,65 @@
 import { invoke } from '@tauri-apps/api/core'
 import type { ComicImage } from '@engine/business/comic/index.js'
 
-export async function proxyCover(url: string, sourceJson: string): Promise<string> {
+interface ComicFetchResult {
+  url: string
+  cached: boolean
+  data?: string
+  direct?: boolean
+  src?: string
+}
+
+function isComicFetchResult(value: unknown): value is ComicFetchResult {
+  if (value === null || typeof value !== 'object') return false
+  const obj = value as Record<string, unknown>
+  return typeof obj.url === 'string'
+}
+
+/**
+ * 拆分漫画图片 URL 中的 ,{...} 选项。
+ * 例如：https://img.example.com/1.jpg,{"headers":{"Referer":"https://example.com/"}}
+ * 返回干净 URL 和额外 headers。
+ */
+function parseImageUrl(url: string): { cleanUrl: string; extraHeaders: Record<string, string> } {
+  const commaIdx = url.indexOf(',{')
+  if (commaIdx === -1) return { cleanUrl: url, extraHeaders: {} }
+  const cleanUrl = url.substring(0, commaIdx)
+  const optionsStr = url.substring(commaIdx + 1)
   try {
-    return await invoke('proxy_image', { url, sourceJson })
+    const options = JSON.parse(optionsStr) as Record<string, unknown>
+    const headers = (options.headers as Record<string, string>) || {}
+    return { cleanUrl, extraHeaders: headers }
   } catch {
-    // 降级：尝试直接请求（浏览器会拦截跨域，但作为最后手段）
+    return { cleanUrl, extraHeaders: {} }
+  }
+}
+
+/**
+ * 合并 headers：额外 headers 优先
+ */
+function mergeSourceJson(sourceJson: string, extraHeaders: Record<string, string>): string {
+  if (Object.keys(extraHeaders).length === 0) return sourceJson
+  try {
+    const source = JSON.parse(sourceJson) as Record<string, unknown>
+    const existingHeaders = (source.header as Record<string, string>) || {}
+    source.header = { ...existingHeaders, ...extraHeaders }
+    return JSON.stringify(source)
+  } catch {
+    return sourceJson
+  }
+}
+
+export async function proxyCover(url: string, sourceJson: string): Promise<string> {
+  // 拆分 URL 中的 headers 选项
+  const { cleanUrl, extraHeaders } = parseImageUrl(url)
+  const mergedSource = mergeSourceJson(sourceJson, extraHeaders)
+
+  try {
+    const result = await invoke('proxy_image', { url: cleanUrl, sourceJson: mergedSource })
+    return typeof result === 'string' ? result : cleanUrl
+  } catch {
     try {
-      const response = await fetch(url, { mode: 'no-cors' })
+      const response = await fetch(cleanUrl, { mode: 'no-cors' })
       if (response.ok) {
         const blob = await response.blob()
         return new Promise((resolve) => {
@@ -20,36 +72,52 @@ export async function proxyCover(url: string, sourceJson: string): Promise<strin
           reader.readAsDataURL(blob)
         })
       }
-    } catch {}
-    return url
+    } catch {
+      // ignore
+    }
+    return cleanUrl
   }
 }
+
+const COMIC_RETRY_DELAY_MS = 500
 
 export async function loadSingleImage(
   item: ComicImage,
   sourceJson: string,
   comicId: string,
 ): Promise<void> {
+  // 拆分 URL 中的 headers 选项
+  const { cleanUrl, extraHeaders } = parseImageUrl(item.url)
+  const mergedSource = mergeSourceJson(sourceJson, extraHeaders)
+
   while (item.retries > 0 && item.status !== 'loaded') {
     try {
-      const result: any = await invoke('comic_fetch_image', { url: item.url, sourceJson, comicId })
-      if (result?.data) { item.data = result.data; item.status = 'loaded'; return }
-      if (result?.direct && result?.src) { item.directUrl = result.src; item.status = 'loaded'; return }
+      const result = await invoke('comic_fetch_image', {
+        url: cleanUrl,
+        sourceJson: mergedSource,
+        comicId,
+      })
+      if (isComicFetchResult(result)) {
+        if (result.data) { item.data = result.data; item.status = 'loaded'; return }
+        if (result.direct && result.src) { item.directUrl = result.src; item.status = 'loaded'; return }
+      }
       item.retries--
     } catch {
       item.retries--
       if (item.retries <= 0) { item.status = 'error'; return }
-      await new Promise((r) => setTimeout(r, 500))
+      await new Promise((r) => setTimeout(r, COMIC_RETRY_DELAY_MS))
     }
   }
   if (item.status !== 'loaded') item.status = 'error'
 }
 
+const COMIC_CONCURRENCY = 2
+
 export async function loadComicImages(
   images: ComicImage[],
   sourceJson: string,
   comicId: string,
-  concurrency = 2,
+  concurrency = COMIC_CONCURRENCY,
 ): Promise<void> {
   const queue = [...images]
   const workers: Promise<void>[] = []

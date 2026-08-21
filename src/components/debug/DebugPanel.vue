@@ -19,7 +19,10 @@
 
       <template v-if="editMode">
         <div class="debug-editor-header">
-          <button class="btn-back-inline" @click="editMode = false"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 12H5M12 19l-7-7 7-7"/></svg>返回</button>
+          <button class="btn-back-inline" @click="editMode = false">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 12H5M12 19l-7-7 7-7"/></svg>
+            返回
+          </button>
           <span class="editor-title">编辑书源规则</span>
           <div class="editor-actions">
             <span v-if="saving" class="saving-text">保存中...</span>
@@ -46,7 +49,7 @@
             </div>
             <div class="flow-log-container" ref="flowLogListRef">
               <div v-for="(entry, idx) in flowEntries" :key="idx" class="flow-entry">
-                <div v-if="entry.type === 'text'" class="flow-log-text" :class="'log-' + entry.level">
+                <div v-if="entry.type === 'text'" class="flow-log-text" :class="'log-' + (entry.level || 'info')">
                   <span class="log-time">{{ entry.time }}</span>
                   <span class="log-module">{{ entry.module }}</span>
                   <span class="log-message">{{ entry.message }}</span>
@@ -87,7 +90,6 @@
             <div class="debug-content">
               <div class="input-row">
                 <input v-model="netUrl" type="text" placeholder="输入 URL..." class="debug-input" @keyup.enter="runNet" />
-                <label class="check-label"><input type="checkbox" v-model="netUseWebView" /> WebView</label>
                 <button class="btn-primary" :disabled="netRunning" @click="runNet">{{ netRunning ? '请求中...' : '发送请求' }}</button>
               </div>
             </div>
@@ -95,7 +97,7 @@
 
           <div v-if="activeTab !== 'flow'" class="debug-log">
             <div class="log-header">
-              <span>日志 ({{ allLogs.length }})</span>
+              <span>日志 ({{ filteredLogs.length }})</span>
               <div class="log-controls">
                 <select v-model="logFilterModule" class="log-select">
                   <option value="all">全部模块</option>
@@ -122,13 +124,12 @@ import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import { useMessage, NConfigProvider } from 'naive-ui'
 import CustomDropdown from '@/components/settings/CustomDropdown.vue'
 import { debug } from '@/services/debug.js'
-import { onLog, logHistory } from '@engine/log/index.js'
+import { onLog, logHistory, type LogEntry } from '@engine/log/index.js'
 import { useNaiveTheme } from '@/composables/useNaiveTheme.js'
-import type { LogEntry } from '@engine/log/index.js'
 import type { BookSource } from '@/types'
 
 const props = defineProps<{ visible: boolean; sources: BookSource[]; sourceIndex?: number }>()
-const emit = defineEmits<{ 'update:visible': [v: boolean]; 'select-source': [v: number] }>()
+const emit = defineEmits<{ 'update:visible': [v: boolean]; 'select-source': [v: number]; 'sources-updated': [] }>()
 
 const msg = useMessage()
 const { naiveTheme, themeOverrides } = useNaiveTheme()
@@ -186,13 +187,6 @@ function escapeHtml(str: string): string {
   return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
 }
 
-function sanitizeImageSrc(url: string): string {
-  if (url.startsWith('http://') || url.startsWith('https://') || url.startsWith('data:image/')) {
-    return url
-  }
-  return ''
-}
-
 const jsCode = ref('')
 const jsRunning = ref(false)
 const jsContextResult = ref('')
@@ -203,7 +197,6 @@ const webviewTimeout = ref(30)
 const webviewRunning = ref(false)
 
 const netUrl = ref('')
-const netUseWebView = ref(false)
 const netRunning = ref(false)
 
 const editJson = ref('')
@@ -212,6 +205,7 @@ const editError = ref('')
 const allLogs = ref<LogEntry[]>([])
 const logFilterModule = ref<string>('all')
 const logFilterSource = ref<string>('all')
+
 const filteredLogs = computed(() => {
   let result = allLogs.value
   if (logFilterModule.value !== 'all') result = result.filter((log) => log.module === logFilterModule.value)
@@ -222,7 +216,12 @@ const filteredLogs = computed(() => {
 const sourceOptions = computed(() => {
   const opts: { label: string; value: number }[] = [{ label: '选择书源...', value: -1 }]
   const arr = Array.isArray(props.sources) ? props.sources : []
-  for (let i = 0; i < arr.length; i++) opts.push({ label: arr[i].bookSourceName || arr[i].name || '未命名', value: i })
+  for (let i = 0; i < arr.length; i++) {
+    const s = arr[i]
+    if (s) {
+      opts.push({ label: s.bookSourceName || '未命名', value: i })
+    }
+  }
   return opts
 })
 
@@ -233,24 +232,29 @@ function closePanel(): void { emit('update:visible', false) }
 function openEditor(): void {
   if (selectedIndex.value < 0) { msg.warning('请先选择书源'); return }
   const arr = Array.isArray(props.sources) ? props.sources : []
-  editJson.value = JSON.stringify(arr[selectedIndex.value] || {}, null, 2)
-  editError.value = ''
-  editMode.value = true
+  const source = arr[selectedIndex.value]
+  if (source) {
+    editJson.value = JSON.stringify(source, null, 2)
+    editError.value = ''
+    editMode.value = true
+  }
 }
 
 async function saveEdit(): Promise<void> {
-  try { JSON.parse(editJson.value); editError.value = '' } catch (err: any) { editError.value = 'JSON 格式错误: ' + err.message; return }
+  try { JSON.parse(editJson.value); editError.value = '' } catch (err: unknown) { const e = err as Error; editError.value = 'JSON 格式错误: ' + e.message; return }
   saving.value = true
   try {
-    const sources: any[] = (await debug.getBookSource()) || []
+    const sources = await debug.getBookSource()
     if (selectedIndex.value >= 0 && selectedIndex.value < sources.length) {
-      sources[selectedIndex.value] = JSON.parse(editJson.value)
+      sources[selectedIndex.value] = JSON.parse(editJson.value) as BookSource
       await debug.saveBookSource(sources)
     }
     editMode.value = false
+    emit('sources-updated')
     msg.success('已保存')
-  } catch (err: any) {
-    editError.value = '保存失败: ' + err.message
+  } catch (err: unknown) {
+    const e = err as Error
+    editError.value = '保存失败: ' + e.message
   } finally {
     saving.value = false
   }
@@ -262,7 +266,8 @@ async function runFlow(): Promise<void> {
 
   flowRunning.value = true
   flowEntries.value = []
-  const source = JSON.parse(JSON.stringify(props.sources[selectedIndex.value]))
+  const source = props.sources[selectedIndex.value]
+  if (!source) { flowRunning.value = false; return }
   const keyword = flowKeyword.value.trim()
 
   addFlowText('info', `开始搜索 keyword=${keyword}`)
@@ -277,72 +282,83 @@ async function runFlow(): Promise<void> {
     let resultHtml = `<div style="font-size:12px;color:var(--text-muted);margin-bottom:8px">共 ${books.length} 本书</div>`
     resultHtml += '<div style="display:flex;flex-direction:column;gap:2px;max-height:200px;overflow-y:auto">'
     books.forEach((book, idx) => {
+      const b = book as Record<string, unknown>
       resultHtml += `<div style="display:flex;gap:8px;padding:6px 10px;border-radius:var(--radius-sm)">
         <span style="color:var(--text-muted);min-width:30px;font-size:11px;flex-shrink:0">${idx + 1}</span>
-        <span style="flex:1;color:var(--text-primary);font-weight:500;font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(book.name || '未命名')}</span>
-        <span style="color:var(--text-muted);font-size:12px;flex-shrink:0">${escapeHtml(book.author || '')}</span>
+        <span style="flex:1;color:var(--text-primary);font-weight:500;font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(String(b.name || '未命名'))}</span>
+        <span style="color:var(--text-muted);font-size:12px;flex-shrink:0">${escapeHtml(String(b.author || ''))}</span>
       </div>`
     })
     resultHtml += '</div>'
     addFlowCard('①', `搜索结果 (${books.length})`, resultHtml)
 
-    const firstBook = books[0]
-    addFlowText('info', `自动选择第一本书: ${firstBook.name}`)
+    const firstBook = books[0] as Record<string, unknown>
+    addFlowText('info', `自动选择第一本书: ${String(firstBook.name || '')}`)
 
-    const bookUrl = firstBook.bookUrl || ''
+    const bookUrl = typeof firstBook.bookUrl === 'string' ? firstBook.bookUrl : ''
     addFlowText('info', `获取书籍详情: ${bookUrl}`)
     const info = await debug.getBookInfo(source, bookUrl)
-    if (info) {
+    if (info && typeof info === 'object') {
+      const infoObj = info as Record<string, unknown>
       let infoHtml = ''
-      const safeCover = info.coverUrl ? sanitizeImageSrc(info.coverUrl) : ''
-      if (safeCover) infoHtml += `<div style="margin-bottom:8px"><img src="${escapeHtml(safeCover)}" style="max-width:80px;max-height:100px;border-radius:var(--radius-sm);object-fit:cover" onerror="this.style.display='none'" /></div>`
-      infoHtml += `<div style="font-size:14px;font-weight:600;color:var(--text-primary)">${escapeHtml(info.name || firstBook.name || '未命名')}</div>`
-      infoHtml += `<div style="font-size:12px;color:var(--text-secondary);margin-top:4px">作者: ${escapeHtml(info.author || '未知')}</div>`
-      if (info.kind) infoHtml += `<div style="font-size:12px;color:var(--text-secondary);margin-top:2px">分类: ${escapeHtml(info.kind)}</div>`
-      if (info.wordCount) infoHtml += `<div style="font-size:12px;color:var(--text-secondary);margin-top:2px">字数: ${escapeHtml(info.wordCount)}</div>`
-      if (info.lastChapter) infoHtml += `<div style="font-size:12px;color:var(--text-secondary);margin-top:2px">最新章节: ${escapeHtml(info.lastChapter)}</div>`
-      if (info.intro) infoHtml += `<div style="font-size:12px;color:var(--text-muted);margin-top:6px;line-height:1.6">${escapeHtml(info.intro.substring(0, 300))}</div>`
+      if (typeof infoObj.coverUrl === 'string' && infoObj.coverUrl) {
+        infoHtml += `<div style="margin-bottom:8px"><img src="${escapeHtml(infoObj.coverUrl)}" style="max-width:80px;max-height:100px;border-radius:var(--radius-sm);object-fit:cover" /></div>`
+      }
+      infoHtml += `<div style="font-size:14px;font-weight:600;color:var(--text-primary)">${escapeHtml(String(infoObj.name || '未命名'))}</div>`
+      infoHtml += `<div style="font-size:12px;color:var(--text-secondary);margin-top:4px">作者: ${escapeHtml(String(infoObj.author || '未知'))}</div>`
+      if (infoObj.kind) infoHtml += `<div style="font-size:12px;color:var(--text-secondary);margin-top:2px">分类: ${escapeHtml(String(infoObj.kind))}</div>`
+      if (infoObj.wordCount) infoHtml += `<div style="font-size:12px;color:var(--text-secondary);margin-top:2px">字数: ${escapeHtml(String(infoObj.wordCount))}</div>`
+      if (infoObj.lastChapter) infoHtml += `<div style="font-size:12px;color:var(--text-secondary);margin-top:2px">最新章节: ${escapeHtml(String(infoObj.lastChapter))}</div>`
+      if (typeof infoObj.intro === 'string' && infoObj.intro) infoHtml += `<div style="font-size:12px;color:var(--text-muted);margin-top:6px;line-height:1.6">${escapeHtml(infoObj.intro.substring(0, 300))}</div>`
       addFlowCard('②', '书籍详情', infoHtml)
-    } else {
-      addFlowText('warn', '详情获取失败')
     }
 
-    const tocUrl = info?.tocUrl || bookUrl
+    const tocUrl = typeof (info as Record<string, unknown>)?.tocUrl === 'string'
+      ? (info as Record<string, unknown>).tocUrl as string
+      : bookUrl
     addFlowText('info', `获取目录: ${tocUrl}`)
     const chapters = await debug.getToc(source, tocUrl)
     if (Array.isArray(chapters) && chapters.length > 0) {
       let tocHtml = `<div style="font-size:12px;color:var(--text-muted);margin-bottom:8px">共 ${chapters.length} 章</div>`
       tocHtml += '<div style="display:flex;flex-direction:column;gap:2px;max-height:250px;overflow-y:auto">'
       for (let i = 0; i < Math.min(chapters.length, 30); i++) {
-        const ch = chapters[i]
+        const ch = chapters[i] as Record<string, unknown>
         tocHtml += `<div style="display:flex;gap:8px;padding:4px 10px;font-size:12px;color:var(--text-secondary)">
           <span style="color:var(--text-muted);min-width:30px;font-size:11px;flex-shrink:0">${i + 1}</span>
-          <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(ch.title || '无标题')}</span>
+          <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(String(ch.title || '无标题'))}</span>
         </div>`
       }
       if (chapters.length > 30) tocHtml += `<div style="text-align:center;padding:6px;font-size:11px;color:var(--text-muted)">... 仅显示前 30 章，共 ${chapters.length} 章</div>`
       tocHtml += '</div>'
       addFlowCard('③', `目录 (${chapters.length}章)`, tocHtml)
-    } else {
-      addFlowText('warn', '目录获取失败')
     }
 
     if (Array.isArray(chapters) && chapters.length > 0) {
-      const firstChapter = chapters[0]
-      addFlowText('info', `获取第一章: ${firstChapter.title}`)
-      const content = await debug.getContent(source, firstChapter.url)
-      if (content) {
-        addFlowCard('④', `正文 — ${firstChapter.title}`, `<div style="font-size:13px;line-height:1.8;color:var(--text-primary);white-space:pre-wrap;max-height:400px;overflow-y:auto">${escapeHtml(content.substring(0, 2000))}</div>`)
-      } else {
-        addFlowText('warn', '正文获取失败')
+      const firstChapter = chapters[0] as Record<string, unknown>
+      const chapterUrl = typeof firstChapter.url === 'string' ? firstChapter.url : ''
+      if (chapterUrl) {
+        addFlowText('info', `获取第一章: ${String(firstChapter.title || '')}`)
+        const content = await debug.getContent(source, chapterUrl)
+        if (content) {
+          addFlowCard('④', `正文 — ${String(firstChapter.title || '')}`, `<div style="font-size:13px;line-height:1.8;color:var(--text-primary);white-space:pre-wrap;max-height:400px;overflow-y:auto">${escapeHtml(content.substring(0, 2000))}</div>`)
+        }
       }
     }
 
     addFlowText('success', '流程执行完成')
-  } catch (err: any) {
-    addFlowText('error', '流程执行失败: ' + (err?.message || String(err)))
+  } catch (err: unknown) {
+    const e = err as Error
+    addFlowText('error', '流程执行失败: ' + (e?.message || String(err)))
   } finally {
     flowRunning.value = false
+  }
+}
+
+// 修复：使用 push + 手动截断，避免每次展开数组
+function pushLog(entry: LogEntry): void {
+  allLogs.value.push(entry)
+  if (allLogs.value.length > MAX_LOGS) {
+    allLogs.value.splice(0, allLogs.value.length - MAX_LOGS)
   }
 }
 
@@ -352,12 +368,12 @@ async function runJs(): Promise<void> {
   try {
     const code = jsCode.value.trim()
     const prevResult = jsContextResult.value || ''
-    const source = selectedIndex.value >= 0 ? props.sources[selectedIndex.value] : {}
+    const source = selectedIndex.value >= 0 ? props.sources[selectedIndex.value] : undefined
     const result = await debug.executeJs(code, {
       result: prevResult,
       src: prevResult,
-      source: source,
-      baseUrl: (source as any)?.bookSourceUrl || '',
+      source: source || {},
+      baseUrl: source?.bookSourceUrl || '',
       book: { kind: '123' },
       key: '',
       page: 1,
@@ -367,19 +383,13 @@ async function runJs(): Promise<void> {
     const now = new Date()
     const time = now.toTimeString().slice(0, 8)
     pushLog({ time, level: 'info', module: 'js', source: 'frontend', message: output })
-  } catch (err: any) {
+  } catch (err: unknown) {
+    const e = err as Error
     const now = new Date()
     const time = now.toTimeString().slice(0, 8)
-    pushLog({ time, level: 'error', module: 'js', source: 'frontend', message: '错误: ' + (err?.message || String(err)) })
+    pushLog({ time, level: 'error', module: 'js', source: 'frontend', message: '错误: ' + (e?.message || String(err)) })
   } finally {
     jsRunning.value = false
-  }
-}
-
-function pushLog(entry: LogEntry): void {
-  allLogs.value = [...allLogs.value, entry]
-  if (allLogs.value.length > MAX_LOGS) {
-    allLogs.value.splice(0, allLogs.value.length - MAX_LOGS)
   }
 }
 
@@ -395,9 +405,7 @@ async function runWebView(): Promise<void> {
   webviewRunning.value = true
   const startTime = Date.now()
   try {
-    const source = selectedIndex.value >= 0 ? props.sources[selectedIndex.value] : undefined
-    const html: string = await debug.fetchWebView(webviewUrl.value.trim(), {
-      headers: source ? await (await import('@engine/business/source/helper.js')).parseSourceHeader(source) : {},
+    const html = await debug.fetchWebView(webviewUrl.value.trim(), {
       webJs: webviewJs.value.trim() || undefined,
       timeout: (webviewTimeout.value || 30) * 1000,
     })
@@ -406,11 +414,11 @@ async function runWebView(): Promise<void> {
     const now = new Date()
     const time = now.toTimeString().slice(0, 8)
     pushLog({ time, level: 'info', module: 'webview', source: 'frontend', message: `${duration}ms · ${output.length} 字符` })
-    pushLog({ time, level: 'info', module: 'webview', source: 'frontend', message: output })
-  } catch (err: any) {
+  } catch (err: unknown) {
+    const e = err as Error
     const now = new Date()
     const time = now.toTimeString().slice(0, 8)
-    pushLog({ time, level: 'error', module: 'webview', source: 'frontend', message: '错误: ' + (err?.message || String(err)) })
+    pushLog({ time, level: 'error', module: 'webview', source: 'frontend', message: '错误: ' + (e?.message || String(err)) })
   } finally {
     webviewRunning.value = false
   }
@@ -421,34 +429,18 @@ async function runNet(): Promise<void> {
   netRunning.value = true
   const startTime = Date.now()
   try {
-    let status = ''
-    let headers = ''
-    let body = ''
     const source = selectedIndex.value >= 0 ? props.sources[selectedIndex.value] : undefined
-    if (netUseWebView.value) {
-      const sourceHeaders = source ? await (await import('@engine/business/source/helper.js')).parseSourceHeader(source) : {}
-      const html: string = await debug.fetchWebView(netUrl.value.trim(), {
-        headers: sourceHeaders,
-        timeout: 30000,
-      })
-      status = '200'
-      body = typeof html === 'string' ? html : JSON.stringify(html)
-    } else {
-      const response = await debug.httpRequest(netUrl.value, source)
-      status = String(response.status)
-      headers = JSON.stringify(response.headers, null, 2)
-      body = response.data
-    }
+    const response = await debug.httpRequest(netUrl.value, source)
     const duration = Date.now() - startTime
     const now = new Date()
     const time = now.toTimeString().slice(0, 8)
-    pushLog({ time, level: 'info', module: 'network', source: 'frontend', message: `状态: ${status} · ${duration}ms` })
-    if (headers) pushLog({ time, level: 'info', module: 'network', source: 'frontend', message: headers })
-    pushLog({ time, level: 'info', module: 'network', source: 'frontend', message: body })
-  } catch (err: any) {
+    pushLog({ time, level: 'info', module: 'network', source: 'frontend', message: `状态: ${response.status} · ${duration}ms` })
+    pushLog({ time, level: 'info', module: 'network', source: 'frontend', message: response.data })
+  } catch (err: unknown) {
+    const e = err as Error
     const now = new Date()
     const time = now.toTimeString().slice(0, 8)
-    pushLog({ time, level: 'error', module: 'network', source: 'frontend', message: '错误: ' + (err?.message || String(err)) })
+    pushLog({ time, level: 'error', module: 'network', source: 'frontend', message: '错误: ' + (e?.message || String(err)) })
   } finally {
     netRunning.value = false
   }
@@ -461,7 +453,6 @@ const logHandler = (entry: LogEntry) => {
     if (flowEntries.value.length > MAX_FLOW_ENTRIES) {
       flowEntries.value.splice(0, flowEntries.value.length - MAX_FLOW_ENTRIES)
     }
-    nextTick(() => { if (flowLogListRef.value) flowLogListRef.value.scrollTop = flowLogListRef.value.scrollHeight })
   }
 }
 let unsubscribe: (() => void) | null = null
@@ -497,7 +488,7 @@ function handleKeydown(e: KeyboardEvent): void {
 .header-btn:disabled { opacity: 0.4; cursor: not-allowed; }
 .header-btn-close:hover { background: #e74c3c; color: #fff; }
 .debug-editor-header { display: flex; align-items: center; gap: 12px; padding: 10px 20px; border-bottom: 1px solid var(--border-color); flex-shrink: 0; background: var(--bg-card); }
-.btn-back-inline { background: transparent; border: none; color: var(--text-secondary); cursor: pointer; font-size: 13px; display: flex; align-items: center; gap: 4px; padding: 4px 10px; border-radius: var(--radius-sm); transition: color 0.2s, background 0.2s; }
+.btn-back-inline { background: transparent; border: none; color: var(--text-secondary); cursor: pointer; font-size: 13px; display: flex; align-items: center; gap: 4px; padding: 4px 10px; border-radius: var(--radius-sm); }
 .btn-back-inline:hover { color: var(--text-primary); background: var(--bg-hover); }
 .editor-title { font-size: 13px; color: var(--text-secondary); font-weight: 500; flex: 1; }
 .editor-actions { display: flex; gap: 8px; align-items: center; }
@@ -520,8 +511,6 @@ function handleKeydown(e: KeyboardEvent): void {
 .timeout-label { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-muted); }
 .timeout-input { width: 56px; padding: 5px 8px; border: 1px solid var(--border-color); border-radius: var(--radius-sm); background: var(--bg-card); color: var(--text-primary); font-size: 12px; outline: none; }
 .timeout-input:focus { border-color: var(--brand); }
-.check-label { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-muted); white-space: nowrap; cursor: pointer; }
-.check-label input { accent-color: var(--brand); cursor: pointer; }
 .flow-input-row { display: flex; gap: 10px; flex-shrink: 0; }
 .flow-log-container { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 6px; padding: 8px 0; }
 .flow-entry { flex-shrink: 0; }
@@ -548,5 +537,4 @@ function handleKeydown(e: KeyboardEvent): void {
 .log-error .log-message { color: #e74c3c; }
 .log-warn .log-message { color: #d4a017; }
 .log-info .log-message { color: var(--text-secondary); }
-.log-debug .log-message { color: var(--text-muted); font-size: 10px; }
 </style>

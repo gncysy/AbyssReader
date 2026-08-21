@@ -2,6 +2,8 @@
 // 登录 — 纯接口定义，由 services/ 层注入实现
 // ============================================
 
+import type { EngineBookSource } from '../types.js'
+
 export interface LoginConfig {
   loginUrl: string
   loginUi?: string
@@ -16,8 +18,8 @@ export interface LoginResult {
 }
 
 export interface LoginExecutor {
-  executeLogin(source: any): Promise<LoginResult>
-  checkLoginStatus(source: any): Promise<boolean>
+  executeLogin(source: EngineBookSource): Promise<LoginResult>
+  checkLoginStatus(source: EngineBookSource): Promise<boolean>
 }
 
 let loginExecutor: LoginExecutor | null = null
@@ -30,14 +32,14 @@ export function getLoginExecutor(): LoginExecutor | null {
   return loginExecutor
 }
 
-export async function executeLoginJs(source: any): Promise<LoginResult> {
+export async function executeLoginJs(source: EngineBookSource): Promise<LoginResult> {
   if (!loginExecutor) {
     return { success: false, error: '登录执行器未注入' }
   }
   return loginExecutor.executeLogin(source)
 }
 
-export async function checkLoginStatus(source: any): Promise<boolean> {
+export async function checkLoginStatus(source: EngineBookSource): Promise<boolean> {
   if (!loginExecutor) {
     return false
   }

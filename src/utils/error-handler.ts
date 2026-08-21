@@ -43,14 +43,35 @@ function generateDiagId(): string {
   return DIAG_ID_PREFIX + '_' + diagIdCounter.toString(36)
 }
 
+function getErrorMessage(err: unknown): string {
+  if (err instanceof Error) return err.message
+  if (typeof err === 'string') return err
+  if (err !== null && typeof err === 'object') {
+    const obj = err as Record<string, unknown>
+    if (typeof obj.message === 'string') return obj.message
+    if (typeof obj.error === 'string') return obj.error
+    try { return JSON.stringify(err) } catch { return String(err) }
+  }
+  return String(err)
+}
+
+function getErrorStack(err: unknown): string | undefined {
+  if (err instanceof Error) return err.stack
+  if (err !== null && typeof err === 'object') {
+    const obj = err as Record<string, unknown>
+    if (typeof obj.stack === 'string') return obj.stack
+  }
+  return undefined
+}
+
 export function handleError(err: unknown, ctx: ErrorContext): ErrorResult {
   if (isUserCancel(err)) {
     logInfo(ctx.module, 'frontend', `[${ctx.operation}] 已取消`)
     return { message: '已取消', isUserCancel: true, shouldShowUser: false }
   }
 
-  const message = err instanceof Error ? err.message : String(err)
-  const stack = err instanceof Error ? err.stack : undefined
+  const message = getErrorMessage(err)
+  const stack = getErrorStack(err)
 
   if (err instanceof NetworkError) {
     logWarn(ctx.module, 'frontend', `[${ctx.operation}] 网络错误: ${message}`, ctx.sourceUrl)

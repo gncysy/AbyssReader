@@ -1,4 +1,4 @@
-export { parseHeader, parseSourcesFromJson, parseSourceHeader, executeDownloadImport } from './source/index.js'
+export { parseHeader, parseSourcesFromJson, parseSourceHeader } from './source/index.js'
 export type { DownloadInfo } from './source/index.js'
 
 export {

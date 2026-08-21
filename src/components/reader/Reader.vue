@@ -16,7 +16,7 @@
         </header>
       </Transition>
 
-      <div class="reader-body">
+      <div class="reader-body" :class="{ 'reader-body-no-header': !showControls }">
         <ReaderContent
           ref="readerContentRef"
           :sanitized-content="sanitizedContent"
@@ -62,7 +62,7 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, onUnmounted, ref } from 'vue'
+import { ref, watch, onMounted, onUnmounted } from 'vue'
 import { useReaderStore, useBookshelfStore } from '@/stores'
 import { useReplaceRuleStore } from '@/stores/replace-rules.js'
 import { useReaderContent } from '@/composables/useReaderContent.js'
@@ -81,14 +81,15 @@ const readerStore = useReaderStore()
 const bookshelfStore = useBookshelfStore()
 const replaceRuleStore = useReplaceRuleStore()
 
-const rc = useReaderContent(props.book, props.source, props.initialChapters)
+const sourceValue = props.source ?? null
+const rc = useReaderContent(props.book, sourceValue, props.initialChapters)
 
 const {
-  content, loadingContent, chapterIndex, chapters, isComic, comicImages, scrollPercent, currentChapter,
+  loadingContent, chapterIndex, chapters, isComic, comicImages, scrollPercent, currentChapter,
   dictVisible, dictRules, dictActiveTab, dictLoading, dictContents, showControls,
   effectiveTheme, effectiveFontSize, effectiveLineHeight, sanitizedContent,
   tocPopupRef, settingsRef, readerCtxRef,
-  loadChaptersForBook, loadChapter, startPreload,
+  loadChaptersForBook, loadChapter,
   prevChapter, nextChapter, retryComicImage, handleClose, handleKeydown,
   openToc, openSettings, onTocSelect, handleContentClick, handleTextSelect,
   copySelectionFromCtx, openDictFromCtx, switchDictTab,
@@ -97,34 +98,33 @@ const {
 
 const readerContentRef = ref<InstanceType<typeof ReaderContent> | null>(null)
 
+// 修复：把 ReaderContent 的 contentRef 同步到 useReaderContent 的 contentRef
+watch(readerContentRef, (comp) => {
+  if (comp && comp.contentRef) {
+    rc.contentRef.value = comp.contentRef
+  }
+}, { immediate: true })
+
+let isClosed = false
+
 function handleScroll(): void {
-  const el = readerContentRef.value?.contentRef || null
-  if (!el) return
-  const max = el.scrollHeight - el.clientHeight
-  if (max <= 0) return
-  scrollPercent.value = Math.min(1, Math.max(0, el.scrollTop / max))
+  rc.handleScroll()
 }
 
 async function handleCloseAndEmit(): Promise<void> {
+  if (isClosed) return
+  isClosed = true
   await handleClose()
   emit('close')
 }
 
-let isFirstSubscribe = true
-const unsubscribeBooks = bookshelfStore.$subscribe(() => {
-  if (isFirstSubscribe) { isFirstSubscribe = false; return }
-  if (props.book && props.source) {
-    loadChapter().catch(() => {})
-  }
-})
-
 onMounted(async () => {
   readerStore.loadSettings()
   replaceRuleStore.loadRules()
-  if (props.book && props.source) {
-    await loadChaptersForBook(props.book, props.source, props.initialChapters)
-    const forcedIndex = (props.book as any)?._forceChapterIndex
-    if (forcedIndex !== undefined && forcedIndex >= 0 && forcedIndex < chapters.value.length) {
+  if (props.book && sourceValue) {
+    await loadChaptersForBook(props.book, sourceValue, props.initialChapters)
+    const forcedIndex = (props.book as unknown as Record<string, unknown>)._forceChapterIndex
+    if (typeof forcedIndex === 'number' && forcedIndex >= 0 && forcedIndex < chapters.value.length) {
       chapterIndex.value = forcedIndex
     } else {
       const progress = await readerStore.loadProgress(props.book.bookUrl, props.book.name, props.book.author)
@@ -140,8 +140,10 @@ onMounted(async () => {
 
 onUnmounted(async () => {
   window.removeEventListener('keydown', handleKeydown)
-  unsubscribeBooks()
-  await handleClose()
+  if (!isClosed) {
+    isClosed = true
+    await handleClose()
+  }
 })
 </script>
 
@@ -169,7 +171,7 @@ onUnmounted(async () => {
   --border-color: rgba(139,119,80,0.15);
 }
 .reader-header {
-  position: relative;
+  position: absolute;
   display: flex;
   align-items: center;
   padding: 6px 16px;
@@ -177,7 +179,6 @@ onUnmounted(async () => {
   border-bottom: 1px solid var(--border-color);
   height: 48px;
   flex-shrink: 0;
-  position: absolute;
   top: 0;
   left: 0;
   right: 0;
@@ -202,7 +203,17 @@ onUnmounted(async () => {
 .reader-title.clickable:hover { color: var(--text-primary); }
 .btn-icon-header { width: 38px; height: 38px; border: none; background: transparent; color: var(--text-muted); cursor: pointer; border-radius: var(--radius-sm); display: flex; align-items: center; justify-content: center; -webkit-app-region: no-drag; margin-left: auto; flex-shrink: 0; }
 .btn-icon-header:hover { background: var(--bg-hover); color: var(--text-primary); }
-.reader-body { flex: 1; padding-top: 48px; display: flex; flex-direction: column; overflow: hidden; }
+.reader-body {
+  flex: 1;
+  padding-top: 48px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  transition: padding-top 0.3s var(--ease-out, cubic-bezier(0.2, 0, 0, 1));
+}
+.reader-body-no-header {
+  padding-top: 0;
+}
 .reader-loading { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; background: rgba(0,0,0,0.5); z-index: 20; }
 .controls-slide-enter-active, .controls-slide-leave-active { transition: opacity 0.3s ease, transform 0.3s ease; }
 .controls-slide-enter-from, .controls-slide-leave-to { opacity: 0; }

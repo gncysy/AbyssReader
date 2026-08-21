@@ -1,5 +1,5 @@
 <template>
-  <n-modal v-model:show="visible" preset="card" :title="title" style="max-width:600px" :bordered="false">
+  <n-modal v-model:show="visible" preset="card" :title="title || ''" style="max-width:600px" :bordered="false">
     <div class="import-tabs">
       <button class="import-tab" :class="{ active: activeTab === 'json' }" @click="activeTab = 'json'">粘贴 JSON</button>
       <button class="import-tab" :class="{ active: activeTab === 'url' }" @click="activeTab = 'url'">从 URL</button>
@@ -33,7 +33,7 @@
 import { ref, computed } from 'vue'
 import { NModal } from 'naive-ui'
 
-const props = withDefaults(defineProps<{
+withDefaults(defineProps<{
   visible: boolean
   title?: string
   acceptFileTypes?: string

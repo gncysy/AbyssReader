@@ -6,6 +6,30 @@ import { getCurrentWindow } from '@tauri-apps/api/window'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import { invoke } from '@tauri-apps/api/core'
 
+interface RssDownloadPayload {
+  url: string
+  fileName: string
+  fileSize: number
+  resourceType: string
+  count: number
+  savedPath: string | null
+  error?: boolean
+  message?: string
+}
+
+interface VerificationRequestPayload {
+  svg?: string
+}
+
+interface ShowPhotoPayload {
+  src?: string
+}
+
+interface JsSearchBookPayload {
+  keyword?: string
+  source?: string
+}
+
 export const windowApi = {
   minimize: async (): Promise<void> => {
     await getCurrentWindow().minimize()
@@ -39,17 +63,18 @@ export const windowApi = {
 
   cleanupWebviews: (): Promise<void> => invoke('cleanup_webviews'),
 
-  listenRssDownload: async (handler: (payload: any) => void): Promise<UnlistenFn> => {
-    return listen('rss-download', (event: any) => {
-      handler(event.payload)
+  listenRssDownload: async (handler: (payload: RssDownloadPayload) => void): Promise<UnlistenFn> => {
+    return listen('rss-download', (event: unknown) => {
+      const payload = (event as { payload: RssDownloadPayload }).payload
+      handler(payload)
     })
   },
 
   // ─── 验证码 ───
 
   listenVerificationCodeRequest: async (handler: (svg: string) => void): Promise<UnlistenFn> => {
-    return listen('verification-code-request', (event: any) => {
-      const payload = event.payload
+    return listen('verification-code-request', (event: unknown) => {
+      const payload = (event as { payload: string | VerificationRequestPayload }).payload
       const svg = typeof payload === 'string' ? payload : (payload?.svg || '')
       handler(svg)
     })
@@ -66,8 +91,8 @@ export const windowApi = {
   // ─── show-photo ───
 
   listenShowPhoto: async (handler: (src: string) => void): Promise<UnlistenFn> => {
-    return listen('show-photo', (event: any) => {
-      const payload = event.payload
+    return listen('show-photo', (event: unknown) => {
+      const payload = (event as { payload: string | ShowPhotoPayload }).payload
       const src = typeof payload === 'string' ? payload : (payload?.src || '')
       handler(src)
     })
@@ -90,8 +115,8 @@ export const windowApi = {
   // ─── js-search-book ───
 
   listenJsSearchBook: async (handler: (payload: { keyword: string; source: string }) => void): Promise<UnlistenFn> => {
-    return listen('js-search-book', (event: any) => {
-      const payload = event.payload || {}
+    return listen('js-search-book', (event: unknown) => {
+      const payload = (event as { payload: JsSearchBookPayload }).payload || {}
       handler({
         keyword: payload.keyword || '',
         source: payload.source || '',

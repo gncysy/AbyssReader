@@ -2,27 +2,32 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Instant;
 use tauri::WebviewWindowBuilder;
 
-const DEFAULT_UA: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
 const IDLE_TIMEOUT_SECS: u64 = 300;
 
 static PERSISTENT_WEBVIEW: OnceLock<Arc<Mutex<Option<tauri::WebviewWindow>>>> = OnceLock::new();
 static LAST_USED: OnceLock<Arc<Mutex<Instant>>> = OnceLock::new();
 
 fn get_last_used_slot() -> Arc<Mutex<Instant>> {
-    let slot = LAST_USED.get_or_init(|| Arc::new(Mutex::new(Instant::now())));
-    slot.clone()
+    LAST_USED.get_or_init(|| Arc::new(Mutex::new(Instant::now()))).clone()
 }
 
 fn touch_last_used() {
     let slot = get_last_used_slot();
-    let mut guard = slot.lock().unwrap();
+    // 使用裸 lock()（std::sync::Mutex 的 lock 返回 Result，但我们直接使用 unwrap_or_else）
+    let mut guard = match slot.lock() {
+        Ok(g) => g,
+        Err(poisoned) => poisoned.into_inner(),
+    };
     *guard = Instant::now();
 }
 
 pub fn cleanup_idle_webview() {
     let slot = get_last_used_slot();
     let last_used = {
-        let guard = slot.lock().unwrap();
+        let guard = match slot.lock() {
+            Ok(g) => g,
+            Err(poisoned) => poisoned.into_inner(),
+        };
         *guard
     };
     if last_used.elapsed().as_secs() > IDLE_TIMEOUT_SECS {
@@ -31,8 +36,7 @@ pub fn cleanup_idle_webview() {
 }
 
 pub fn get_persistent_slot() -> Arc<Mutex<Option<tauri::WebviewWindow>>> {
-    let slot = PERSISTENT_WEBVIEW.get_or_init(|| Arc::new(Mutex::new(None)));
-    slot.clone()
+    PERSISTENT_WEBVIEW.get_or_init(|| Arc::new(Mutex::new(None))).clone()
 }
 
 pub fn get_or_create_persistent_webview(
@@ -40,7 +44,10 @@ pub fn get_or_create_persistent_webview(
     initial_url: tauri::WebviewUrl,
 ) -> Result<tauri::WebviewWindow, String> {
     let slot = get_persistent_slot();
-    let mut guard = slot.lock().unwrap();
+    let mut guard = match slot.lock() {
+        Ok(g) => g,
+        Err(poisoned) => poisoned.into_inner(),
+    };
     if let Some(existing) = guard.as_ref() {
         touch_last_used();
         return Ok(existing.clone());
@@ -52,7 +59,7 @@ pub fn get_or_create_persistent_webview(
         .focused(false)
         .skip_taskbar(true)
         .title("")
-        .user_agent(DEFAULT_UA)
+        .user_agent(crate::utils::DEFAULT_UA)
         .build()
         .map_err(|e| e.to_string())?;
 
@@ -64,7 +71,10 @@ pub fn get_or_create_persistent_webview(
 
 pub fn close_persistent_webview() {
     let slot = get_persistent_slot();
-    let mut guard = slot.lock().unwrap();
+    let mut guard = match slot.lock() {
+        Ok(g) => g,
+        Err(poisoned) => poisoned.into_inner(),
+    };
     if let Some(window) = guard.take() {
         crate::js_runtime::ops::emit_log("info", "[webview-manager] 清理持久 WebView");
         let _ = window.close();

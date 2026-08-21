@@ -9,6 +9,15 @@ use tauri::Manager;
 use tauri::WebviewWindowBuilder;
 use tauri::WebviewUrl;
 
+const WEBVIEW_CLEANUP_INTERVAL_SECS: u64 = 30;
+const WINDOW_WIDTH: f64 = 1200.0;
+const WINDOW_HEIGHT: f64 = 800.0;
+const MIN_WINDOW_WIDTH: f64 = 800.0;
+const MIN_WINDOW_HEIGHT: f64 = 600.0;
+const WINDOW_BG_R: u8 = 26;
+const WINDOW_BG_G: u8 = 26;
+const WINDOW_BG_B: u8 = 26;
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -40,10 +49,9 @@ pub fn run() {
         ])
 
         .setup(|app| {
-            // 后台线程：每 30 秒检查一次空闲 WebView
             std::thread::spawn(|| {
                 loop {
-                    std::thread::sleep(std::time::Duration::from_secs(30));
+                    std::thread::sleep(std::time::Duration::from_secs(WEBVIEW_CLEANUP_INTERVAL_SECS));
                     crate::js_runtime::ops::cleanup_idle_webview();
                 }
             });
@@ -67,15 +75,14 @@ pub fn run() {
                 }
             }
 
-            // 修复：窗口初始隐藏，WebView 导航到 index.html 后显示
             let app_for_nav = app.handle().clone();
-            let window = WebviewWindowBuilder::new(app, "main", WebviewUrl::App("index.html".into()))
+            let window = match WebviewWindowBuilder::new(app, "main", WebviewUrl::App("index.html".into()))
                 .title("墨阅")
-                .inner_size(1200.0, 800.0)
-                .min_inner_size(800.0, 600.0)
+                .inner_size(WINDOW_WIDTH, WINDOW_HEIGHT)
+                .min_inner_size(MIN_WINDOW_WIDTH, MIN_WINDOW_HEIGHT)
                 .center()
                 .decorations(false)
-                .background_color(tauri::window::Color(26, 26, 26, 255))
+                .background_color(tauri::window::Color(WINDOW_BG_R, WINDOW_BG_G, WINDOW_BG_B, 255))
                 .visible(false)
                 .on_navigation(move |_url| {
                     if let Some(win) = app_for_nav.get_webview_window("main") {
@@ -84,7 +91,13 @@ pub fn run() {
                     true
                 })
                 .build()
-                .unwrap();
+            {
+                Ok(w) => w,
+                Err(e) => {
+                    eprintln!("主窗口创建失败: {}", e);
+                    return Ok(());
+                }
+            };
 
             crate::js_runtime::ops::set_main_window(window);
 

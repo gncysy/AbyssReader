@@ -17,8 +17,9 @@ function indexOutsideString(str: string, search: string, fromIndex: number): num
       const quote = ch
       i++
       while (i < str.length) {
-        if (str[i] === '\\') { i += 2; continue }
-        if (str[i] === quote) { i++; break }
+        const c = str[i]
+        if (c === '\\') { i += 2; continue }
+        if (c === quote) { i++; break }
         i++
       }
       continue
@@ -29,11 +30,13 @@ function indexOutsideString(str: string, search: string, fromIndex: number): num
   return -1
 }
 
-function findFirstMarker(remaining: string): {
+interface Marker {
   index: number
   type: 'tag' | 'inline'
   prefix: string
-} | null {
+}
+
+function findFirstMarker(remaining: string): Marker | null {
   const candidates: { idx: number; type: 'tag' | 'inline' }[] = []
 
   const tagIdx = indexOutsideString(remaining, '<js>', 0)
@@ -48,6 +51,7 @@ function findFirstMarker(remaining: string): {
 
   candidates.sort((a, b) => a.idx - b.idx)
   const best = candidates[0]
+  if (best === undefined) return null
   const prefix = remaining.substring(0, best.idx).trim()
   return { index: best.idx, type: best.type, prefix }
 }
@@ -85,8 +89,9 @@ export function parseRuleSegments(rule: string): RuleSegment[] {
           const quote = ch
           pos++
           while (pos < remaining.length) {
-            if (remaining[pos] === '\\') { pos += 2; continue }
-            if (remaining[pos] === quote) { pos++; break }
+            const c = remaining[pos]
+            if (c === '\\') { pos += 2; continue }
+            if (c === quote) { pos++; break }
             pos++
           }
           continue
@@ -114,14 +119,10 @@ export function parseRuleSegments(rule: string): RuleSegment[] {
     }
 
     // inline @js: / @javascript:
-    // DIFF-1 修复：@js: 后跟到字符串结束（对齐 Legado）
     const isJavascript = remaining.startsWith('@javascript:', marker.index)
     const codeStart = marker.index + (isJavascript ? 12 : 4)
-
     const jsCode = remaining.substring(codeStart).trim()
-
     if (jsCode) segments.push({ type: 'js', code: jsCode })
-
     remaining = ''
   }
 

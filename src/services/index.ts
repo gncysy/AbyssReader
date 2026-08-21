@@ -20,8 +20,8 @@ initDomProvider()
 // ─── 注入 Tauri 适配器 ───
 getGlobalHttpClient().setAdapter(tauriHttpAdapter)
 
-// ─── 注入 WebJsExecutor（对齐 Legado BackstageWebView） ───
-setWebJsExecutor(async (html, jsCode, baseUrl) => {
+// ─── 注入 WebJsExecutor ───
+setWebJsExecutor(async (_html, jsCode, baseUrl) => {
   try {
     const result: string = await invoke('fetch_url', {
       url: baseUrl || 'about:blank',
@@ -43,28 +43,21 @@ setWebJsExecutor(async (html, jsCode, baseUrl) => {
 
 // ─── 注入 HTTP 日志拦截器 ───
 const http = getGlobalHttpClient()
-const interceptor = (http as any).interceptor
-if (interceptor) {
-  interceptor.useRequest((config: any) => {
-    logInfo('network', 'frontend', `→ ${config.method || 'GET'} ${config.url}`)
-    return config
-  })
-  interceptor.useResponse((response: any) => {
-    const dataLen = typeof response.data === 'string' ? response.data.length : JSON.stringify(response.data).length
-    logInfo('network', 'frontend', `← ${response.status} ${response.url} (${response.duration}ms, ${formatBytes(dataLen)})`)
-    return response
-  })
-  interceptor.useError((error: any) => {
-    logError('network', 'frontend', `✗ ${error?.message || error}`)
-    throw error
-  })
-}
-
-function formatBytes(bytes: number): string {
-  if (bytes < 1024) return bytes + 'B'
-  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + 'KB'
-  return (bytes / (1024 * 1024)).toFixed(1) + 'MB'
-}
+const interceptor = http.getInterceptor()
+interceptor.useRequest((config) => {
+  logInfo('network', 'frontend', `→ ${config.method || 'GET'} ${config.url}`)
+  return config
+})
+interceptor.useResponse((response) => {
+  const dataLen = typeof response.data === 'string' ? response.data.length : 0
+  logInfo('network', 'frontend', `← ${response.status} ${response.url} (${response.duration}ms, ${dataLen}B)`)
+  return response
+})
+interceptor.useError((error) => {
+  const msg = error instanceof Error ? error.message : String(error)
+  logError('network', 'frontend', `✗ ${msg}`)
+  throw error
+})
 
 // ─── 日志桥接（幂等初始化） ───
 let logBridgeInitialized = false
@@ -75,13 +68,13 @@ setLogBridge({
     if (logBridgeInitialized) return
     logBridgeInitialized = true
     try {
-      logUnlisten = await listen('global-log', async (event: any) => {
-        const payload = event.payload as { level: string; module: string; source: string; message: string; tag?: string }
+      logUnlisten = await listen('global-log', async (event: unknown) => {
+        const payload = (event as { payload: { level: string; module: string; source: string; message: string; tag?: string } }).payload
         const { emitLog } = await import('@engine/log/index.js')
         emitLog(
-          (payload.level || 'info') as any,
-          (payload.module || 'unknown') as any,
-          (payload.source || 'rust') as any,
+          (payload.level || 'info') as Parameters<typeof emitLog>[0],
+          (payload.module || 'unknown') as Parameters<typeof emitLog>[1],
+          (payload.source || 'rust') as Parameters<typeof emitLog>[2],
           payload.message || '',
           payload.tag,
         )
@@ -96,9 +89,10 @@ engineInitLogBridge().catch(() => {})
 
 // ─── 注入登录执行器 ───
 const loginExecutor: LoginExecutor = {
-  async executeLogin(source: any): Promise<LoginResult> {
+  async executeLogin(source: unknown): Promise<LoginResult> {
     try {
-      const loginUrl = source?.loginUrl || ''
+      const src = source as Record<string, unknown>
+      const loginUrl = typeof src.loginUrl === 'string' ? src.loginUrl : ''
       if (!loginUrl) {
         return { success: false, error: '书源未配置 loginUrl' }
       }
@@ -111,25 +105,28 @@ const loginExecutor: LoginExecutor = {
       const context = {
         source,
         result: '',
-        baseUrl: source?.bookSourceUrl || '',
+        baseUrl: typeof src.bookSourceUrl === 'string' ? src.bookSourceUrl : '',
       }
-      const response: any = await invoke('execute_js_rule', {
+      const response = await invoke('execute_js_rule', {
         code,
         context,
         timeoutMs: 30000,
       })
-      if (response?.success) {
+      const resp = response as Record<string, unknown>
+      if (resp.success === true) {
         return { success: true }
       }
-      return { success: false, error: response?.error || '未知错误' }
-    } catch (e: any) {
-      return { success: false, error: e?.message || String(e) }
+      return { success: false, error: typeof resp.error === 'string' ? resp.error : '未知错误' }
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e)
+      return { success: false, error: msg }
     }
   },
 
-  async checkLoginStatus(source: any): Promise<boolean> {
+  async checkLoginStatus(source: unknown): Promise<boolean> {
     try {
-      const checkJs = source?.loginCheckJs
+      const src = source as Record<string, unknown>
+      const checkJs = typeof src.loginCheckJs === 'string' ? src.loginCheckJs : ''
       if (!checkJs) return false
       const code = checkJs
         .replace(/^@js:\s*/, '')
@@ -139,14 +136,15 @@ const loginExecutor: LoginExecutor = {
       const context = {
         source,
         result: '',
-        baseUrl: source?.bookSourceUrl || '',
+        baseUrl: typeof src.bookSourceUrl === 'string' ? src.bookSourceUrl : '',
       }
-      const response: any = await invoke('execute_js_rule', {
+      const response = await invoke('execute_js_rule', {
         code,
         context,
         timeoutMs: 10000,
       })
-      return response?.success && response?.result === 'true'
+      const resp = response as Record<string, unknown>
+      return resp.success === true && resp.result === 'true'
     } catch {
       return false
     }
@@ -187,3 +185,12 @@ export {
   fullSync,
 } from './webdav.js'
 export { search, batchSearch } from './search.js'
+
+// ─── 清理函数 ───
+export function cleanupServices(): void {
+  if (logUnlisten) {
+    logUnlisten()
+    logUnlisten = null
+  }
+  logBridgeInitialized = false
+}

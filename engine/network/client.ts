@@ -8,14 +8,18 @@ export interface HttpClientAdapter {
   request(config: RequestConfig): Promise<ResponseData>
 }
 
-export class RequestInterceptor {
-  private requestFns: Array<(config: RequestConfig) => RequestConfig | Promise<RequestConfig>> = []
-  private responseFns: Array<(response: ResponseData) => ResponseData | Promise<ResponseData>> = []
-  private errorFns: Array<(error: any) => any> = []
+type RequestInterceptorFn = (config: RequestConfig) => RequestConfig | Promise<RequestConfig>
+type ResponseInterceptorFn = (response: ResponseData) => ResponseData | Promise<ResponseData>
+type ErrorInterceptorFn = (error: unknown) => unknown
 
-  useRequest(fn: (config: RequestConfig) => RequestConfig | Promise<RequestConfig>): void { this.requestFns.push(fn) }
-  useResponse(fn: (response: ResponseData) => ResponseData | Promise<ResponseData>): void { this.responseFns.push(fn) }
-  useError(fn: (error: any) => any): void { this.errorFns.push(fn) }
+export class RequestInterceptor {
+  private requestFns: RequestInterceptorFn[] = []
+  private responseFns: ResponseInterceptorFn[] = []
+  private errorFns: ErrorInterceptorFn[] = []
+
+  useRequest(fn: RequestInterceptorFn): void { this.requestFns.push(fn) }
+  useResponse(fn: ResponseInterceptorFn): void { this.responseFns.push(fn) }
+  useError(fn: ErrorInterceptorFn): void { this.errorFns.push(fn) }
 
   async interceptRequest(config: RequestConfig): Promise<RequestConfig> {
     let result = config
@@ -41,7 +45,7 @@ export class RequestInterceptor {
     return result
   }
 
-  async interceptError(error: any): Promise<any> {
+  async interceptError(error: unknown): Promise<unknown> {
     let result = error
     for (const fn of this.errorFns) {
       try {
@@ -58,7 +62,6 @@ export class RequestInterceptor {
 
 export class HttpClient {
   private defaultHeaders: Record<string, string>
-  private defaultTimeout: number
   private interceptor: RequestInterceptor
   private adapter: HttpClientAdapter | null = null
   private cookies: Record<string, string> = {}
@@ -74,12 +77,13 @@ export class HttpClient {
       'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
       'Accept-Language': 'zh-CN,zh;q=0.9',
     }
-    this.defaultTimeout = options.defaultTimeout || 30000
     this.interceptor = options.interceptor || new RequestInterceptor()
     this.adapter = options.adapter || null
   }
 
   setAdapter(adapter: HttpClientAdapter): void { this.adapter = adapter }
+
+  getInterceptor(): RequestInterceptor { return this.interceptor }
 
   async request(config: RequestConfig): Promise<ResponseData> {
     if (!this.adapter) throw new Error('HttpClient: 未设置适配器，请在 services/ 层调用 setAdapter()')
@@ -101,17 +105,24 @@ export class HttpClient {
         }
       }
       return await this.interceptor.interceptResponse(result)
-    } catch (error: any) {
-      return await this.interceptor.interceptError(error)
+    } catch (error: unknown) {
+      // 修复：错误拦截器的返回值不再强制转换为 ResponseData
+      // 而是将处理后的错误重新抛出
+      const handledError = await this.interceptor.interceptError(error)
+      throw handledError
     }
   }
 
   async get(url: string, headers?: Record<string, string>): Promise<ResponseData> {
-    return this.request({ url, method: 'GET', headers })
+    const config: RequestConfig = { url, method: 'GET' }
+    if (headers !== undefined) config.headers = headers
+    return this.request(config)
   }
 
-  async post(url: string, body: any, headers?: Record<string, string>): Promise<ResponseData> {
-    return this.request({ url, method: 'POST', body, headers })
+  async post(url: string, body: unknown, headers?: Record<string, string>): Promise<ResponseData> {
+    const config: RequestConfig = { url, method: 'POST', body }
+    if (headers !== undefined) config.headers = headers
+    return this.request(config)
   }
 
   setCookie(url: string, cookieStr: string): void {

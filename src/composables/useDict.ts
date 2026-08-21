@@ -9,6 +9,18 @@ import type { DictRule } from '@/types/dict.js'
 
 const DICT_QUERY_TIMEOUT = 20
 
+function isDictRuleArray(value: unknown): value is DictRule[] {
+  return Array.isArray(value)
+}
+
+function isDictRule(value: unknown): value is DictRule {
+  if (value === null || typeof value !== 'object') return false
+  const obj = value as Record<string, unknown>
+  return typeof obj.name === 'string' &&
+    typeof obj.urlRule === 'string' &&
+    typeof obj.showRule === 'string'
+}
+
 export function useDict() {
   const dictVisible = ref(false)
   const dictRules = ref<DictRule[]>([])
@@ -21,8 +33,9 @@ export function useDict() {
 
   async function loadDictRules(): Promise<void> {
     try {
-      const rules = await store.get('dictRule')
-      dictRules.value = (Array.isArray(rules) ? rules : []).filter((r: any) => r.enabled)
+      const raw = await store.get('dictRule')
+      const rules = isDictRuleArray(raw) ? raw : []
+      dictRules.value = rules.filter((r): r is DictRule => isDictRule(r) && r.enabled)
     } catch {
       dictRules.value = []
     }
@@ -48,8 +61,9 @@ export function useDict() {
         next.add(i)
         dictCachedTabs.value = next
       }
-    } catch (e: any) {
-      dictContents.value[i] = '<p>查询失败: ' + (e?.message || String(e)) + '</p>'
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e)
+      dictContents.value[i] = '<p>查询失败: ' + msg + '</p>'
       // 错误结果不缓存
       const next = new Set(dictCachedTabs.value)
       next.delete(i)

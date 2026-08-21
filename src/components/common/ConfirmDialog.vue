@@ -2,9 +2,9 @@
   <n-modal
     :show="visible"
     preset="dialog"
-    :title="title"
-    :positive-text="confirmText"
-    :negative-text="cancelText"
+    :title="title || ''"
+    :positive-text="confirmText || ''"
+    :negative-text="cancelText || ''"
     :bordered="false"
     @update:show="(val: boolean) => $emit('update:visible', val)"
     @positive-click="handleConfirm"
@@ -20,7 +20,7 @@
 <script setup lang="ts">
 import { NModal } from 'naive-ui'
 
-withDefaults(defineProps<{
+const props = withDefaults(defineProps<{
   visible: boolean
   title?: string
   content?: string

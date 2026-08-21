@@ -7,9 +7,136 @@ globalThis.__dictMemoryCache = globalThis.__dictMemoryCache || {};
 
 globalThis.window = globalThis.window || globalThis;
 
+// 添加通用迭代器辅助函数
+function makeIterable(obj) {
+    obj[Symbol.iterator] = function() {
+        var self = this;
+        var i = 0;
+        return {
+            next: function() {
+                if (i < self.size()) {
+                    return { value: self.get(i++), done: false };
+                }
+                return { done: true };
+            }
+        };
+    };
+    return obj;
+}
+
+// 修复：Deno.core.encode 返回 JSON 对象，改用 op_java_str_to_bytes
+// UTF-8 编解码辅助
+function utf8Encode(str) {
+    return Deno.core.ops.op_java_str_to_bytes(String(str), 'UTF-8');
+}
+
+function utf8Decode(bytes) {
+    var arr;
+    if (bytes instanceof Uint8Array) {
+        arr = bytes;
+    } else if (Array.isArray(bytes)) {
+        arr = new Uint8Array(bytes);
+    } else if (bytes && typeof bytes === 'object') {
+        // JSON 对象（Deno.core.encode 的返回值）
+        var temp = [];
+        for (var i = 0; i < Object.keys(bytes).length; i++) {
+            var val = bytes[i];
+            if (typeof val === 'number') temp.push(val);
+        }
+        arr = new Uint8Array(temp);
+    } else {
+        arr = new Uint8Array(0);
+    }
+    return Deno.core.ops.op_java_bytes_to_str(arr, 'UTF-8');
+}
+
+// ISO-8859-1 编解码
+function latin1Encode(str) {
+    var s = String(str);
+    var bytes = new Uint8Array(s.length);
+    for (var i = 0; i < s.length; i++) {
+        bytes[i] = s.charCodeAt(i) & 0xFF;
+    }
+    return bytes;
+}
+
+function latin1Decode(bytes) {
+    var result = "";
+    for (var i = 0; i < bytes.length; i++) {
+        result += String.fromCharCode(bytes[i]);
+    }
+    return result;
+}
+
+// 根据 charset 选择编码
+function encodeWithCharset(str, charset) {
+    var enc = (charset || 'UTF-8').toLowerCase();
+    if (enc === 'iso-8859-1' || enc === 'latin1' || enc === 'latin-1') {
+        return latin1Encode(str);
+    }
+    return utf8Encode(str);
+}
+
+function decodeWithCharset(bytes, charset) {
+    var enc = (charset || 'UTF-8').toLowerCase();
+    if (enc === 'iso-8859-1' || enc === 'latin1' || enc === 'latin-1') {
+        return latin1Decode(bytes);
+    }
+    return utf8Decode(bytes);
+}
+
+// 安全的分块 bytesToBase64（避免栈溢出）
+function bytesToBase64Chunked(bytes) {
+    var binary = '';
+    var chunkSize = 8192;
+    for (var i = 0; i < bytes.length; i += chunkSize) {
+        var chunk = bytes.slice(i, i + chunkSize);
+        binary += String.fromCharCode.apply(null, chunk);
+    }
+    return Deno.core.ops.op_java_base64_encode(binary);
+}
+
+// 将任意值转换为 Uint8Array（兼容 Uint8Array、普通数组、JSON 对象、字符串）
+function toUint8Array(data) {
+    if (data === null || data === undefined) return new Uint8Array(0);
+    if (data instanceof Uint8Array) return data;
+    if (Array.isArray(data)) return new Uint8Array(data);
+    if (data && typeof data === 'object') {
+        // JSON 对象（如 {"0":116,"1":101}）
+        var temp = [];
+        for (var i = 0; i < Object.keys(data).length; i++) {
+            var val = data[i];
+            if (typeof val === 'number') temp.push(val);
+            else if (typeof val === 'string') {
+                var num = parseInt(val, 10);
+                if (!isNaN(num)) temp.push(num);
+            }
+        }
+        return new Uint8Array(temp);
+    }
+    if (typeof data === 'string') {
+        return Deno.core.ops.op_java_str_to_bytes(data, 'UTF-8');
+    }
+    return new Uint8Array(0);
+}
+
 Object.assign(globalThis.java, {
     put: function(key, value) { return Deno.core.ops.op_java_put("default", String(key), String(value)); },
     get: function(key) { return Deno.core.ops.op_java_get("default", String(key)); },
+
+    // getString 方法
+    getString: function(key) {
+        var srcKey = (globalThis.__sandbox_data && globalThis.__sandbox_data.source && globalThis.__sandbox_data.source.bookSourceUrl) || "default";
+        return Deno.core.ops.op_java_get(srcKey, String(key));
+    },
+    setString: function(key, value) {
+        var srcKey = (globalThis.__sandbox_data && globalThis.__sandbox_data.source && globalThis.__sandbox_data.source.bookSourceUrl) || "default";
+        return Deno.core.ops.op_java_put(srcKey, String(key), String(value));
+    },
+    removeString: function(key) {
+        var srcKey = (globalThis.__sandbox_data && globalThis.__sandbox_data.source && globalThis.__sandbox_data.source.bookSourceUrl) || "default";
+        Deno.core.ops.op_java_put(srcKey, String(key), "");
+    },
 
     encodeURI: function(str, enc) {
         try {
@@ -23,17 +150,13 @@ Object.assign(globalThis.java, {
     base64Decode: function(str) { return Deno.core.ops.op_java_base64_decode(String(str)); },
     base64DecodeToByteArray: function(str) {
         if (!str) return null;
-        var d = Deno.core.ops.op_java_base64_decode(String(str));
-        var len = d.length;
-        var bytes = new Uint8Array(len);
-        for (var i = 0; i < len; i++) { bytes[i] = d.charCodeAt(i) & 0xff; }
-        return bytes;
+        return Deno.core.ops.op_java_base64_decode_bytes(String(str));
     },
 
     hexEncodeToString: function(str) {
         if (!str) return "";
         var s = String(str);
-        var bytes = new TextEncoder().encode(s);
+        var bytes = utf8Encode(s);
         var result = "";
         for (var i = 0; i < bytes.length; i++) {
             result += bytes[i].toString(16).padStart(2, '0');
@@ -46,7 +169,7 @@ Object.assign(globalThis.java, {
         for (var i = 0; i < hex.length; i += 2) {
             bytes[i / 2] = parseInt(hex.substring(i, i + 2), 16);
         }
-        return new TextDecoder().decode(bytes);
+        return utf8Decode(bytes);
     },
 
     md5Encode: function(str) { return Deno.core.ops.op_java_md5_encode(String(str)); },
@@ -64,16 +187,30 @@ Object.assign(globalThis.java, {
     randomUUID: function() { return Deno.core.ops.op_java_random_uuid(); },
 
     strToBytes: function(str, charset) {
-        var s = String(str);
-        return new TextEncoder().encode(s);
+        return Deno.core.ops.op_java_str_to_bytes(String(str), charset || 'UTF-8');
     },
     bytesToStr: function(bytes, charset) {
         if (!bytes || bytes.length === 0) return "";
-        return new TextDecoder().decode(bytes);
+        var arr;
+        if (bytes instanceof Uint8Array) {
+            arr = bytes;
+        } else if (Array.isArray(bytes)) {
+            arr = new Uint8Array(bytes);
+        } else if (bytes && typeof bytes === 'object') {
+            var temp = [];
+            for (var i = 0; i < Object.keys(bytes).length; i++) {
+                var val = bytes[i];
+                if (typeof val === 'number') temp.push(val);
+            }
+            arr = new Uint8Array(temp);
+        } else {
+            arr = new Uint8Array(0);
+        }
+        return Deno.core.ops.op_java_bytes_to_str(arr, charset || 'UTF-8');
     },
     getByteArray: function(data) {
         if (typeof data === "string") {
-            return new TextEncoder().encode(String(data));
+            return utf8Encode(String(data));
         }
         return new Uint8Array();
     },
@@ -294,35 +431,66 @@ Object.assign(globalThis.java, {
 
     createSymmetricCrypto: function(algorithm, key, iv) {
         var algo = String(algorithm).toUpperCase();
-        var isEcb = algo.indexOf("ECB") !== -1;
-        var isCbc = algo.indexOf("CBC") !== -1;
         var isDes = algo.indexOf("DES") !== -1;
         var isAes = algo.indexOf("AES") !== -1;
 
         if (isAes || isDes) {
-            var keyWithIv = key + (iv ? "::" + iv : "");
-            var decodeFn = isDes ? Deno.core.ops.op_java_des_base64_decode : Deno.core.ops.op_java_aes_base64_decode;
-            var encodeFn = isDes ? Deno.core.ops.op_java_des_base64_encode : Deno.core.ops.op_java_aes_base64_encode;
+            var keyArr = toUint8Array(key);
+            var ivArr = iv ? toUint8Array(iv) : new Uint8Array(0);
+            var decryptFn = isDes ? Deno.core.ops.op_java_des_decrypt_bytes : Deno.core.ops.op_java_aes_decrypt_bytes;
+            var encryptFn = isDes ? Deno.core.ops.op_java_des_encrypt_bytes : Deno.core.ops.op_java_aes_encrypt_bytes;
 
             return {
+                decrypt: function(data) {
+                    try {
+                        var dataBytes = toUint8Array(data);
+                        return decryptFn(dataBytes, keyArr, ivArr);
+                    } catch(e) { return null; }
+                },
+                encrypt: function(data) {
+                    try {
+                        var dataBytes = toUint8Array(data);
+                        return encryptFn(dataBytes, keyArr, ivArr);
+                    } catch(e) { return null; }
+                },
                 decryptStr: function(data) {
-                    try { return decodeFn(String(data), keyWithIv); } catch(e) { return data; }
+                    try {
+                        var dataBytes = toUint8Array(data);
+                        var decrypted = decryptFn(dataBytes, keyArr, ivArr);
+                        return Deno.core.ops.op_java_bytes_to_str(toUint8Array(decrypted), 'UTF-8');
+                    } catch(e) { return ""; }
                 },
                 encryptStr: function(data) {
-                    try { return encodeFn(String(data), keyWithIv); } catch(e) { return data; }
+                    try {
+                        var dataBytes = toUint8Array(data);
+                        var encrypted = encryptFn(dataBytes, keyArr, ivArr);
+                        return Deno.core.ops.op_java_bytes_to_str(toUint8Array(encrypted), 'UTF-8');
+                    } catch(e) { return ""; }
                 },
-                encryptBase64: function(data) { return this.encryptStr(data); },
-                decrypt: function(data) { return this.decryptStr(data); },
-                encrypt: function(data) { return this.encryptStr(data); }
+                encryptBase64: function(data) {
+                    try {
+                        var dataBytes = toUint8Array(data);
+                        var encrypted = encryptFn(dataBytes, keyArr, ivArr);
+                        return bytesToBase64Chunked(encrypted);
+                    } catch(e) { return ""; }
+                },
+                decryptBase64: function(data) {
+                    try {
+                        var decoded = Deno.core.ops.op_java_base64_decode_bytes(String(data));
+                        var decrypted = decryptFn(toUint8Array(decoded), keyArr, ivArr);
+                        return Deno.core.ops.op_java_bytes_to_str(toUint8Array(decrypted), 'UTF-8');
+                    } catch(e) { return ""; }
+                }
             };
         }
 
         return {
-            decryptStr: function(d){ return d; },
-            encryptStr: function(d){ return d; },
-            encryptBase64: function(d){ return d; },
-            decrypt: function(d){ return d; },
-            encrypt: function(d){ return d; }
+            decrypt: function(d){ return null; },
+            encrypt: function(d){ return null; },
+            decryptStr: function(d){ return ""; },
+            encryptStr: function(d){ return ""; },
+            encryptBase64: function(d){ return ""; },
+            decryptBase64: function(d){ return ""; }
         };
     },
 
@@ -340,38 +508,36 @@ Object.assign(globalThis.java, {
             var data = globalThis.__sandbox_data ? (globalThis.__sandbox_data.result || '') : '';
             var result = Deno.core.ops.op_jsoup_each_text(data, rule || '');
             var texts = JSON.parse(result);
-            return {
+            return makeIterable({
                 size: function() { return texts.length; },
                 get: function(i) { return texts[i] || ''; },
                 toArray: function() { return texts; }
-            };
+            });
         } catch(e) {
-            return { size: function() { return 0; }, get: function() { return ''; }, toArray: function() { return []; } };
+            return makeIterable({ size: function() { return 0; }, get: function() { return ''; }, toArray: function() { return []; } });
         }
     },
 
-    // 新增：getElements — 对齐 Legado AnalyzeRule.getElements
-    // 返回 List<Any>，在沙箱中降级为字符串列表
     getElements: function(rule, isUrl) {
         try {
             var data = globalThis.__sandbox_data ? (globalThis.__sandbox_data.result || '') : '';
             var result = Deno.core.ops.op_jsoup_select(data, rule || '');
             var elements = JSON.parse(result);
-            return {
+            return makeIterable({
                 size: function() { return elements.length; },
                 get: function(i) { return elements[i] || ''; },
                 toArray: function() { return elements; },
                 first: function() { return elements.length > 0 ? elements[0] : ''; },
                 last: function() { return elements.length > 0 ? elements[elements.length - 1] : ''; }
-            };
+            });
         } catch(e) {
-            return {
+            return makeIterable({
                 size: function() { return 0; },
                 get: function() { return ''; },
                 toArray: function() { return []; },
                 first: function() { return ''; },
                 last: function() { return ''; }
-            };
+            });
         }
     },
 

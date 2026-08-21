@@ -5,6 +5,8 @@ use serde_json::Value;
 use std::time::Instant;
 use tauri::Emitter;
 
+const TEST_CONCURRENCY: usize = 5;
+
 #[tauri::command]
 pub async fn get_book_sources() -> Result<Value> {
     Ok(serde_json::Value::Array(storage::load_book_sources()?))
@@ -63,7 +65,6 @@ fn sources_equal(a: &Value, b: &Value) -> bool {
             for (key, av) in ao {
                 match bo.get(key) {
                     Some(bv) => {
-                        // LOW-1 修复：使用 serde_json 的 Value 相等比较
                         if !json_value_equal(av, bv) {
                             return false;
                         }
@@ -78,7 +79,6 @@ fn sources_equal(a: &Value, b: &Value) -> bool {
 }
 
 fn json_value_equal(a: &Value, b: &Value) -> bool {
-    // 将 null 和空字符串视为相等（兼容旧数据）
     if a == b {
         return true;
     }
@@ -193,8 +193,13 @@ pub async fn test_book_source(source_index: usize) -> Result<String> {
 #[tauri::command]
 pub async fn test_all_sources(app: tauri::AppHandle) -> Result<Vec<Value>> {
     let sources = storage::load_book_sources()?;
-    let mut results = Vec::new();
+    let mut results = Vec::with_capacity(sources.len());
     let mut sources_to_update = sources.clone();
+
+    use std::sync::Arc;
+    // 修复：使用 tokio::sync::Semaphore 正确限流，permit 在任务完成前不释放
+    let semaphore = Arc::new(tokio::sync::Semaphore::new(TEST_CONCURRENCY));
+    let mut tasks = Vec::with_capacity(sources.len());
 
     for (i, source) in sources.iter().enumerate() {
         let test_url = source
@@ -202,46 +207,66 @@ pub async fn test_all_sources(app: tauri::AppHandle) -> Result<Vec<Value>> {
             .or_else(|| source.get("url"))
             .or_else(|| source.get("searchUrl"))
             .and_then(|v| v.as_str())
-            .unwrap_or("");
+            .unwrap_or("")
+            .to_string();
 
-        let start = Instant::now();
-        let (status, error, time_ms, size_kb): (String, String, u128, usize) =
-            if test_url.is_empty() {
-                ("fail".into(), "URL 无效".into(), 0, 0)
-            } else {
-                match execute_http_request(test_url, "GET", None, None, None, 10).await {
-                    Ok(html) => {
-                        let kb = (html.len() as f64 / 1024.0).round() as usize;
-                        ("ok".into(), String::new(), start.elapsed().as_millis(), kb)
-                    }
-                    Err(e) => {
-                        let err_str = e.to_string();
-                        if let Some(obj) = sources_to_update[i].as_object_mut() {
-                            let comment = obj.get("bookSourceComment").and_then(|v| v.as_str()).unwrap_or("");
-                            let error_line = format!("// Error: {}", err_str);
-                            let new_comment = if comment.is_empty() {
-                                error_line
-                            } else {
-                                format!("{}\n\n{}", error_line, comment)
-                            };
-                            obj.insert("bookSourceComment".into(), Value::String(new_comment));
+        let app = app.clone();
+        let sem = semaphore.clone();
+        let source_clone = source.clone();
+
+        tasks.push(tokio::spawn(async move {
+            // 修复：permit 在整个任务执行期间持有，真正限制并发
+            let _permit = sem.acquire().await;
+
+            let start = Instant::now();
+            let (status, error, time_ms, size_kb): (String, String, u128, usize) =
+                if test_url.is_empty() {
+                    ("fail".into(), "URL 无效".into(), 0, 0)
+                } else {
+                    match execute_http_request(&test_url, "GET", None, None, None, 10).await {
+                        Ok(html) => {
+                            let kb = (html.len() as f64 / 1024.0).round() as usize;
+                            ("ok".into(), String::new(), start.elapsed().as_millis(), kb)
                         }
-                        ("fail".into(), err_str, 0, 0)
+                        Err(e) => {
+                            ("fail".into(), e.to_string(), 0, 0)
+                        }
                     }
-                }
-            };
+                };
 
-        let result = serde_json::json!({
-            "index": i,
-            "name": source.get("bookSourceName").or_else(|| source.get("name")).and_then(|v| v.as_str()).unwrap_or(""),
-            "status": status,
-            "time_ms": time_ms,
-            "size_kb": size_kb,
-            "error": error
-        });
-        let _ = app.emit("source-test-result", &result);
-        results.push(result);
+            let result = serde_json::json!({
+                "index": i,
+                "name": source_clone.get("bookSourceName").or_else(|| source_clone.get("name")).and_then(|v| v.as_str()).unwrap_or(""),
+                "status": status,
+                "time_ms": time_ms,
+                "size_kb": size_kb,
+                "error": error
+            });
+            let _ = app.emit("source-test-result", &result);
+            (i, result, status)
+        }));
     }
+
+    for task in tasks {
+        if let Ok((i, result, status)) = task.await {
+            if status == "fail" {
+                if let Some(obj) = sources_to_update[i].as_object_mut() {
+                    let err_str = result.get("error").and_then(|v| v.as_str()).unwrap_or("");
+                    let comment = obj.get("bookSourceComment").and_then(|v| v.as_str()).unwrap_or("");
+                    let error_line = format!("// Error: {}", err_str);
+                    let new_comment = if comment.is_empty() {
+                        error_line
+                    } else {
+                        format!("{}\n\n{}", error_line, comment)
+                    };
+                    obj.insert("bookSourceComment".into(), Value::String(new_comment));
+                }
+            }
+            results.push(result);
+        }
+    }
+
+    results.sort_by_key(|r| r.get("index").and_then(|v| v.as_u64()).unwrap_or(0));
 
     storage::save_book_sources(&sources_to_update).ok();
 

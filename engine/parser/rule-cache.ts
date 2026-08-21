@@ -17,7 +17,8 @@ function getContentKey(content: unknown): string {
   if (typeof content === 'object') {
     const obj = content as Record<string, unknown>
     if (obj.tag !== undefined && typeof obj.querySelectorAll === 'function') {
-      return 'dom:' + (obj.outerHTML ? obj.outerHTML.substring(0, 300) : obj.tag)
+      const outerHTML = typeof obj.outerHTML === 'string' ? obj.outerHTML : (typeof obj.tag === 'string' ? obj.tag : 'dom')
+      return 'dom:' + outerHTML.substring(0, 300)
     }
     try {
       const jsonStr = JSON.stringify(content)
@@ -39,38 +40,44 @@ export class RuleCache {
 
   getCSSAnalyzer(content: unknown): AnalyzeByCSS {
     const k = getContentKey(content)
-    if (!this.cssCache.has(k)) {
-      if (this.cssCache.size >= CACHE_MAX_SIZE) {
-        const firstKey = this.cssCache.keys().next().value
-        if (firstKey !== undefined) this.cssCache.delete(firstKey)
-      }
-      this.cssCache.set(k, new AnalyzeByCSS(content))
+    const cached = this.cssCache.get(k)
+    if (cached) return cached
+
+    if (this.cssCache.size >= CACHE_MAX_SIZE) {
+      const firstKey = this.cssCache.keys().next().value
+      if (firstKey !== undefined) this.cssCache.delete(firstKey)
     }
-    return this.cssCache.get(k)!
+    const analyzer = new AnalyzeByCSS(content)
+    this.cssCache.set(k, analyzer)
+    return analyzer
   }
 
   getXPathAnalyzer(content: unknown): AnalyzeByXPath {
     const k = getContentKey(content)
-    if (!this.xpathCache.has(k)) {
-      if (this.xpathCache.size >= CACHE_MAX_SIZE) {
-        const firstKey = this.xpathCache.keys().next().value
-        if (firstKey !== undefined) this.xpathCache.delete(firstKey)
-      }
-      this.xpathCache.set(k, new AnalyzeByXPath(content))
+    const cached = this.xpathCache.get(k)
+    if (cached) return cached
+
+    if (this.xpathCache.size >= CACHE_MAX_SIZE) {
+      const firstKey = this.xpathCache.keys().next().value
+      if (firstKey !== undefined) this.xpathCache.delete(firstKey)
     }
-    return this.xpathCache.get(k)!
+    const analyzer = new AnalyzeByXPath(content)
+    this.xpathCache.set(k, analyzer)
+    return analyzer
   }
 
   getJSONPathAnalyzer(content: unknown): AnalyzeByJSONPath {
     const k = getContentKey(content)
-    if (!this.jsonpathCache.has(k)) {
-      if (this.jsonpathCache.size >= CACHE_MAX_SIZE) {
-        const firstKey = this.jsonpathCache.keys().next().value
-        if (firstKey !== undefined) this.jsonpathCache.delete(firstKey)
-      }
-      this.jsonpathCache.set(k, new AnalyzeByJSONPath(content))
+    const cached = this.jsonpathCache.get(k)
+    if (cached) return cached
+
+    if (this.jsonpathCache.size >= CACHE_MAX_SIZE) {
+      const firstKey = this.jsonpathCache.keys().next().value
+      if (firstKey !== undefined) this.jsonpathCache.delete(firstKey)
     }
-    return this.jsonpathCache.get(k)!
+    const analyzer = new AnalyzeByJSONPath(content)
+    this.jsonpathCache.set(k, analyzer)
+    return analyzer
   }
 
   getRuleCache(): Map<string, SourceRule[]> {

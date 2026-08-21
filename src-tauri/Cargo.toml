@@ -47,12 +47,6 @@ cbc = "0.1"
 uuid = { version = "1", features = ["v4"] }
 open = "5"
 hanconv = "0.5"
-oxc_parser = "0.47"
-oxc_ast = "0.47"
-oxc_codegen = "0.47"
-oxc_allocator = "0.47"
-oxc_span = "0.47"
-oxc_semantic = "0.47"
 rsa = { version = "0.9", features = ["pem", "sha2"] }
 sha2 = "0.10"
 pkcs8 = { version = "0.10", features = ["pem", "encryption"] }
@@ -78,4 +72,3 @@ codegen-units = 4
 panic = "unwind"
 strip = true
 incremental = false
-

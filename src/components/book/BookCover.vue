@@ -1,13 +1,11 @@
 <template>
   <div class="book-cover" @mouseenter="hovered = true" @mouseleave="hovered = false">
-    <!-- 占位封面始终渲染为底层 -->
     <div class="cover-placeholder">
       <div class="cover-overlay">
         <div class="cover-title">{{ title || '未命名' }}</div>
         <div class="cover-author">{{ author || '佚名' }}</div>
       </div>
     </div>
-    <!-- 实际封面图片，加载完成前透明，加载成功后淡入替换 -->
     <img
       v-if="displaySrc && !failed"
       :src="displaySrc"
@@ -55,8 +53,12 @@ const allUrls = computed(() => {
   const urls: string[] = []
   if (props.src) urls.push(props.src)
   if (props.fallbackUrls && props.fallbackUrls.length > 0) {
+    const seen = new Set(urls)
     for (const url of props.fallbackUrls) {
-      if (url && !urls.includes(url)) urls.push(url)
+      if (url && !seen.has(url)) {
+        urls.push(url)
+        seen.add(url)
+      }
     }
   }
   return urls
@@ -70,12 +72,16 @@ const displaySrc = computed(() => {
   return null
 })
 
-watch(() => props.src, () => {
+function resetState(): void {
   failed.value = false
   loaded.value = false
   proxiedSrc.value = null
   currentUrlIndex.value = 0
   triedUrls.value = new Set()
+}
+
+watch(() => [props.src, props.fallbackUrls], () => {
+  resetState()
 })
 
 async function loadSourceInfo(): Promise<void> {
@@ -83,6 +89,7 @@ async function loadSourceInfo(): Promise<void> {
   try {
     const sources = await store.get('bookSource')
     if (Array.isArray(sources) && sources.length > 0) {
+      // 优先按 bookUrlPattern 匹配
       const matched = sources.find((s: any) => {
         const pattern = s.bookUrlPattern
         if (!pattern || !props.baseUrl) return false
@@ -90,8 +97,25 @@ async function loadSourceInfo(): Promise<void> {
           return new RegExp(pattern).test(props.baseUrl)
         } catch { return false }
       })
-      if (matched) sourceCache.value = matched
-      else if (sources.length > 0) sourceCache.value = sources[0]
+      if (matched) {
+        sourceCache.value = matched
+        return
+      }
+      // 按 bookSourceUrl 域名匹配
+      const domainMatched = sources.find((s: any) => {
+        if (!s.bookSourceUrl || !props.baseUrl) return false
+        try {
+          const sourceHost = new URL(s.bookSourceUrl).hostname
+          const baseHost = new URL(props.baseUrl).hostname
+          return sourceHost === baseHost
+        } catch { return false }
+      })
+      if (domainMatched) {
+        sourceCache.value = domainMatched
+      } else {
+        // 找不到匹配，不设置（保持 null）
+        sourceCache.value = null
+      }
     }
   } catch {
     // ignore

@@ -6,7 +6,6 @@ import type { RuleMode } from '../types.js'
 
 const EVAL_PATTERN = /@get:\{[^}]+\}|\{\{[\w\W]*?\}\}/gi
 const REGEX_PATTERN = /\$\d{1,2}/g
-const PUT_PATTERN = /@put:\{([^}]+?)\}/gi
 
 // 对齐 Legado AppPattern.JS_PATTERN
 const JS_PATTERN = /<js>([\s\S]*?)<\/js>|@js:([\s\S]*)/gi
@@ -31,12 +30,19 @@ export class SourceRule {
   private prefixRule: string | null = null
 
   constructor(ruleStr: string, mode: RuleMode = 'default', isJSON = false) {
-    const jsMatch = ruleStr.match(JS_PATTERN)
+    const jsMatcher = new RegExp(JS_PATTERN.source, 'i')
+    const jsMatch = jsMatcher.exec(ruleStr)
     if (jsMatch && (mode === 'default' || mode === 'js')) {
       this.jsCode = (jsMatch[2] || jsMatch[1] || '').trim()
-      const jsIndex = ruleStr.search(/@js:|<js>/)
+      const jsIndex = ruleStr.search(/@js:|<js>/i)
       if (jsIndex > 0) {
         this.prefixRule = ruleStr.substring(0, jsIndex).trim()
+        // 修复：从原始 ruleStr 中去掉 @js: 部分，
+        // 让 CSS 前缀只保留选择器部分
+        // 例如：@css:.cover-box .bg img@src@js:result + '...'
+        // prefixRule = '@css:.cover-box .bg img@src'
+        // rule 应该只保留 CSS 部分，JS 由 jsCode 处理
+        ruleStr = this.prefixRule
       }
       if (this.jsCode) {
         mode = 'js'
@@ -89,9 +95,9 @@ export class SourceRule {
         const matched = evalMatch[0]
         if (matched.toLowerCase().startsWith('@get:')) {
           this.ruleType.push(GET_RULE_TYPE)
-          // DIFF-7 修复：正确提取 @get:{key} 中的 key
-          const keyMatch = /^@get:\{([^}]+)\}$/.exec(matched)
-          this.ruleParam.push(keyMatch ? keyMatch[1] : matched.substring(6))
+          const keyMatch = /^@get:\{([^}]+)\}$/i.exec(matched)
+          const key = keyMatch && keyMatch[1] !== undefined ? keyMatch[1] : matched.substring(6)
+          this.ruleParam.push(key)
         } else if (matched.startsWith('{{')) {
           this.ruleType.push(JS_RULE_TYPE)
           this.ruleParam.push(matched.substring(2, matched.length - 2))
@@ -115,8 +121,8 @@ export class SourceRule {
     clone.replacement = this.replacement
     clone.replaceFirst = this.replaceFirst
     clone.putMap = this.putMap ? { ...this.putMap } : {}
-    ;(clone as any).ruleParam = this.ruleParam
-    ;(clone as any).ruleType = this.ruleType
+    ;(clone as unknown as { ruleParam: string[] }).ruleParam = [...this.ruleParam]
+    ;(clone as unknown as { ruleType: number[] }).ruleType = [...this.ruleType]
     clone.jsCode = this.jsCode
     clone.prefixRule = this.prefixRule
     return clone
@@ -136,18 +142,41 @@ export class SourceRule {
 
   private splitPutRule(ruleStr: string, putMap: PutMap): string {
     let result = ruleStr
-    const putMatcher = new RegExp(PUT_PATTERN.source, 'gi')
+    const putMatcher = /@put:(\{[^}]+\})/gi
+    putMatcher.lastIndex = 0
     let match: RegExpExecArray | null
-    while ((match = putMatcher.exec(ruleStr)) !== null) {
-      result = result.replace(match[0], '')
-      try {
-        Object.assign(putMap, JSON.parse(match[1]))
-      } catch {
+    while ((match = putMatcher.exec(result)) !== null) {
+      const matchedText = match[0]
+      const matchIndex = match.index
+      const jsonStr = match[1]
+
+      result = result.substring(0, matchIndex) + result.substring(matchIndex + matchedText.length)
+
+      if (jsonStr) {
         try {
-          Object.assign(putMap, JSON.parse(match[1].replace(/'/g, '"')))
+          const parsed = JSON.parse(jsonStr) as Record<string, unknown>
+          for (const [key, value] of Object.entries(parsed)) {
+            if (value !== null && value !== undefined) {
+              putMap[key] = String(value)
+            }
+          }
         } catch {
-          // 非标准 JSON，忽略
+          try {
+            const parsed = JSON.parse(jsonStr.replace(/'/g, '"')) as Record<string, unknown>
+            for (const [key, value] of Object.entries(parsed)) {
+              if (value !== null && value !== undefined) {
+                putMap[key] = String(value)
+              }
+            }
+          } catch {
+            // 非标准 JSON，忽略
+          }
         }
+      }
+
+      putMatcher.lastIndex = matchIndex
+      if (putMatcher.lastIndex === matchIndex) {
+        putMatcher.lastIndex++
       }
     }
     return result
@@ -159,45 +188,44 @@ export class SourceRule {
     const parts = ruleStr.split('##')
     const regexMatcher = new RegExp(REGEX_PATTERN.source, 'g')
 
-    if (parts[0] && regexMatcher.test(parts[0])) {
+    const part0 = parts[0]
+    if (part0 !== undefined && regexMatcher.test(part0)) {
       regexMatcher.lastIndex = 0
       let match: RegExpExecArray | null
-      while ((match = regexMatcher.exec(parts[0])) !== null) {
+      while ((match = regexMatcher.exec(part0)) !== null) {
         if (match.index > start) {
           this.ruleType.push(DEFAULT_RULE_TYPE)
-          this.ruleParam.push(parts[0].substring(start, match.index))
+          this.ruleParam.push(part0.substring(start, match.index))
         }
         this.ruleType.push(parseInt(match[0].substring(1)))
         this.ruleParam.push(match[0])
         start = match.index + match[0].length
       }
     }
-    if (parts[0] && parts[0].length > start) {
+    if (part0 !== undefined && part0.length > start) {
       this.ruleType.push(DEFAULT_RULE_TYPE)
-      this.ruleParam.push(parts[0].substring(start))
+      this.ruleParam.push(part0.substring(start))
     }
-    if (parts.length > 1) this.replaceRegex = parts[1]
-    if (parts.length > 2) this.replacement = parts[2]
+    const part1 = parts[1]
+    if (part1 !== undefined) this.replaceRegex = part1
+    const part2 = parts[2]
+    if (part2 !== undefined) this.replacement = part2
     if (parts.length > 3) this.replaceFirst = true
   }
 
   async makeUpRule(
-    result: any,
-    evalJS: (js: string, res: any) => Promise<any>,
+    result: unknown,
+    evalJS: (js: string, res: unknown) => Promise<unknown>,
     get: (key: string) => string,
     getString: (rule: string) => Promise<string>,
   ): Promise<void> {
     if (this.jsCode && this.prefixRule !== null) {
       try {
-        let prefixValue = this.prefixRule
-        if (prefixValue && !prefixValue.startsWith('@')) {
-          if (result && typeof result === 'object' && result[prefixValue] !== undefined) {
-            prefixValue = String(result[prefixValue])
-          }
-        }
+        // 修复：this.rule 现在只包含 CSS 部分
+        // 执行 JS 后，this.rule = JS 结果
         const jsResult = await evalJS(this.jsCode, result)
         const jsStr = jsResult !== null && jsResult !== undefined ? String(jsResult) : ''
-        this.rule = prefixValue + jsStr
+        this.rule = jsStr
         this.mode = 'default'
         return
       } catch {
@@ -211,39 +239,40 @@ export class SourceRule {
     let index = this.ruleParam.length
     while (index-- > 0) {
       const regType = this.ruleType[index]
+      const param = this.ruleParam[index]
+      if (regType === undefined || param === undefined) continue
+
       if (regType > DEFAULT_RULE_TYPE) {
         if (Array.isArray(result) && result.length > regType) {
-          infoVal.unshift(result[regType]?.toString() || '')
+          const val = result[regType]
+          infoVal.unshift(val !== undefined ? String(val) : '')
         } else {
-          infoVal.unshift(this.ruleParam[index])
+          infoVal.unshift(param)
         }
       } else if (regType === JS_RULE_TYPE) {
-        if (this.isRule(this.ruleParam[index])) {
-          infoVal.unshift(await getString(this.ruleParam[index]))
+        if (this.isRule(param)) {
+          infoVal.unshift(await getString(param))
         } else {
-          const jsEval: any = await evalJS(this.ruleParam[index], result)
+          const jsEval: unknown = await evalJS(param, result)
           if (jsEval !== null && jsEval !== undefined) {
-            if (typeof jsEval === 'string') {
-              infoVal.unshift(jsEval)
-            } else if (typeof jsEval === 'number' && Number.isInteger(jsEval)) {
-              infoVal.unshift(String(jsEval))
-            } else {
-              infoVal.unshift(String(jsEval))
-            }
+            infoVal.unshift(String(jsEval))
           }
         }
       } else if (regType === GET_RULE_TYPE) {
-        infoVal.unshift(get(this.ruleParam[index]))
+        infoVal.unshift(get(param))
       } else {
-        infoVal.unshift(this.ruleParam[index])
+        infoVal.unshift(param)
       }
     }
     this.rule = infoVal.join('')
 
     const ruleStrS = this.rule.split('##')
-    this.rule = ruleStrS[0].trim()
-    if (ruleStrS.length > 1) this.replaceRegex = ruleStrS[1]
-    if (ruleStrS.length > 2) this.replacement = ruleStrS[2]
+    const rule0 = ruleStrS[0]
+    if (rule0 !== undefined) this.rule = rule0.trim()
+    const rule1 = ruleStrS[1]
+    if (rule1 !== undefined) this.replaceRegex = rule1
+    const rule2 = ruleStrS[2]
+    if (rule2 !== undefined) this.replacement = rule2
     if (ruleStrS.length > 3) this.replaceFirst = true
   }
 

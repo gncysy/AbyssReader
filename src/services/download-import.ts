@@ -7,6 +7,21 @@ import { network } from './network.js'
 import { store } from './store.js'
 import { source } from './source.js'
 
+interface RssSourceLike {
+  sourceUrl: string
+  [key: string]: unknown
+}
+
+interface ReplaceRuleLike {
+  name: string
+  pattern: string
+  [key: string]: unknown
+}
+
+function asArray(value: unknown): unknown[] {
+  return Array.isArray(value) ? value : []
+}
+
 export async function executeDownloadImport(info: DownloadInfo): Promise<string> {
   switch (info.resourceType) {
     case 'bookSource': {
@@ -14,7 +29,8 @@ export async function executeDownloadImport(info: DownloadInfo): Promise<string>
       return `已安装 ${count} 个书源`
     }
     case 'rssSource': {
-      const existingSources = (await store.get('rssSources')) || []
+      const rawSources = await store.get('rssSources')
+      const existingSources = asArray(rawSources) as RssSourceLike[]
       const count = await installRssSources(info.url, existingSources)
       await store.set('rssSources', existingSources)
       return `已安装 ${count} 个订阅源`
@@ -43,11 +59,12 @@ async function fetchText(url: string): Promise<string> {
 
 async function installBookSources(url: string): Promise<number> {
   const text = await fetchText(url)
-  let data: any
+  let data: unknown
   try {
     data = JSON.parse(text)
-  } catch (e: any) {
-    throw new Error('书源 JSON 解析失败: ' + e.message)
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : String(e)
+    throw new Error('书源 JSON 解析失败: ' + msg)
   }
   const items = Array.isArray(data) ? data : [data]
   for (const item of items) {
@@ -58,22 +75,24 @@ async function installBookSources(url: string): Promise<number> {
 
 async function installRssSources(
   url: string,
-  existingSources: any[],
+  existingSources: RssSourceLike[],
 ): Promise<number> {
   const text = await fetchText(url)
-  let data: any
+  let data: unknown
   try {
     data = JSON.parse(text)
-  } catch (e: any) {
-    throw new Error('订阅源 JSON 解析失败: ' + e.message)
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : String(e)
+    throw new Error('订阅源 JSON 解析失败: ' + msg)
   }
   const items = Array.isArray(data) ? data : [data]
   let count = 0
-  const existing = new Set(existingSources.map((s: any) => s.sourceUrl))
+  const existing = new Set(existingSources.map((s) => s.sourceUrl))
   for (const item of items) {
-    if (item.sourceUrl && !existing.has(item.sourceUrl)) {
-      existingSources.push(item)
-      existing.add(item.sourceUrl)
+    const obj = item as RssSourceLike
+    if (obj.sourceUrl && !existing.has(obj.sourceUrl)) {
+      existingSources.push(obj)
+      existing.add(obj.sourceUrl)
       count++
     }
   }
@@ -82,18 +101,21 @@ async function installRssSources(
 
 async function installReplaceRules(url: string): Promise<number> {
   const text = await fetchText(url)
-  let rules: any
+  let rules: unknown
   try {
     rules = JSON.parse(text)
-  } catch (e: any) {
-    throw new Error('替换规则 JSON 解析失败: ' + e.message)
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : String(e)
+    throw new Error('替换规则 JSON 解析失败: ' + msg)
   }
-  const existing: any[] = (await store.get('replaceRule')) || []
+  const rawExisting = await store.get('replaceRule')
+  const existing = asArray(rawExisting) as ReplaceRuleLike[]
   const incoming = Array.isArray(rules) ? rules : [rules]
   let count = 0
   for (const rule of incoming) {
-    if (!existing.find((r: any) => r.name === rule.name && r.pattern === rule.pattern)) {
-      existing.push(rule)
+    const r = rule as ReplaceRuleLike
+    if (!existing.find((er) => er.name === r.name && er.pattern === r.pattern)) {
+      existing.push(r)
       count++
     }
   }
@@ -103,11 +125,12 @@ async function installReplaceRules(url: string): Promise<number> {
 
 async function installTxtTocRules(url: string): Promise<number> {
   const text = await fetchText(url)
-  let rules: any
+  let rules: unknown
   try {
     rules = JSON.parse(text)
-  } catch (e: any) {
-    throw new Error('目录规则 JSON 解析失败: ' + e.message)
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : String(e)
+    throw new Error('目录规则 JSON 解析失败: ' + msg)
   }
   const items = Array.isArray(rules) ? rules : [rules]
   await store.set('txtTocRule', items)
@@ -116,7 +139,6 @@ async function installTxtTocRules(url: string): Promise<number> {
 
 async function installPurifyRule(url: string): Promise<void> {
   const text = await fetchText(url)
-  // 验证 JSON 格式
   try {
     JSON.parse(text)
   } catch {

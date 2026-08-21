@@ -2,13 +2,18 @@
 // useRssArticles — 订阅文章加载（实例级缓存）
 // ============================================
 
-import { ref, computed } from 'vue'
+import { ref } from 'vue'
 import { createAnalyzer } from '@engine/parser/index.js'
 import { network } from '@/services/network.js'
 import type { RssSource, RssArticle } from '@/types'
+import type { EngineBookSource } from '@engine/types.js'
 
 const CACHE_TTL = 5 * 60 * 1000
 const MAX_CACHE_ENTRIES = 20
+
+function toEngineBookSource(source: RssSource): EngineBookSource {
+  return source as unknown as EngineBookSource
+}
 
 export function useRssArticles() {
   const articles = ref<RssArticle[]>([])
@@ -19,19 +24,14 @@ export function useRssArticles() {
   const nextPageUrl = ref('')
   const activeSortName = ref('')
 
-  // 实例级缓存（不再模块级共享）
   const articleCache = new Map<string, { articles: RssArticle[]; nextUrl: string; timestamp: number }>()
-
-  const sortTabs = computed(() => {
-    return [] // 由调用方设置
-  })
 
   async function parseArticles(
     source: RssSource,
     html: string,
     baseUrl: string,
   ): Promise<{ articles: RssArticle[]; nextUrl: string }> {
-    const analyzer = createAnalyzer(source)
+    const analyzer = createAnalyzer(toEngineBookSource(source))
     analyzer.setContent(html, baseUrl)
 
     let listRule = source.ruleArticles || ''
@@ -53,13 +53,13 @@ export function useRssArticles() {
     const result: RssArticle[] = []
     for (const item of elements) {
       if (item === null || item === undefined) continue
-      const itemAnalyzer = createAnalyzer(source)
+      const itemAnalyzer = createAnalyzer(toEngineBookSource(source))
       itemAnalyzer.setContent(item, baseUrl)
 
       const title = (await itemAnalyzer.getString(titleRule)) || ''
       if (!title) continue
 
-      const link = (await itemAnalyzer.getString(linkRule, { isUrl: true } as any)) || ''
+      const link = (await itemAnalyzer.getString(linkRule, { isUrl: true } as Record<string, unknown>)) || ''
       const description = descRule ? (await itemAnalyzer.getString(descRule)) || null : null
       const image = imageRule ? (await itemAnalyzer.getString(imageRule)) || null : null
       const pubDate = dateRule ? (await itemAnalyzer.getString(dateRule)) || null : null
@@ -75,9 +75,9 @@ export function useRssArticles() {
       if (nextRule.toUpperCase() === 'PAGE') {
         nextUrl = baseUrl
       } else {
-        const nextAnalyzer = createAnalyzer(source)
+        const nextAnalyzer = createAnalyzer(toEngineBookSource(source))
         nextAnalyzer.setContent(html, baseUrl)
-        const raw = await nextAnalyzer.getString(nextRule, { isUrl: true } as any)
+        const raw = await nextAnalyzer.getString(nextRule, { isUrl: true } as Record<string, unknown>)
         if (raw) nextUrl = raw
       }
     }
@@ -149,7 +149,7 @@ export function useRssArticles() {
   }
 
   return {
-    articles, loading, loadingMore, currentPageUrl, hasNextPage, nextPageUrl, activeSortName, sortTabs,
+    articles, loading, loadingMore, currentPageUrl, hasNextPage, nextPageUrl, activeSortName,
     parseArticles, fetchArticles, loadNextPage,
   }
 }

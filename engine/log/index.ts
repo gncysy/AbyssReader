@@ -8,7 +8,8 @@ export type LogModule =
   | 'explore' | 'search' | 'bookshelf' | 'reader' | 'source'
   | 'network' | 'engine' | 'system' | 'ui' | 'storage'
   | 'login' | 'sync' | 'sandbox' | 'crypto' | 'url'
-  | 'rule' | 'diagnostics' | 'unknown'
+  | 'rule' | 'diagnostics' | 'rss' | 'js' | 'webview'
+  | 'unknown'
 
 export type LogSource = 'rust' | 'deno' | 'frontend'
 
@@ -18,19 +19,24 @@ export interface LogEntry {
   module: LogModule
   source: LogSource
   message: string
-  tag?: string
+  tag?: string | undefined
 }
 
 export interface LogFilter {
   module?: LogModule | LogModule[]
   source?: LogSource | LogSource[]
   level?: LogLevel | LogLevel[]
-  tag?: string
+  tag?: string | undefined
 }
 
 type LogListener = (entry: LogEntry) => void
 
-const logListeners: Array<{ handler: LogListener; filter?: LogFilter }> = []
+interface ListenerEntry {
+  handler: LogListener
+  filter?: LogFilter | undefined
+}
+
+const logListeners: ListenerEntry[] = []
 const MAX_LOGS = 2000
 const MAX_LISTENERS = 100
 export const logHistory: LogEntry[] = []
@@ -85,9 +91,10 @@ export function emitLog(
     level, module, source, message, tag,
   }
   logHistory.push(entry)
+  // 修复：使用 shift 逐个移除，避免 splice(0, excess) 的大规模移动
+  // 当超出最大条数时，每次只移除一条，均摊 O(1)
   if (logHistory.length > MAX_LOGS) {
-    const excess = logHistory.length - MAX_LOGS
-    logHistory.splice(0, excess)
+    logHistory.shift()
   }
   logListeners.forEach(({ handler, filter }) => {
     if (matchesFilter(entry, filter)) {
@@ -147,9 +154,9 @@ export interface DiagnosticSnapshot {
   outputLen: number
   cachedLen: number
   preview: string
-  d0?: string
-  d1?: string
-  errorInfo?: string
+  d0?: string | undefined
+  d1?: string | undefined
+  errorInfo?: string | undefined
   extra: Record<string, string>
 }
 
@@ -166,25 +173,36 @@ function parseDiagnostic(entry: LogEntry): DiagnosticSnapshot | null {
   const type = rest.substring(0, pipe2)
   const jsonStr = rest.substring(pipe2 + 1)
   try {
-    const d = JSON.parse(jsonStr)
+    const d = JSON.parse(jsonStr) as Record<string, unknown>
     const extra: Record<string, string> = {}
     const knownKeys = new Set(['t','u','c','r','o','p','a','m','s','x','y','z','v','w','q','e','f','d0','d1'])
     for (const k of Object.keys(d)) {
-      if (!knownKeys.has(k)) extra[k] = typeof d[k] === 'string' ? d[k] : JSON.stringify(d[k])
+      if (!knownKeys.has(k)) {
+        const val = d[k]
+        extra[k] = typeof val === 'string' ? val : JSON.stringify(val)
+      }
+    }
+    const getStr = (key: string): string | undefined => {
+      const val = d[key]
+      return typeof val === 'string' ? val : undefined
+    }
+    const getNum = (key: string): number => {
+      const val = d[key]
+      return typeof val === 'number' ? val : -1
     }
     return {
       id: entry.time + '_' + Math.random().toString(36).slice(2, 8),
       timestamp: entry.time,
-      tag: d.t || type,
-      sourceUrl: d.u || '',
+      tag: getStr('t') || type,
+      sourceUrl: getStr('u') || '',
       hasCrypto: !!d.c,
-      resultLen: d.r ?? -1,
-      outputLen: d.o ?? -1,
-      cachedLen: d.a ?? -1,
-      preview: d.p || '',
-      d0: d.d0 || undefined,
-      d1: d.d1 || undefined,
-      errorInfo: type === 'error' ? (d.m || d.e || d.s || undefined) : undefined,
+      resultLen: getNum('r'),
+      outputLen: getNum('o'),
+      cachedLen: getNum('a'),
+      preview: getStr('p') || '',
+      d0: getStr('d0'),
+      d1: getStr('d1'),
+      errorInfo: type === 'error' ? (getStr('m') || getStr('e') || getStr('s')) : undefined,
       extra,
     }
   } catch {

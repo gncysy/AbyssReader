@@ -67,15 +67,15 @@
 </n-config-provider></template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed } from 'vue'
 import { useMessage, useDialog, NModal, NInput, NConfigProvider } from 'naive-ui'
 import { store } from '@/services'
-import { cache } from '@/services/cache.js'
+import { asArray } from '@/services/store.js'
 import { useReadingStore, useBookshelfStore } from '@/stores'
 import { getDeviceName } from '@/services/webdav.js'
 import BackButton from '@/components/common/BackButton.vue'
 import { useNaiveTheme } from '@/composables/useNaiveTheme.js'
-import { CACHE } from '@/constants/index.js'
+import { useCacheManager } from '@/composables/useCacheManager.js'
 
 const msg = useMessage()
 const dialog = useDialog()
@@ -83,37 +83,52 @@ const { naiveTheme, themeOverrides } = useNaiveTheme()
 const readingStore = useReadingStore()
 const bookshelfStore = useBookshelfStore()
 const importInput = ref<HTMLInputElement | null>(null)
-const cacheInfo = ref<any>(null)
-const loadingCache = ref(false)
-const clearingCategory = ref<string | null>(null)
-const clearingAll = ref(false)
-const cacheLimitMB = ref(CACHE.DEFAULT_MAX_MB)
-const savingLimit = ref(false)
-const migrating = ref(false)
 const exporting = ref(false)
 const importing = ref(false)
 const showExportDialog = ref(false)
 const showImportDialog = ref(false)
-const showMigrateDialog = ref(false)
-const migratePath = ref('')
+
+const {
+  cacheInfo,
+  loadingCache,
+  clearingCategory,
+  clearingAll,
+  cacheLimitMB,
+  savingLimit,
+  migrating,
+  showMigrateDialog,
+  migratePath,
+  loadCacheInfo,
+  saveCacheLimit,
+  openMigrateDialog,
+  doMigrate,
+  clearCategory,
+  clearAllCache,
+} = useCacheManager()
 
 const SYNC_KEYS = ['bookshelf', 'bookSource', 'readingProgress', 'replaceRule', 'bookGroup', 'txtTocRule', 'dictRule', 'keyboardAssists', 'rssSources']
 
+// 修复：为每个 key 定义正确的空值类型
+const EMPTY_VALUES: Record<string, unknown> = {
+  bookshelf: [],
+  bookSource: [],
+  readingProgress: {},
+  replaceRule: [],
+  bookGroup: [],
+  txtTocRule: [],
+  dictRule: [],
+  keyboardAssists: {},
+  rssSources: [],
+}
+
 const EXPORT_LABELS: Record<string, string> = {
-  bookshelf: '书架数据',
-  bookSource: '书源',
-  readingProgress: '阅读进度',
-  replaceRule: '替换规则',
-  bookGroup: '分组',
-  txtTocRule: 'TXT 目录规则',
-  dictRule: '字典规则',
-  keyboardAssists: '快捷输入助手',
-  rssSources: '订阅源',
+  bookshelf: '书架数据', bookSource: '书源', readingProgress: '阅读进度', replaceRule: '替换规则',
+  bookGroup: '分组', txtTocRule: 'TXT 目录规则', dictRule: '字典规则', keyboardAssists: '快捷输入助手', rssSources: '订阅源',
 }
 
 const exportItems = ref(SYNC_KEYS.map(k => ({ key: k, label: EXPORT_LABELS[k] || k, checked: true })))
 const importItems = ref<{ key: string; label: string; checked: boolean }[]>([])
-let importZipData: any = null
+let importZipData: unknown = null
 
 const exportSelectAll = computed(() => exportItems.value.every(i => i.checked))
 const hasExportSelected = computed(() => exportItems.value.some(i => i.checked))
@@ -130,79 +145,6 @@ function toggleImportSelectAll(): void {
   importItems.value.forEach(i => i.checked = !all)
 }
 
-onMounted(() => { loadCacheInfo() })
-
-async function loadCacheInfo(): Promise<void> {
-  loadingCache.value = true
-  try {
-    cacheInfo.value = await cache.getInfo()
-    cacheLimitMB.value = Math.round((cacheInfo.value.maxTotalBytes || CACHE.DEFAULT_MAX_TOTAL_BYTES) / (1024 * 1024))
-  } catch (err: any) {
-    msg.error('加载缓存信息失败: ' + (err?.message || String(err)))
-  } finally {
-    loadingCache.value = false
-  }
-}
-
-async function saveCacheLimit(): Promise<void> {
-  savingLimit.value = true
-  try {
-    await cache.setMaxSize(cacheLimitMB.value)
-    await loadCacheInfo()
-    msg.success('缓存上限已更新')
-  } catch (err: any) {
-    msg.error('保存失败: ' + (err?.message || String(err)))
-  } finally {
-    savingLimit.value = false
-  }
-}
-
-function openMigrateDialog(): void {
-  migratePath.value = cacheInfo.value?.path || ''
-  showMigrateDialog.value = true
-}
-
-async function doMigrate(): Promise<void> {
-  if (!migratePath.value.trim()) return
-  migrating.value = true
-  try {
-    await cache.migrate(migratePath.value.trim())
-    await loadCacheInfo()
-    showMigrateDialog.value = false
-    msg.success('缓存目录已迁移')
-  } catch (err: any) {
-    msg.error('迁移失败: ' + (err?.message || String(err)))
-  } finally {
-    migrating.value = false
-  }
-}
-
-async function clearCategory(key: string): Promise<void> {
-  clearingCategory.value = key
-  try {
-    const result: any = await cache.clearCategory(key)
-    msg.success(`已清理 ${result.removed} 个文件`)
-    await loadCacheInfo()
-  } catch (err: any) {
-    msg.error('清理失败: ' + (err?.message || String(err)))
-  } finally {
-    clearingCategory.value = null
-  }
-}
-
-async function clearAllCache(): Promise<void> {
-  clearingAll.value = true
-  try {
-    const result: any = await cache.clearAll()
-    msg.success(`已清空 ${result.removed} 个缓存文件`)
-    await loadCacheInfo()
-  } catch (err: any) {
-    msg.error('清空失败: ' + (err?.message || String(err)))
-  } finally {
-    clearingAll.value = false
-  }
-}
-
 function openExportDialog(): void {
   exportItems.value = SYNC_KEYS.map(k => ({ key: k, label: EXPORT_LABELS[k] || k, checked: true }))
   showExportDialog.value = true
@@ -213,7 +155,7 @@ async function doExport(): Promise<void> {
   try {
     const JSZip = (await import('jszip')).default
     const zip = new JSZip()
-    const allData: any = await store.getAll()
+    const allData = await store.getAll()
     let count = 0
     const selected = exportItems.value.filter(i => i.checked)
     for (const item of selected) {
@@ -234,8 +176,9 @@ async function doExport(): Promise<void> {
     URL.revokeObjectURL(url)
     showExportDialog.value = false
     msg.success(`已导出: ${filename} (${count} 个文件)`)
-  } catch (err: any) {
-    msg.error('导出失败: ' + err.message)
+  } catch (err: unknown) {
+    const e = err as Error
+    msg.error('导出失败: ' + e.message)
   } finally {
     exporting.value = false
   }
@@ -251,8 +194,9 @@ async function onImportData(event: Event): Promise<void> {
     const JSZip = (await import('jszip')).default
     importZipData = await JSZip.loadAsync(file)
     const items: { key: string; label: string; checked: boolean }[] = []
+    const zipObj = importZipData as { file: (name: string | RegExp) => unknown | null }
     for (const key of SYNC_KEYS) {
-      const jsonFile = importZipData.file(key + '.json')
+      const jsonFile = zipObj.file(key + '.json')
       if (jsonFile) {
         items.push({ key, label: EXPORT_LABELS[key] || key, checked: true })
       }
@@ -260,8 +204,9 @@ async function onImportData(event: Event): Promise<void> {
     if (items.length === 0) { msg.warning('ZIP 中未找到可导入的数据'); input.value = ''; return }
     importItems.value = items
     showImportDialog.value = true
-  } catch (err: any) {
-    msg.error('读取 ZIP 失败: ' + err.message)
+  } catch (err: unknown) {
+    const e = err as Error
+    msg.error('读取 ZIP 失败: ' + e.message)
     input.value = ''
   }
 }
@@ -271,18 +216,23 @@ async function doImport(): Promise<void> {
   try {
     let count = 0
     const selected = importItems.value.filter(i => i.checked)
+    const zipObj = importZipData as { file: (name: string) => { async: (type: string) => Promise<string> } | null }
     for (const item of selected) {
-      const jsonFile = importZipData.file(item.key + '.json')
+      const jsonFile = zipObj.file(item.key + '.json')
       if (!jsonFile) continue
       try {
         const content = await jsonFile.async('string')
-        const parsed = JSON.parse(content)
+        const parsed = JSON.parse(content) as unknown
         if (item.key === 'replaceRule') {
-          const existing = (await store.get('replaceRule')) || []
+          const rawExisting = await store.get('replaceRule')
+          const existing = asArray<Record<string, unknown>>(rawExisting)
           const incoming = Array.isArray(parsed) ? parsed : []
           const merged = [...existing]
           for (const rule of incoming) {
-            if (!merged.find((r: any) => r.name === rule.name && r.pattern === rule.pattern)) merged.push(rule)
+            const r = rule as Record<string, unknown>
+            if (!merged.find((er) => er.name === r.name && er.pattern === r.pattern)) {
+              merged.push(r)
+            }
           }
           await store.set(item.key, merged)
         } else {
@@ -300,8 +250,9 @@ async function doImport(): Promise<void> {
     if (importInput.value) importInput.value.value = ''
     importZipData = null
     msg.success(`已导入 ${count} 项数据`)
-  } catch (err: any) {
-    msg.error('导入失败: ' + err.message)
+  } catch (err: unknown) {
+    const e = err as Error
+    msg.error('导入失败: ' + e.message)
   } finally {
     importing.value = false
   }
@@ -315,7 +266,11 @@ async function clearAllData(): Promise<void> {
     negativeText: '取消',
     onPositiveClick: async () => {
       try {
-        for (const key of SYNC_KEYS) await store.set(key, [])
+        // 修复：使用每个 key 对应的正确空值类型
+        for (const key of SYNC_KEYS) {
+          const emptyValue = EMPTY_VALUES[key]
+          await store.set(key, emptyValue !== undefined ? emptyValue : [])
+        }
         const keysToRemove: string[] = []
         for (let i = 0; i < localStorage.length; i++) {
           const key = localStorage.key(i)
@@ -327,8 +282,9 @@ async function clearAllData(): Promise<void> {
         await readingStore.loadSettings()
         await bookshelfStore.loadBooks()
         msg.success('已清空')
-      } catch (err: any) {
-        msg.error('清空失败: ' + err.message)
+      } catch (err: unknown) {
+        const e = err as Error
+        msg.error('清空失败: ' + e.message)
       }
     },
   })
@@ -360,7 +316,6 @@ async function clearAllData(): Promise<void> {
 .cache-cat-name { font-size: 13px; color: var(--text-primary); font-weight: 500; }
 .cache-cat-detail { font-size: 11px; color: var(--text-muted); margin-top: 2px; }
 .cache-actions { display: flex; justify-content: flex-end; }
-
 .export-options { display: flex; flex-direction: column; gap: 8px; padding: 4px 0; }
 .export-check-all { display: flex; align-items: center; gap: 8px; cursor: pointer; font-size: 14px; font-weight: 500; color: var(--text-primary); padding-bottom: 8px; border-bottom: 1px solid var(--border-color); }
 .export-check-all input { accent-color: var(--brand); width: 16px; height: 16px; cursor: pointer; }

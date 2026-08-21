@@ -14,11 +14,16 @@ import { useMessage } from 'naive-ui'
 import DOMPurify from 'isomorphic-dompurify'
 import { network, store } from '@/services'
 import { getString } from '@engine/parser/index.js'
-import { logInfo, logError } from '@engine/log/index.js'
+import { asArray } from '@/services/store.js'
 import BackButton from '@/components/common/BackButton.vue'
 import LoadingSpinner from '@/components/common/LoadingSpinner.vue'
 import EmptyState from '@/components/common/EmptyState.vue'
 import type { RssSource } from '@/types'
+import type { EngineBookSource } from '@engine/types.js'
+
+function toEngineBookSource(source: RssSource): EngineBookSource {
+  return source as unknown as EngineBookSource
+}
 
 const route = useRoute()
 const msg = useMessage()
@@ -43,55 +48,59 @@ const sanitizedContent = computed(() => {
 async function loadArticle(): Promise<void> {
   const articleLink = route.query.articleLink as string
   const sourceUrl = route.query.sourceUrl as string
-  const useWebView = route.query.useWebView === 'true'
 
   if (!articleLink) { loading.value = false; return }
   try {
     const data = await store.get('rssSources')
-    const sources: RssSource[] = Array.isArray(data) ? data : []
+    const sources = asArray<RssSource>(data)
     const source = sources.find((s) => s.sourceUrl === sourceUrl)
 
     let rawHtml = ''
-    if (useWebView) {
-      try {
-        const headers = source?.header ? JSON.parse(source.header) : {}
-        rawHtml = await network.fetchWebView(articleLink, {
-          headers,
-          webJs: source?.injectJs || undefined,
-          timeout: 30000,
-          sourceType: source?.type || 0,
-          preserveStyle: true,
-        })
-        logInfo('rss', 'frontend', '[订阅] WebView 获取成功')
-      } catch (err: any) {
-        logError('rss', 'frontend', `[订阅] WebView 获取失败，降级 HTTP: ${err?.message || err}`)
-        rawHtml = await network.fetch(articleLink, { method: 'GET' })
+    try {
+      const webJs = source?.injectJs || undefined
+      const fetchOptions: { headers: Record<string, string>; timeout: number; sourceType: number; preserveStyle: boolean; webJs?: string } = {
+        headers: {},
+        timeout: 30000,
+        sourceType: source?.type || 0,
+        preserveStyle: true,
       }
-    } else {
+      if (webJs !== undefined) fetchOptions.webJs = webJs
+      rawHtml = await network.fetchWebView(articleLink, fetchOptions)
+    } catch {
       rawHtml = await network.fetch(articleLink, { method: 'GET' })
     }
 
     const htmlStr = typeof rawHtml === 'string' ? rawHtml : JSON.stringify(rawHtml)
 
-    if (source?.ruleTitle) {
-      const ctx = { source, baseUrl: articleLink, book: {}, result: htmlStr }
-      const title = await getString(htmlStr, source.ruleTitle, ctx)
-      if (title) articleTitle.value = title
-    } else {
-      const titleMatch = htmlStr.match(/<title[^>]*>([\s\S]*?)<\/title>/i)
-      articleTitle.value = titleMatch ? titleMatch[1].trim() : '文章'
+    if (source) {
+      const engineSource = toEngineBookSource(source)
+      const ctx = { source: engineSource, baseUrl: articleLink, book: {}, result: htmlStr }
+
+      if (source.ruleTitle) {
+        const title = await getString(htmlStr, source.ruleTitle, ctx)
+        if (title) articleTitle.value = title
+      }
+
+      if (source.ruleContent) {
+        const articleContent = await getString(htmlStr, source.ruleContent, ctx)
+        content.value = articleContent || ''
+      }
     }
 
-    if (source?.ruleContent) {
-      const ctx = { source, baseUrl: articleLink, book: {}, result: htmlStr }
-      const articleContent = await getString(htmlStr, source.ruleContent, ctx)
-      content.value = articleContent || ''
-    } else {
-      const bodyMatch = htmlStr.match(/<body[^>]*>([\s\S]*)<\/body>/i)
-      content.value = bodyMatch ? bodyMatch[1].replace(/<[^>]+>/g, '') : htmlStr.replace(/<[^>]+>/g, '')
+    if (articleTitle.value === '加载中...') {
+      const titleMatch = htmlStr.match(/<title[^>]*>([\s\S]*?)<\/title>/i)
+      const titleVal = titleMatch && titleMatch[1] !== undefined ? titleMatch[1] : ''
+      articleTitle.value = titleVal ? titleVal.trim() : '文章'
     }
-  } catch (err: any) {
-    msg.error('加载文章失败: ' + (err?.message || String(err)))
+
+    if (!content.value) {
+      const bodyMatch = htmlStr.match(/<body[^>]*>([\s\S]*)<\/body>/i)
+      const bodyVal = bodyMatch && bodyMatch[1] !== undefined ? bodyMatch[1] : ''
+      content.value = bodyVal ? bodyVal.replace(/<[^>]+>/g, '') : htmlStr.replace(/<[^>]+>/g, '')
+    }
+  } catch (err: unknown) {
+    const e = err as Error
+    msg.error('加载文章失败: ' + (e?.message || String(err)))
     articleTitle.value = '加载失败'
   } finally {
     loading.value = false

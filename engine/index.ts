@@ -59,6 +59,9 @@ export type { LoginConfig, LoginResult } from './login/index.js'
 export { backup, restore } from './sync/index.js'
 export type { SyncConfig, SyncResult } from './sync/index.js'
 
+export { getCachedRegex, clearRegexCache } from './utils/regex-cache.js'
+export { cachedStringify, clearJsonCache } from './utils/json-cache.js'
+
 export type {
   ParseContext, RuleMode, SourceRule as EngineSourceRule,
   UrlAnalysis, RequestConfig, ResponseData, JsRuntime, DomParser, DomNode, JsonPathQuery,

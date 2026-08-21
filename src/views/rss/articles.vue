@@ -3,20 +3,15 @@
     <header class="subpage-header">
       <BackButton />
       <h2>{{ source?.sourceName || '订阅源' }}</h2>
-      <button v-if="mode === 'browse'" class="btn-secondary" style="padding:2px 12px;font-size:12px;margin-left:auto" @click="toggleListMode">{{ showList ? '查看网页' : '查看文章列表' }}</button>
     </header>
-    <div v-if="mode === 'browse' && !showList" class="webview-container" style="display:flex;align-items:center;justify-content:center;min-height:300px">
-      <div v-if="webviewLoading" style="display:flex;flex-direction:column;align-items:center;gap:12px"><LoadingSpinner /><span style="color:var(--text-muted)">正在打开浏览窗口...</span></div>
-      <EmptyState v-else title="浏览窗口已打开"><button class="btn-primary" @click="openInNewWindow">重新打开</button></EmptyState>
-    </div>
-    <template v-else>
+    <template>
       <div v-if="sortTabs.length > 1" class="sort-tabs">
         <button v-for="tab in sortTabs" :key="tab.name" class="sort-tab" :class="{ active: activeSortName === tab.name }" @click="switchSort(tab)">{{ tab.name }}</button>
       </div>
       <div v-if="!loading && articles.length > 0" :class="articleListClass">
         <div v-for="item in articles" :key="item.link" class="article-item" :class="articleItemClass" @click="openArticle(item)">
           <img v-if="item.image && articleStyle !== 0" :src="item.image" class="article-image" @error="(e) => (e.target as HTMLImageElement).style.display='none'" />
-          <div class="article-content"><h4 class="article-title">{{ item.title }}</h4><p v-if="item.description && articleStyle !== 2 && articleStyle !== 4 && articleStyle !== 3" class="article-desc">{{ item.description }}</p><p v-if="item.pubDate" class="article-date">{{ item.pubDate }}</p></div>
+          <div class="article-content"><h4 class="article-title">{{ item.title }}</h4><p v-if="item.description" class="article-desc">{{ item.description }}</p><p v-if="item.pubDate" class="article-date">{{ item.pubDate }}</p></div>
         </div>
       </div>
       <div v-if="hasNextPage && !loading" style="text-align:center;padding:16px"><button class="btn-secondary" :disabled="loadingMore" @click="loadNextPage">{{ loadingMore ? '加载中...' : '加载更多' }}</button></div>
@@ -30,12 +25,14 @@
 import { ref, computed, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useMessage } from 'naive-ui'
-import { network, store, rss } from '@/services'
+import { network, store } from '@/services'
 import { createAnalyzer } from '@engine/parser/index.js'
+import { asArray } from '@/services/store.js'
 import BackButton from '@/components/common/BackButton.vue'
 import LoadingSpinner from '@/components/common/LoadingSpinner.vue'
 import EmptyState from '@/components/common/EmptyState.vue'
 import type { RssSource, RssArticle } from '@/types'
+import type { EngineBookSource } from '@engine/types.js'
 import { CACHE } from '@/constants/index.js'
 
 const route = useRoute()
@@ -49,12 +46,13 @@ const loadingMore = ref(false)
 const activeSortName = ref('')
 const hasNextPage = ref(false)
 const nextPageUrl = ref('')
-const mode = ref<'browse' | 'list'>('list')
-const showList = ref(false)
-const webviewLoading = ref(false)
 const articleCache = new Map<string, { articles: RssArticle[]; nextUrl: string; timestamp: number }>()
 const CACHE_TTL = CACHE.SEARCH_TTL
 const MAX_CACHE_ENTRIES = 20
+
+function toEngineBookSource(source: RssSource): EngineBookSource {
+  return source as unknown as EngineBookSource
+}
 
 const articleStyle = computed(() => source.value?.articleStyle || 0)
 const sortTabs = computed(() => {
@@ -82,18 +80,15 @@ const articleItemClass = computed(() => {
 async function loadSource(): Promise<void> {
   try {
     const data = await store.get('rssSources')
-    const sources: RssSource[] = Array.isArray(data) ? data : []
+    const sources = asArray<RssSource>(data)
     const sourceUrl = route.query.sourceUrl as string
-    const modeParam = route.query.mode as string || 'list'
     source.value = sources.find((s) => s.sourceUrl === sourceUrl) || null
-    mode.value = modeParam === 'browse' ? 'browse' : 'list'
-
     if (!source.value) return
-    if (mode.value === 'browse') { openInNewWindow(); return }
 
     const tabs = sortTabs.value
     if (tabs.length > 0) {
-      activeSortName.value = tabs[0].name
+      const firstTab = tabs[0]
+      if (firstTab) activeSortName.value = firstTab.name
     }
     await fetchArticles()
   } catch {
@@ -109,19 +104,6 @@ function currentPageUrl(): string {
   return source.value?.sourceUrl || ''
 }
 
-function openInNewWindow(): void {
-  if (!source.value) return
-  webviewLoading.value = true
-  rss.openUrl(source.value.sourceUrl, source.value.sourceName || '订阅源')
-    .then(() => { webviewLoading.value = false })
-    .catch((err: any) => { webviewLoading.value = false; msg.error('打开失败: ' + (err?.message || String(err))) })
-}
-
-function toggleListMode(): void {
-  showList.value = !showList.value
-  if (showList.value && articles.value.length === 0) fetchArticles()
-}
-
 function switchSort(tab: { name: string; url: string }): void {
   activeSortName.value = tab.name
   articles.value = []
@@ -133,7 +115,7 @@ function switchSort(tab: { name: string; url: string }): void {
 async function parseArticles(html: string): Promise<{ articles: RssArticle[]; nextUrl: string }> {
   if (!source.value) return { articles: [], nextUrl: '' }
   const baseUrl = currentPageUrl() || source.value.sourceUrl
-  const analyzer = createAnalyzer(source.value)
+  const analyzer = createAnalyzer(toEngineBookSource(source.value))
   analyzer.setContent(html, baseUrl)
 
   let listRule = source.value.ruleArticles || ''
@@ -153,13 +135,13 @@ async function parseArticles(html: string): Promise<{ articles: RssArticle[]; ne
   const result: RssArticle[] = []
   for (const item of elements) {
     if (item === null || item === undefined) continue
-    const itemAnalyzer = createAnalyzer(source.value)
+    const itemAnalyzer = createAnalyzer(toEngineBookSource(source.value))
     itemAnalyzer.setContent(item, baseUrl)
 
     const title = (await itemAnalyzer.getString(titleRule)) || ''
     if (!title) continue
 
-    const link = (await itemAnalyzer.getString(linkRule, { isUrl: true } as any)) || ''
+    const link = (await itemAnalyzer.getString(linkRule, { isUrl: true } as Record<string, unknown>)) || ''
     const description = descRule ? (await itemAnalyzer.getString(descRule)) || null : null
     const image = imageRule ? (await itemAnalyzer.getString(imageRule)) || null : null
     const pubDate = dateRule ? (await itemAnalyzer.getString(dateRule)) || null : null
@@ -175,9 +157,9 @@ async function parseArticles(html: string): Promise<{ articles: RssArticle[]; ne
     if (nextRule.toUpperCase() === 'PAGE') {
       nextUrl = baseUrl
     } else {
-      const nextAnalyzer = createAnalyzer(source.value)
+      const nextAnalyzer = createAnalyzer(toEngineBookSource(source.value))
       nextAnalyzer.setContent(html, baseUrl)
-      const raw = await nextAnalyzer.getString(nextRule, { isUrl: true } as any)
+      const raw = await nextAnalyzer.getString(nextRule, { isUrl: true } as Record<string, unknown>)
       if (raw) nextUrl = raw
     }
   }
@@ -216,15 +198,9 @@ async function fetchArticles(useCache = true): Promise<void> {
     hasNextPage.value = result.nextUrl !== '' && result.nextUrl !== url
     nextPageUrl.value = result.nextUrl
     setCache(url, result)
-  } catch (err: any) {
-    msg.error('获取文章失败: ' + (err?.message || String(err)))
-    const cached = articleCache.get(url)
-    if (cached) {
-      articles.value = cached.articles
-      hasNextPage.value = !!cached.nextUrl && cached.nextUrl !== url
-      nextPageUrl.value = cached.nextUrl
-      msg.warning('使用缓存数据')
-    }
+  } catch (err: unknown) {
+    const e = err as Error
+    msg.error('获取文章失败: ' + (e?.message || String(err)))
   } finally {
     loading.value = false
   }
@@ -241,8 +217,8 @@ async function loadNextPage(): Promise<void> {
     articles.value = [...articles.value, ...uniqueNew]
     hasNextPage.value = result.nextUrl !== '' && result.nextUrl !== nextPageUrl.value
     nextPageUrl.value = result.nextUrl
-  } catch (err: any) {
-    msg.error('加载更多失败: ' + (err?.message || String(err)))
+  } catch {
+    // ignore
   } finally {
     loadingMore.value = false
   }
@@ -250,7 +226,7 @@ async function loadNextPage(): Promise<void> {
 
 function openArticle(item: RssArticle): void {
   if (!item.link) return
-  router.push({ name: 'rss-read', query: { articleLink: item.link, sourceUrl: source.value?.sourceUrl, useWebView: 'true' } })
+  router.push({ name: 'rss-read', query: { articleLink: item.link, sourceUrl: source.value?.sourceUrl } })
 }
 
 onMounted(async () => { await loadSource() })
@@ -260,7 +236,6 @@ onMounted(async () => { await loadSource() })
 .rss-articles-page { position: relative; z-index: 1; }
 .subpage-header { display: flex; align-items: center; gap: 16px; margin-bottom: 20px; flex-shrink: 0; }
 .subpage-header h2 { font-size: 20px; font-weight: 600; color: var(--text-primary); margin: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.webview-container { border: 1px solid var(--border-color); border-radius: var(--radius-lg); overflow: hidden; background: var(--bg-card); }
 .sort-tabs { display: flex; gap: 4px; margin-bottom: 20px; flex-wrap: wrap; border-bottom: 1px solid var(--border-color); padding-bottom: 12px; }
 .sort-tab { padding: 6px 14px; font-size: 13px; color: var(--text-muted); background: transparent; border: 1px solid var(--border-color); border-radius: var(--radius-sm); cursor: pointer; font-weight: 500; transition: color 0.18s, border-color 0.18s; }
 .sort-tab:hover { color: var(--text-primary); border-color: var(--brand); }
@@ -279,6 +254,6 @@ onMounted(async () => { await loadSource() })
 .card-item .article-image, .grid-item .article-image { width: 100%; height: 140px; }
 .article-content { flex: 1; min-width: 0; }
 .article-title { font-size: 15px; font-weight: 500; color: var(--text-primary); margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.article-desc { font-size: 13px; color: var(--text-muted); margin: 4px 0 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.article-desc { font-size: 13px; color: var(--text-muted); margin: 4px 0 0; }
 .article-date { font-size: 11px; color: var(--text-muted); margin: 2px 0 0; }
 </style>

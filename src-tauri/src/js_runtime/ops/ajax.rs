@@ -59,7 +59,8 @@ fn parse_concurrent_rate(rate: &str) -> Option<(i32, i64)> {
     }
 }
 
-fn rate_limit(url: &str, concurrent_rate: Option<&str>) {
+/// 计算需要等待的毫秒数，由调用方异步 sleep
+fn calculate_rate_limit_wait(url: &str, concurrent_rate: Option<&str>) -> u64 {
     let host = url::Url::parse(url)
         .ok()
         .and_then(|u| u.host_str().map(|s| s.to_string()))
@@ -97,12 +98,12 @@ fn rate_limit(url: &str, concurrent_rate: Option<&str>) {
     if now >= next_time {
         record.time = now;
         record.frequency = 1;
+        0
     } else if record.frequency < record.access_limit {
         record.frequency += 1;
+        0
     } else {
-        let wait_time = next_time - now;
-        drop(record);
-        std::thread::sleep(std::time::Duration::from_millis(wait_time as u64));
+        (next_time - now) as u64
     }
 }
 
@@ -119,7 +120,6 @@ fn parse_ajax_url(raw: &str) -> (String, Option<String>, Option<HashMap<String, 
     if let Some(pos) = comma_brace_pos {
         let url = raw[..pos].to_string();
         let rest = &raw[pos + 1..];
-        // 修复：还原转义引号 + 清除控制字符 + 为裸键名添加引号
         let fixed = rest
             .replace("\\\"", "\"")
             .replace('\u{200b}', "")
@@ -127,7 +127,6 @@ fn parse_ajax_url(raw: &str) -> (String, Option<String>, Option<HashMap<String, 
             .replace('\u{200d}', "")
             .replace('\u{feff}', "")
             .replace('\u{2060}', "")
-            // 为裸键名添加引号（JS 端拼接 JSON 时可能漏掉引号）
             .replace("{headers:", "{\"headers\":")
             .replace(",headers:", ",\"headers\":")
             .replace("{method:", "{\"method\":")
@@ -178,63 +177,21 @@ fn parse_ajax_url(raw: &str) -> (String, Option<String>, Option<HashMap<String, 
             .as_ref()
             .and_then(|v| v.get("concurrentRate").and_then(|r| r.as_str()).map(|s| s.to_string()));
 
-        // 调试日志
-        if let Some(ref h) = headers {
-            crate::js_runtime::ops::emit_log(
-                "info",
-                &format!("[ajax op] 解析 headers 成功: {} 个", h.len()),
-            );
-        } else {
-            crate::js_runtime::ops::emit_log(
-                "info",
-                &format!("[ajax op] headers 解析失败, fixed: {}, parsed: {:?}", fixed, parsed),
-            );
-        }
-
         (url, method, headers, body, concurrent_rate)
     } else {
         (raw.to_string(), None, None, None, None)
     }
 }
 
-fn with_blocking_client<F, R>(f: F) -> R
-where
-    F: FnOnce(&reqwest::blocking::Client) -> R + Send + 'static,
-    R: Send + 'static,
-{
-    let (tx, rx) = std::sync::mpsc::channel();
-    let handle = std::thread::spawn(move || {
-        let client = reqwest::blocking::Client::builder()
-            .user_agent(crate::js_runtime::ops::get_ua())
-            .danger_accept_invalid_certs(true)
-            .redirect(reqwest::redirect::Policy::limited(5))
-            .timeout(std::time::Duration::from_secs(30))
-            .build()
-            .unwrap();
-        let result = f(&client);
-        let _ = tx.send(result);
-    });
-
-    match rx.recv() {
-        Ok(result) => result,
-        Err(_) => {
-            let _ = handle.join();
-            panic!("with_blocking_client: 线程异常退出")
-        }
-    }
-}
-
+// 修复：async fn 自动被 op2 宏推断为异步，不需要 #[op2(async)]
 #[op2]
 #[string]
-pub fn op_java_ajax(#[string] url: String) -> String {
-    crate::js_runtime::ops::emit_log("info", &format!("[ajax op] 调用: {}", url));
-
+pub async fn op_java_ajax(#[string] url: String) -> String {
     let (req_url, method, headers, body, concurrent_rate) = parse_ajax_url(&url);
 
     if let Ok(parsed) = url::Url::parse(&req_url) {
         if let Some(host) = parsed.host_str() {
             if is_blocked_host(host) {
-                crate::js_runtime::ops::emit_log("error", &format!("[ajax op] 阻止内网地址: {}", host));
                 return serde_json::json!({
                     "body": format!("error: 禁止访问内网地址: {}", host),
                     "url": req_url,
@@ -245,7 +202,6 @@ pub fn op_java_ajax(#[string] url: String) -> String {
         }
     }
     if req_url.starts_with("file://") {
-        crate::js_runtime::ops::emit_log("error", "[ajax op] 阻止 file:// 协议");
         return serde_json::json!({
             "body": "error: 禁止访问本地文件",
             "url": req_url,
@@ -254,14 +210,18 @@ pub fn op_java_ajax(#[string] url: String) -> String {
         }).to_string();
     }
 
-    rate_limit(&req_url, concurrent_rate.as_deref());
+    // 异步 sleep 替代同步 std::thread::sleep
+    let wait_ms = calculate_rate_limit_wait(&req_url, concurrent_rate.as_deref());
+    if wait_ms > 0 {
+        tokio::time::sleep(std::time::Duration::from_millis(wait_ms)).await;
+    }
 
     let url_clone = req_url.clone();
     let method_clone = method.clone();
     let headers_clone = headers.clone();
     let body_clone = body.clone();
 
-    with_blocking_client(move |client| {
+    crate::js_runtime::ops::common::with_blocking_client(move |client| {
         let mut req = if method_clone.as_deref() == Some("POST") {
             client.post(&url_clone)
         } else {
@@ -289,10 +249,6 @@ pub fn op_java_ajax(#[string] url: String) -> String {
                     .collect();
                 match resp.text() {
                     Ok(text) => {
-                        crate::js_runtime::ops::emit_log(
-                            "info",
-                            &format!("[ajax op] 成功: {} (HTTP {}, {} 字节)", url_clone, status, text.len()),
-                        );
                         serde_json::json!({
                             "body": text,
                             "url": final_url,
@@ -301,10 +257,6 @@ pub fn op_java_ajax(#[string] url: String) -> String {
                         }).to_string()
                     }
                     Err(e) => {
-                        crate::js_runtime::ops::emit_log(
-                            "error",
-                            &format!("[ajax op] 读取响应失败: {} -> {}", url_clone, e),
-                        );
                         serde_json::json!({
                             "body": format!("error: {}", e),
                             "url": final_url,
@@ -315,10 +267,6 @@ pub fn op_java_ajax(#[string] url: String) -> String {
                 }
             }
             Err(e) => {
-                crate::js_runtime::ops::emit_log(
-                    "error",
-                    &format!("[ajax op] 请求失败: {} -> {}", url_clone, e),
-                );
                 serde_json::json!({
                     "body": format!("error: {}", e),
                     "url": url_clone,
@@ -349,7 +297,7 @@ pub fn op_java_web_js(#[string] html: String, #[string] js: String) -> String {
             existing.clone()
         } else {
             let label = format!("webjs_persistent_{}", uuid::Uuid::new_v4());
-            let w = tauri::WebviewWindowBuilder::new(
+            match tauri::WebviewWindowBuilder::new(
                 &app_handle,
                 &label,
                 tauri::WebviewUrl::App("about:blank".into()),
@@ -357,54 +305,66 @@ pub fn op_java_web_js(#[string] html: String, #[string] js: String) -> String {
             .visible(false)
             .title("")
             .build()
-            .unwrap();
-            crate::js_runtime::ops::emit_log("info", &format!("[webjs] 创建持久 WebView: {}", label));
-            *guard = Some(w.clone());
-            w
+            {
+                Ok(w) => {
+                    *guard = Some(w.clone());
+                    w
+                }
+                Err(_) => return String::new(),
+            }
         }
     };
 
     let (tx, rx) = mpsc::channel();
+
+    // 第一阶段：document.write，不需要 sleep
     let html_clone = html.clone();
-    let js_clone = js.clone();
-    let window_clone = window.clone();
-
+    let w1 = window.clone();
     let _ = app_handle.run_on_main_thread(move || {
-        let _ = window_clone.eval(&format!(
+        let _ = w1.eval(&format!(
             "document.write({});",
-            serde_json::to_string(&html_clone).unwrap()
+            serde_json::to_string(&html_clone).unwrap_or_default()
         ));
+    });
 
-        std::thread::sleep(std::time::Duration::from_millis(300));
+    // 第二阶段：异步 sleep 后执行 JS，再轮询结果
+    let w2 = window.clone();
+    let js2 = js.clone();
+    let tx2 = tx.clone();
+    tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
 
-        let _ = window_clone.eval(&format!(
-            "window.name = (function(){{ {} }})();",
-            js_clone
-        ));
+        let w3 = w2.clone();
+        let _ = w2.run_on_main_thread(move || {
+            let _ = w3.eval(&format!(
+                "window.name = (function(){{ {} }})();",
+                js2
+            ));
+        });
 
         std::thread::spawn(move || {
             let intervals = [200u64, 400, 600, 800, 1000];
             let max_retries = 30;
             for retry in 0..=max_retries {
                 let (tx_inner, rx_inner) = mpsc::channel();
-                let w = window_clone.clone();
+                let w = w2.clone();
                 let _ = w.eval_with_callback("window.name || ''", move |result| {
                     let _ = tx_inner.send(result);
                 });
                 if let Ok(result) = rx_inner.recv_timeout(std::time::Duration::from_secs(2)) {
                     if !result.is_empty() && result != "null" {
-                        let _ = tx.send(result);
+                        let _ = tx2.send(result);
                         return;
                     }
                 }
                 let delay = if retry < intervals.len() as i32 {
                     intervals[retry as usize]
                 } else {
-                    intervals[intervals.len() - 1]
+                    *intervals.last().unwrap_or(&1000)
                 };
                 std::thread::sleep(std::time::Duration::from_millis(delay));
             }
-            let _ = tx.send(String::new());
+            let _ = tx2.send(String::new());
         });
     });
 

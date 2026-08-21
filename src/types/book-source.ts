@@ -81,6 +81,7 @@ export interface ReviewRule {
 export interface BookSource {
   bookSourceName: string
   bookSourceUrl: string
+  name?: string
   bookSourceGroup?: string | null
   bookSourceComment?: string | null
   bookSourceType?: number

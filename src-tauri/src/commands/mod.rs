@@ -21,6 +21,7 @@ pub use rss::*;
 pub use local_book::*;
 pub use source::*;
 pub use embedded_webview::*;
+pub use login::*;
 
 pub use js_engine::*;
 
@@ -29,21 +30,6 @@ pub async fn cleanup_webviews() -> crate::error::Result<()> {
     crate::js_runtime::ops::close_persistent_webview();
     crate::js_runtime::ops::cleanup_all_embedded_webviews();
     Ok(())
-}
-
-#[tauri::command]
-pub async fn source_login(source: serde_json::Value) -> crate::error::Result<crate::commands::JsExecutionResponse> {
-    login::source_login(source).await
-}
-
-#[tauri::command]
-pub async fn source_login_ui(source: serde_json::Value) -> crate::error::Result<crate::commands::JsExecutionResponse> {
-    login::source_login_ui(source).await
-}
-
-#[tauri::command]
-pub async fn source_login_action(source: serde_json::Value, action: String) -> crate::error::Result<crate::commands::JsExecutionResponse> {
-    login::source_login_action(source, action).await
 }
 
 // ─── 验证码提交/取消（转发到 ops 层） ───

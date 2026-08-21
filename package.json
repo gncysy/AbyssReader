@@ -5,7 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "vite build",
+    "build": "vue-tsc --noEmit && vite build",
+    "typecheck": "vue-tsc --noEmit",
     "preview": "vite preview",
     "tauri": "tauri",
     "test": "vitest",
@@ -25,7 +26,6 @@
     "crypto-js": "^4.2.0",
     "gsap": "^3.15.0",
     "isomorphic-dompurify": "^2.15.0",
-    "jsonpath": "^1.1.1",
     "jszip": "^3.10.1",
     "marked": "^18.0.9",
     "naive-ui": "^2.39.0",
@@ -38,7 +38,6 @@
   "devDependencies": {
     "@tauri-apps/cli": "^2.0.0",
     "@types/crypto-js": "^4.2.0",
-    "@types/jsonpath": "^0.2.4",
     "@types/tough-cookie": "^4.0.5",
     "@vitejs/plugin-vue": "^5.0.0",
     "@vitest/ui": "^4.1.10",
@@ -51,4 +50,3 @@
     "vue-tsc": "^2.0.0"
   }
 }
-

@@ -11,26 +11,50 @@ import { NModal, useMessage } from 'naive-ui'
 import { executeDownloadImport } from '@/services/download-import.js'
 import { useBase64Content } from '@/composables/useBase64Content.js'
 
+interface DownloadInfoLike {
+  url: string
+  resourceType: string
+  count?: number
+  fileSize?: number
+  content?: string
+  [key: string]: unknown
+}
+
+interface RssSourceLike {
+  sourceUrl: string
+  [key: string]: unknown
+}
+
+interface ReplaceRuleLike {
+  name: string
+  pattern: string
+  [key: string]: unknown
+}
+
+function asArray(value: unknown): unknown[] {
+  return Array.isArray(value) ? value : []
+}
+
 const msg = useMessage()
 const visible = ref(false)
 const title = ref('')
 const message = ref('')
 const positiveText = ref('')
 const negativeText = ref('取消')
-let pendingData: any = null
+let pendingData: DownloadInfoLike | null = null
 
 const { decodeBase64 } = useBase64Content()
 
-function show(info: any): void {
+function show(info: DownloadInfoLike): void {
   pendingData = info
   negativeText.value = '取消'
   switch (info.resourceType) {
-    case 'bookSource': title.value = '安装书源'; message.value = `检测到 ${info.count} 个书源\n来自: ${info.url}\n是否安装？`; positiveText.value = '安装'; break
-    case 'rssSource': title.value = '安装订阅源'; message.value = `检测到 ${info.count} 个订阅源\n来自: ${info.url}\n是否安装？`; positiveText.value = '安装'; break
+    case 'bookSource': title.value = '安装书源'; message.value = `检测到 ${info.count || 0} 个书源\n来自: ${info.url}\n是否安装？`; positiveText.value = '安装'; break
+    case 'rssSource': title.value = '安装订阅源'; message.value = `检测到 ${info.count || 0} 个订阅源\n来自: ${info.url}\n是否安装？`; positiveText.value = '安装'; break
     case 'replaceRule': title.value = '导入替换规则'; message.value = `检测到替换规则\n来自: ${info.url}\n是否导入？`; positiveText.value = '导入'; break
     case 'txtTocRule': title.value = '导入目录规则'; message.value = `检测到 TXT 目录规则\n来自: ${info.url}\n是否导入？`; positiveText.value = '导入'; break
     case 'purifyRule': title.value = '导入净化规则'; message.value = `检测到净化规则\n来自: ${info.url}\n是否导入？`; positiveText.value = '导入'; break
-    default: title.value = '下载完成'; message.value = `未识别的资源类型\n来自: ${info.url}\n文件大小: ${info.fileSize} 字节`; positiveText.value = '知道了'; negativeText.value = ''; break
+    default: title.value = '下载完成'; message.value = `未识别的资源类型\n来自: ${info.url}\n文件大小: ${info.fileSize || 0} 字节`; positiveText.value = '知道了'; negativeText.value = ''; break
   }
   visible.value = true
 }
@@ -50,8 +74,9 @@ async function handleConfirm(): Promise<void> {
       const result = await executeDownloadImport({ url: pendingData.url, resourceType: pendingData.resourceType })
       msg.success(result)
     }
-  } catch (err: any) {
-    msg.error(err?.message || '操作失败')
+  } catch (err: unknown) {
+    const e = err as Error
+    msg.error(e?.message || '操作失败')
   }
   visible.value = false
 }
@@ -64,16 +89,18 @@ async function executeDownloadImportFromContent(info: { url: string; resourceTyp
     }
     case 'rssSource': {
       const { store } = await import('@/services/store.js')
-      const existingSources = (await store.get('rssSources')) || []
-      const data = JSON.parse(info.content)
+      const rawExisting = await store.get('rssSources')
+      const existingSources = asArray(rawExisting) as RssSourceLike[]
+      const data = JSON.parse(info.content) as unknown
       const items = Array.isArray(data) ? data : [data]
       let count = 0
-      const existing = new Set(existingSources.map((s: any) => s.sourceUrl))
-      const newItems: any[] = []
+      const existing = new Set(existingSources.map((s) => s.sourceUrl))
+      const newItems: RssSourceLike[] = []
       for (const item of items) {
-        if (item.sourceUrl && !existing.has(item.sourceUrl)) {
-          newItems.push(item)
-          existing.add(item.sourceUrl)
+        const obj = item as RssSourceLike
+        if (obj.sourceUrl && !existing.has(obj.sourceUrl)) {
+          newItems.push(obj)
+          existing.add(obj.sourceUrl)
           count++
         }
       }
@@ -85,27 +112,27 @@ async function executeDownloadImportFromContent(info: { url: string; resourceTyp
     }
     case 'replaceRule': {
       const { store } = await import('@/services/store.js')
-      const rules = JSON.parse(info.content)
-      const existing = (await store.get('replaceRule')) || []
-      const incoming = Array.isArray(rules) ? rules : [rules]
+      const data = JSON.parse(info.content) as unknown
+      const rawExisting = await store.get('replaceRule')
+      const existing = asArray(rawExisting) as ReplaceRuleLike[]
+      const incoming = Array.isArray(data) ? data : [data]
       let count = 0
-      const newRules: any[] = []
       for (const rule of incoming) {
-        if (!existing.find((r: any) => r.name === rule.name && r.pattern === rule.pattern)) {
-          newRules.push(rule)
+        const r = rule as ReplaceRuleLike
+        if (!existing.find((er) => er.name === r.name && er.pattern === r.pattern)) {
+          existing.push(r)
           count++
         }
       }
       if (count > 0) {
-        const merged = [...existing, ...newRules]
-        await store.set('replaceRule', merged)
+        await store.set('replaceRule', existing)
       }
       return `已导入 ${count} 条替换规则`
     }
     case 'txtTocRule': {
       const { store } = await import('@/services/store.js')
-      const rules = JSON.parse(info.content)
-      const items = Array.isArray(rules) ? rules : [rules]
+      const data = JSON.parse(info.content) as unknown
+      const items = Array.isArray(data) ? data : [data]
       await store.set('txtTocRule', items)
       return `已导入 ${items.length} 条目录规则`
     }

@@ -7,7 +7,16 @@ import { getExploreCategoriesAsync, getExploreBooks } from '@engine/business/exp
 import { fetchWithWebviewFallback } from '@/services/fetch.js'
 import type { ExploreKind } from '@engine/business/explore/index.js'
 import type { Book, BookSource } from '@/types'
+import type { EngineBookSource } from '@engine/types.js'
 import { useInfoMapStore } from '@/stores/info-map.js'
+
+function toEngineBookSource(source: BookSource): EngineBookSource {
+  return source as unknown as EngineBookSource
+}
+
+function toBook(engineBook: Record<string, unknown>): Book {
+  return engineBook as unknown as Book
+}
 
 export function useExplore() {
   const categories = ref<ExploreKind[]>([])
@@ -42,7 +51,8 @@ export function useExplore() {
       grid.parentNode?.appendChild(sentinel)
       currentSentinel = sentinel
       loadMoreObserver = new IntersectionObserver((entries) => {
-        if (entries[0].isIntersecting && !loadingBooks.value && hasMore.value && currentCategory.value) {
+        const first = entries[0]
+        if (first !== undefined && first.isIntersecting && !loadingBooks.value && hasMore.value && currentCategory.value) {
           loadBooks(source)
         }
       }, { rootMargin: '0px 0px 200px 0px' })
@@ -59,8 +69,8 @@ export function useExplore() {
     hasMore.value = true
 
     try {
-      const result = await getExploreCategoriesAsync(source)
-      if (result && Array.isArray(result)) {
+      const result = await getExploreCategoriesAsync(toEngineBookSource(source))
+      if (Array.isArray(result)) {
         categories.value = result
       }
     } catch {
@@ -99,7 +109,8 @@ export function useExplore() {
 
       let result: Book[] = []
       try {
-        result = await getExploreBooks(source, url, currentPage.value)
+        const engineBooks = await getExploreBooks(toEngineBookSource(source), url, currentPage.value)
+        result = engineBooks.map((b) => toBook(b as unknown as Record<string, unknown>))
       } catch {
         result = []
       }
@@ -113,9 +124,9 @@ export function useExplore() {
           timeout: 30000,
         })
         if (html && typeof html === 'string' && html.length > 1000) {
-          const htmlResult = await getExploreBooks(source, html, currentPage.value, undefined, true)
+          const htmlResult = await getExploreBooks(toEngineBookSource(source), html, currentPage.value, undefined, true)
           if (htmlResult && htmlResult.length > 0) {
-            result = htmlResult
+            result = htmlResult.map((b) => toBook(b as unknown as Record<string, unknown>))
           }
         }
       }
@@ -131,7 +142,7 @@ export function useExplore() {
         currentPage.value++
         if (newBooks.length < 10) hasMore.value = false
       }
-    } catch (err) {
+    } catch (err: unknown) {
       console.error('[useExplore] loadBooks error:', err)
       hasMore.value = false
     } finally {

@@ -7,8 +7,6 @@ use tokio::time::timeout;
 use std::time::Duration;
 use std::sync::{Arc, Mutex};
 
-const DEFAULT_UA: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
-
 #[tauri::command]
 #[allow(non_snake_case)]
 pub async fn fetch_webview(
@@ -68,7 +66,6 @@ pub async fn fetch_webview(
     let txc = tx_shared.clone();
 
     std::thread::spawn(move || {
-        // 轮询等待页面加载完成（500ms 间隔）
         let poll_interval = Duration::from_millis(500);
         let max_wait = Duration::from_secs(timeout_secs);
         let start = std::time::Instant::now();
@@ -76,9 +73,8 @@ pub async fn fetch_webview(
         while start.elapsed() < max_wait {
             std::thread::sleep(poll_interval);
 
-            let (tx_ready, rx_ready) = std::sync::mpsc::channel::<String>();
+            let (_tx_ready, rx_ready) = std::sync::mpsc::channel::<String>();
             let w_check = wf.clone();
-            let tx_ready_clone = tx_ready.clone();
             let w_check_for_thread = w_check.clone();
 
             let check_js = r#"(function(){try{var len=document.documentElement?document.documentElement.outerHTML.length:0;var cf=document.title?document.title.indexOf('Just a moment')!==-1:false;return JSON.stringify({len:len,cf:cf});}catch(e){return JSON.stringify({len:0,cf:true});}})()"#.to_string();
@@ -100,8 +96,6 @@ pub async fn fetch_webview(
                 }
             }
 
-            let _ = tx_ready_clone;
-
             if page_ready {
                 break;
             }
@@ -113,9 +107,10 @@ pub async fn fetch_webview(
             std::thread::sleep(Duration::from_millis(300));
             let w2 = w.clone();
             let _ = w.eval_with_callback("window.name || ''", move |r| {
-                let mut g = txc.lock().unwrap();
-                if let Some(s) = g.take() {
-                    let _ = s.send(r);
+                if let Ok(mut g) = txc.lock() {
+                    if let Some(s) = g.take() {
+                        let _ = s.send(r);
+                    }
                 }
                 let _ = w2.hide();
             });
@@ -148,7 +143,7 @@ pub async fn login_webview(
         .focused(true)
         .skip_taskbar(false)
         .title(&title.unwrap_or_else(|| "登录".into()))
-        .user_agent(DEFAULT_UA);
+        .user_agent(crate::utils::DEFAULT_UA);
 
     let window = builder
         .build()
@@ -157,9 +152,10 @@ pub async fn login_webview(
     let tx_clone = tx_shared.clone();
     let _id = window.listen("tauri://destroyed", move |_| {
         let cj = crate::js_runtime::ops::get_cookies_json();
-        let mut g = tx_clone.lock().unwrap();
-        if let Some(s) = g.take() {
-            let _ = s.send(cj);
+        if let Ok(mut g) = tx_clone.lock() {
+            if let Some(s) = g.take() {
+                let _ = s.send(cj);
+            }
         }
     });
 

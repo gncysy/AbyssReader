@@ -2,27 +2,29 @@
 // 通用工具函数
 // ============================================
 
-export function debounce<T extends (...args: any[]) => any>(
+type AnyFunction = (...args: unknown[]) => unknown
+
+export function debounce<T extends AnyFunction>(
   fn: T,
   delay: number,
 ): T & { cancel: () => void } {
   let timer: ReturnType<typeof setTimeout> | null = null
-  const debounced = (...args: any[]) => {
+  const debounced = (...args: Parameters<T>) => {
     if (timer) clearTimeout(timer)
     timer = setTimeout(() => fn(...args), delay)
   }
   debounced.cancel = () => {
     if (timer) { clearTimeout(timer); timer = null }
   }
-  return debounced as any
+  return debounced as T & { cancel: () => void }
 }
 
-export function throttle<T extends (...args: any[]) => any>(fn: T, interval: number): T {
+export function throttle<T extends AnyFunction>(fn: T, interval: number): T {
   let last = 0
-  return ((...args: any[]) => {
+  return ((...args: Parameters<T>) => {
     const now = Date.now()
     if (now - last >= interval) { last = now; fn(...args) }
-  }) as any
+  }) as T
 }
 
 export function formatBytes(bytes: number): string {

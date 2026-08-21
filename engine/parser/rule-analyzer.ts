@@ -13,6 +13,7 @@ export class RuleAnalyzer {
   private step = 0
   elementsType = ''
   private code: boolean
+  private isFirstSplitCall = true
 
   constructor(data: string, code = false) {
     this.queue = data
@@ -21,9 +22,14 @@ export class RuleAnalyzer {
 
   trim(): void {
     if (this.pos >= this.queue.length) return
-    if (this.queue[this.pos] === '@' || this.queue[this.pos] < '!') {
+    const ch = this.queue[this.pos]
+    if (ch !== undefined && (ch === '@' || ch < '!')) {
       this.pos++
-      while (this.pos < this.queue.length && (this.queue[this.pos] === '@' || this.queue[this.pos] < '!')) this.pos++
+      while (this.pos < this.queue.length) {
+        const c = this.queue[this.pos]
+        if (c !== undefined && (c === '@' || c < '!')) this.pos++
+        else break
+      }
       this.start = this.pos
       this.startX = this.pos
     }
@@ -32,6 +38,7 @@ export class RuleAnalyzer {
   reSetPos(): void {
     this.pos = 0
     this.startX = 0
+    this.isFirstSplitCall = true
   }
 
   private consumeTo(seq: string): boolean {
@@ -63,7 +70,8 @@ export class RuleAnalyzer {
     let pos = this.pos
     while (pos !== this.queue.length) {
       for (const s of seq) {
-        if (this.queue[pos] === s) return pos
+        const ch = this.queue[pos]
+        if (ch !== undefined && ch === s) return pos
       }
       pos++
     }
@@ -80,6 +88,7 @@ export class RuleAnalyzer {
     do {
       if (pos === this.queue.length) break
       const c = this.queue[pos++]
+      if (c === undefined) break
       if (c !== ESC) {
         if (c === "'" && !inDoubleQuote) inSingleQuote = !inSingleQuote
         else if (c === '"' && !inSingleQuote) inDoubleQuote = !inDoubleQuote
@@ -109,6 +118,7 @@ export class RuleAnalyzer {
     do {
       if (pos === this.queue.length) break
       const c = this.queue[pos++]
+      if (c === undefined) break
       if (c === "'" && !inDoubleQuote) inSingleQuote = !inSingleQuote
       else if (c === '"' && !inSingleQuote) inDoubleQuote = !inDoubleQuote
 
@@ -133,19 +143,22 @@ export class RuleAnalyzer {
       : (open: string, close: string) => this.chompRuleBalanced(open, close)
   }
 
-  /**
-   * 公开入口：splitRule("&&", "||", "%%")
-   * 或 splitRule("@")
-   */
   splitRule(...split: string[]): string[] {
-    this.rule = []
+    // 只在首次调用时重置规则列表和位置
+    if (this.isFirstSplitCall) {
+      this.rule = []
+      this.isFirstSplitCall = false
+      this.trim()
+    }
 
-    // DIFF-6 修复：拆之前先调用 trim()，跳过开头的空白和 @ 字符
-    this.trim()
+    if (this.queue.length === 0 || this.startX >= this.queue.length) {
+      return this.rule
+    }
 
-    // 单分隔符：直接进入二段匹配
     if (split.length === 1) {
-      this.elementsType = split[0]
+      const firstSplit = split[0]
+      if (firstSplit === undefined) return []
+      this.elementsType = firstSplit
       if (!this.consumeTo(this.elementsType)) {
         this.rule.push(this.queue.substring(this.startX))
         return this.rule
@@ -154,7 +167,6 @@ export class RuleAnalyzer {
       return this.splitRuleNext()
     }
 
-    // 多分隔符：先找到第一个分隔符
     if (!this.consumeToAny(...split)) {
       this.rule.push(this.queue.substring(this.startX))
       return this.rule
@@ -167,7 +179,8 @@ export class RuleAnalyzer {
       const st = this.findToAny('[', '(')
       if (st === -1) {
         this.rule = [this.queue.substring(this.startX, end)]
-        this.elementsType = this.queue.substring(end, end + this.step)
+        const et = this.queue.substring(end, end + this.step)
+        this.elementsType = et
         this.pos = end + this.step
         while (this.consumeTo(this.elementsType)) {
           this.rule.push(this.queue.substring(this.start, this.pos))
@@ -192,8 +205,10 @@ export class RuleAnalyzer {
         return this.rule
       }
       this.pos = st
-      const next = this.queue[this.pos] === '[' ? ']' : ')'
-      if (!this.chompBalanced(this.queue[this.pos], next)) {
+      const ch = this.queue[this.pos]
+      if (ch === undefined) break
+      const next = ch === '[' ? ']' : ')'
+      if (!this.chompBalanced(ch, next)) {
         throw new Error(this.queue.substring(0, this.start) + '后未平衡')
       }
     } while (end > this.pos)
@@ -202,9 +217,6 @@ export class RuleAnalyzer {
     return this.splitRule(...split)
   }
 
-  /**
-   * 二段匹配：elementsType 已确定，按 elementsType 继续切分
-   */
   private splitRuleNext(): string[] {
     const end = this.pos
     this.pos = this.start
@@ -236,8 +248,10 @@ export class RuleAnalyzer {
         return this.rule
       }
       this.pos = st
-      const next = this.queue[this.pos] === '[' ? ']' : ')'
-      if (!this.chompBalanced(this.queue[this.pos], next)) {
+      const ch = this.queue[this.pos]
+      if (ch === undefined) break
+      const next = ch === '[' ? ']' : ')'
+      if (!this.chompBalanced(ch, next)) {
         throw new Error(this.queue.substring(0, this.start) + '后未平衡')
       }
     } while (end > this.pos)

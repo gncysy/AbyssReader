@@ -14,17 +14,17 @@ import { useErrorHandler } from '@/composables/useErrorHandler.js'
 import type { Book, BookSource, Chapter } from '@/types'
 
 const COVER_SEARCH_CONCURRENCY = 5
+const SOURCE_VAR_KEY = 'sourceVariable'
+const BOOK_VAR_KEY = 'bookVariable'
 
 function safeString(val: unknown): string {
   if (val === null || val === undefined) return ''
   if (typeof val === 'string') return val
   if (typeof val === 'number' || typeof val === 'boolean') return String(val)
   if (typeof val === 'object') {
-    if (typeof (val as any).text === 'function') {
-      return String((val as any).text() || '')
-    }
-    if (typeof (val as any).toString === 'function' && (val as any).toString() !== '[object Object]') {
-      return (val as any).toString()
+    const obj = val as Record<string, unknown>
+    if (typeof obj.text === 'function') {
+      return String((obj.text as () => unknown)() || '')
     }
     try {
       return JSON.stringify(val)
@@ -33,6 +33,33 @@ function safeString(val: unknown): string {
     }
   }
   return String(val)
+}
+
+interface CoverOption {
+  coverUrl: string | null
+  label: string
+  sourceName: string
+  isCurrent: boolean
+  sourceIndex?: number
+}
+
+interface ChangeSourceItem {
+  bookUrl: string
+  name: string
+  author: string
+  coverUrl?: string | null
+  intro?: string | null
+  kind?: string | null
+  lastChapter?: string | null
+  wordCount?: string | null
+  tocUrl?: string | null
+  _sourceName: string
+  _sourceUrl: string
+  [key: string]: unknown
+}
+
+function isBookSourceArray(value: unknown): value is BookSource[] {
+  return Array.isArray(value)
 }
 
 export function useBookDetail(book: Book | null, source: BookSource | null) {
@@ -58,70 +85,40 @@ export function useBookDetail(book: Book | null, source: BookSource | null) {
 
   const showCoverPicker = ref(false)
   const coverPickerLoading = ref(false)
-  const coverOptions = ref<{ coverUrl: string | null; label: string; sourceName: string; isCurrent: boolean; sourceIndex?: number }[]>([])
+  const coverOptions = ref<CoverOption[]>([])
 
-  const needsLogin = computed(() => !!(source as any)?.loginUrl)
+  const needsLogin = computed(() => !!source?.loginUrl)
   const isInShelf = computed(() => bookshelfStore.hasBook(book?.bookUrl || ''))
 
   const mainCover = computed(() => {
-    if (loadedCover.value) {
-      const str = safeString(loadedCover.value)
-      if (str && !str.startsWith('[object') && str !== 'undefined' && str !== 'null') {
-        return str
-      }
-    }
-    if (book?.customCoverUrl) {
-      const str = safeString(book.customCoverUrl)
-      if (str && !str.startsWith('[object') && str !== 'undefined' && str !== 'null') {
-        return str
-      }
-    }
-    if (book?.coverUrl) {
-      const str = safeString(book.coverUrl)
-      if (str && !str.startsWith('[object') && str !== 'undefined' && str !== 'null') {
-        return str
-      }
-    }
+    const cover = safeString(loadedCover.value)
+    if (cover && cover !== 'undefined' && cover !== 'null') return cover
+    if (book?.customCoverUrl) return book.customCoverUrl
+    if (book?.coverUrl) return book.coverUrl
     return null
   })
 
   const fallbackCoverUrls = computed(() => {
     const urls: string[] = []
-    if (book?.coverUrl && mainCover.value !== book.coverUrl) {
-      const str = safeString(book.coverUrl)
-      if (str && !str.startsWith('[object') && str !== 'undefined' && str !== 'null') {
-        urls.push(str)
-      }
-    }
-    if (book?.customCoverUrl && mainCover.value !== book.customCoverUrl) {
-      const str = safeString(book.customCoverUrl)
-      if (str && !str.startsWith('[object') && str !== 'undefined' && str !== 'null') {
-        urls.push(str)
-      }
-    }
-    if (loadedCover.value && mainCover.value !== loadedCover.value) {
-      const str = safeString(loadedCover.value)
-      if (str && !str.startsWith('[object') && str !== 'undefined' && str !== 'null') {
-        urls.push(str)
-      }
-    }
+    if (book?.coverUrl && mainCover.value !== book.coverUrl) urls.push(book.coverUrl)
+    if (book?.customCoverUrl && mainCover.value !== book.customCoverUrl) urls.push(book.customCoverUrl)
+    const loaded = safeString(loadedCover.value)
+    if (loaded && mainCover.value !== loaded && loaded !== 'undefined' && loaded !== 'null') urls.push(loaded)
     return urls
   })
 
   const displayAuthor = computed(() => {
     const raw = book?.author || '未知作者'
     const str = safeString(raw)
-    if (str.startsWith('[object') || str === 'undefined' || str === 'null') return '未知作者'
+    if (str === 'undefined' || str === 'null') return '未知作者'
     return str.replace(/^\s*作\s*者[:：\s]+|\s+著$/g, '').trim() || '未知作者'
   })
 
   const displayIntro = computed(() => {
-    const intro = loadedIntro.value || book?.customIntro || book?.intro || null
+    const intro = safeString(loadedIntro.value) || book?.customIntro || book?.intro || null
     if (!intro) return '暂无简介'
     const str = safeString(intro)
-    if (str.startsWith('[object') || str === 'undefined' || str === 'null' || !str.trim()) {
-      return '暂无简介'
-    }
+    if (str === 'undefined' || str === 'null' || !str.trim()) return '暂无简介'
     return str
   })
 
@@ -143,30 +140,6 @@ export function useBookDetail(book: Book | null, source: BookSource | null) {
       .join('<br>')
   })
 
-  const safeKind = computed(() => {
-    const raw = loadedKind.value
-    if (!raw) return null
-    const str = safeString(raw)
-    if (str.startsWith('[object') || str === 'undefined' || str === 'null' || !str.trim()) return null
-    return str
-  })
-
-  const safeWordCount = computed(() => {
-    const raw = loadedWordCount.value
-    if (!raw) return null
-    const str = safeString(raw)
-    if (str.startsWith('[object') || str === 'undefined' || str === 'null' || !str.trim()) return null
-    return str
-  })
-
-  const safeLastChapter = computed(() => {
-    const raw = loadedLastChapter.value
-    if (!raw) return null
-    const str = safeString(raw)
-    if (str.startsWith('[object') || str === 'undefined' || str === 'null' || !str.trim()) return null
-    return str
-  })
-
   async function loadReadingProgress(): Promise<void> {
     if (!book) return
     try {
@@ -182,22 +155,16 @@ export function useBookDetail(book: Book | null, source: BookSource | null) {
 
   async function init(): Promise<void> {
     if (!book || !source) return
-
     loadingToc.value = true
 
     try {
       await Promise.all([loadBookInfo(book, source), loadReadingProgress()])
-
       await loadTocSmart(source, book.tocUrl || book.bookUrl, book)
 
-      if (lastChapterId.value && chapters.value.length > 0) {
+      if (lastChapterId.value !== null && chapters.value.length > 0) {
         const idx = chapters.value.findIndex((c) => c.id === lastChapterId.value)
         if (idx !== -1) {
           currentChapterId.value = lastChapterId.value
-          setTimeout(() => {
-            const el = document.querySelector('.chapter-item.active')
-            if (el) el.scrollIntoView({ block: 'center' })
-          }, 100)
         }
       }
     } catch (err) {
@@ -205,7 +172,6 @@ export function useBookDetail(book: Book | null, source: BookSource | null) {
       const result = handleAndNotify(err, {
         module: 'bookshelf',
         operation: 'initBookDetail',
-        sourceUrl: source?.bookSourceUrl,
         userMessage: '加载书籍详情失败',
       })
       if (result.shouldShowUser) msg.warning(result.message)
@@ -216,7 +182,11 @@ export function useBookDetail(book: Book | null, source: BookSource | null) {
     if (!book) return
     currentChapterId.value = ch.id
     bookshelfStore.closeDetail()
-    bookshelfStore.openReader({ ...book, _forceChapterIndex: chapters.value.findIndex((c) => c.id === ch.id) }, source, chapters.value)
+    bookshelfStore.openReader(
+      { ...book, _forceChapterIndex: chapters.value.findIndex((c) => c.id === ch.id) },
+      source,
+      chapters.value
+    )
   }
 
   async function handleRead(): Promise<void> {
@@ -237,19 +207,26 @@ export function useBookDetail(book: Book | null, source: BookSource | null) {
       msg.info('已在书架中')
       return
     }
-    const bookToSave = { ...book!, kind: safeKind.value || book?.kind }
-    if (await bookshelfStore.addBook({
+    if (!book) return
+    const kind = safeString(loadedKind.value)
+    const bookToSave: Book = {
+      ...book,
+      kind: kind || book.kind || null,
+    }
+    const added = await bookshelfStore.addBook({
       ...bookToSave,
       origin: source?.bookSourceUrl || '',
-      originName: source?.bookSourceName || source?.name || ''
-    })) {
-      msg.success('已添加《' + book!.name + '》')
+      originName: source?.bookSourceName || '',
+    })
+    if (added) {
+      msg.success('已添加《' + book.name + '》')
     }
   }
 
   async function handleRemoveFromShelf(): Promise<void> {
     showRemoveConfirm.value = false
-    await bookshelfStore.removeBookByUrl(book!.bookUrl)
+    if (!book) return
+    await bookshelfStore.removeBookByUrl(book.bookUrl)
     msg.success('已移出')
   }
 
@@ -262,19 +239,20 @@ export function useBookDetail(book: Book | null, source: BookSource | null) {
     if (book) await searchForChange(book.name)
   }
 
-  async function handleConfirmChangeSource(item: any): Promise<void> {
-    const newValues = {
+  async function handleConfirmChangeSource(item: ChangeSourceItem): Promise<void> {
+    if (!book) return
+    const newValues: Partial<Book> = {
       bookUrl: item.bookUrl,
       tocUrl: item.tocUrl || item.bookUrl,
-      coverUrl: safeString(item.coverUrl) || null,
-      intro: safeString(item.intro) || null,
-      kind: safeString(item.kind) || null,
-      lastChapter: safeString(item.lastChapter) || null,
-      wordCount: safeString(item.wordCount) || null,
+      coverUrl: item.coverUrl || null,
+      intro: item.intro || null,
+      kind: item.kind || null,
+      lastChapter: item.lastChapter || null,
       origin: item._sourceUrl || '',
-      originName: item._sourceName || ''
+      originName: item._sourceName || '',
     }
-    await bookshelfStore.updateBook(book!.bookUrl, newValues)
+    if (item.wordCount) newValues.wordCount = item.wordCount
+    await bookshelfStore.updateBook(book.bookUrl, newValues)
     closeChangeSource()
     chapters.value = []
     await init()
@@ -282,7 +260,8 @@ export function useBookDetail(book: Book | null, source: BookSource | null) {
   }
 
   function handleSearchKind(): void {
-    if (safeKind.value) router.push({ name: 'search', query: { keyword: safeKind.value } })
+    const kind = safeString(loadedKind.value)
+    if (kind) router.push({ name: 'search', query: { keyword: kind } })
   }
 
   function toggleMoreMenu(): void {
@@ -292,17 +271,19 @@ export function useBookDetail(book: Book | null, source: BookSource | null) {
   async function handleLoginFromMenu(): Promise<void> {
     showMoreMenu.value = false
     if (!source) return
-    const src = source as any
-    if (src.loginUrl) {
+    const src = source as unknown as Record<string, unknown>
+    const loginUrl = typeof src.loginUrl === 'string' ? src.loginUrl : ''
+    if (loginUrl) {
       try {
         const { loginWebview } = await import('@/services/network.js')
-        await loginWebview(src.bookSourceUrl || src.loginUrl || '', src.bookSourceName || '登录', 300)
+        await loginWebview(source.bookSourceUrl || loginUrl || '', source.bookSourceName || '登录', 300)
         msg.success('登录成功')
         isLoggedIn.value = true
         chapters.value = []
         await init()
-      } catch (err: any) {
-        msg.error('登录失败: ' + (err?.message || String(err)))
+      } catch (err: unknown) {
+        const msgStr = err instanceof Error ? err.message : String(err)
+        msg.error('登录失败: ' + msgStr)
       }
     }
   }
@@ -332,8 +313,8 @@ export function useBookDetail(book: Book | null, source: BookSource | null) {
     const value = sourceVarInput.value.trim()
     try {
       const safeValue = JSON.stringify(value)
-      await engine.executeJs(`java.put("custom", ${safeValue})`, {
-        source: source,
+      await engine.executeJs(`java.put(${JSON.stringify(SOURCE_VAR_KEY)}, ${safeValue})`, {
+        source,
         baseUrl: source.bookSourceUrl || '',
         book: book || {},
         result: value,
@@ -342,8 +323,9 @@ export function useBookDetail(book: Book | null, source: BookSource | null) {
       msg.success('源变量已保存')
       chapters.value = []
       await init()
-    } catch (err: any) {
-      msg.error('保存失败: ' + err.message)
+    } catch (err: unknown) {
+      const msgStr = err instanceof Error ? err.message : String(err)
+      msg.error('保存失败: ' + msgStr)
     }
   }
 
@@ -352,8 +334,8 @@ export function useBookDetail(book: Book | null, source: BookSource | null) {
     const value = bookVarInput.value.trim()
     try {
       const safeValue = JSON.stringify(value)
-      await engine.executeJs(`java.put("custom", ${safeValue})`, {
-        source: source,
+      await engine.executeJs(`java.put(${JSON.stringify(BOOK_VAR_KEY)}, ${safeValue})`, {
+        source,
         baseUrl: source.bookSourceUrl || '',
         book: book || {},
         result: value,
@@ -362,8 +344,9 @@ export function useBookDetail(book: Book | null, source: BookSource | null) {
       msg.success('书籍变量已保存')
       chapters.value = []
       await init()
-    } catch (err: any) {
-      msg.error('保存失败: ' + err.message)
+    } catch (err: unknown) {
+      const msgStr = err instanceof Error ? err.message : String(err)
+      msg.error('保存失败: ' + msgStr)
     }
   }
 
@@ -373,13 +356,23 @@ export function useBookDetail(book: Book | null, source: BookSource | null) {
     coverPickerLoading.value = true
     coverOptions.value = []
 
-    try {
-      const allSources: any[] = (await store.get('bookSource')) || []
-      const enabledSources = allSources.filter((s: any) => s.enabled !== false)
-      const bookName = book.name
+    const currentCover = book?.customCoverUrl || book?.coverUrl || null
 
-      const results: { sourceName: string; coverUrl: string | null; sourceIndex: number }[] = []
-      results.push({ sourceName: '默认封面', coverUrl: null, sourceIndex: -1 })
+    // 先显示"默认封面"选项，不阻塞 UI
+    coverOptions.value = [{
+      coverUrl: null,
+      label: '默认封面',
+      sourceName: '默认封面',
+      sourceIndex: -1,
+      isCurrent: currentCover === null,
+    }]
+    coverPickerLoading.value = false
+
+    try {
+      const rawSources = await store.get('bookSource')
+      const allSources = isBookSourceArray(rawSources) ? rawSources : []
+      const enabledSources = allSources.filter((s) => s.enabled !== false && s.bookSourceType !== 2)
+      const bookName = book.name
 
       const queue = [...enabledSources]
       const workerCount = Math.min(COVER_SEARCH_CONCURRENCY, queue.length)
@@ -390,15 +383,24 @@ export function useBookDetail(book: Book | null, source: BookSource | null) {
           if (!sourceItem) break
           try {
             const { search } = await import('@/services/search.js')
-            const books = await search(sourceItem, bookName, { page: 1 })
-            if (books && books.length > 0) {
-              const found = books.find((b: any) => b.name === bookName)
+            const searchBooks = await search(sourceItem, bookName, { page: 1 })
+            if (searchBooks.length > 0) {
+              const found = searchBooks.find((b) => b.name === bookName)
               if (found && found.coverUrl) {
-                results.push({
-                  sourceName: sourceItem.bookSourceName || sourceItem.name || '未知书源',
-                  coverUrl: safeString(found.coverUrl) || null,
+                const newOption: CoverOption = {
+                  coverUrl: found.coverUrl,
+                  label: sourceItem.bookSourceName || '未知书源',
+                  sourceName: sourceItem.bookSourceName || '未知书源',
                   sourceIndex: enabledSources.indexOf(sourceItem),
-                })
+                  isCurrent: found.coverUrl === currentCover,
+                }
+                // 流式更新：每找到一个封面就立即添加到列表
+                const existingIdx = coverOptions.value.findIndex(
+                  (o) => o.coverUrl === found.coverUrl && o.sourceName === newOption.sourceName
+                )
+                if (existingIdx === -1) {
+                  coverOptions.value = [...coverOptions.value, newOption]
+                }
               }
             }
           } catch {
@@ -407,35 +409,18 @@ export function useBookDetail(book: Book | null, source: BookSource | null) {
         }
       }
 
-      const workers = []
+      const workers: Promise<void>[] = []
       for (let i = 0; i < workerCount; i++) workers.push(worker())
       await Promise.all(workers)
-
-      const seen = new Set<string>()
-      const uniqueResults = results.filter((item) => {
-        const key = item.coverUrl || '__default__'
-        if (seen.has(key)) return false
-        seen.add(key)
-        return true
-      })
-
-      const currentCover = book?.customCoverUrl || book?.coverUrl
-
-      coverOptions.value = uniqueResults.map((item) => ({
-        coverUrl: item.coverUrl,
-        label: item.sourceName,
-        sourceName: item.sourceName,
-        sourceIndex: item.sourceIndex,
-        isCurrent: item.coverUrl === currentCover || (item.coverUrl === null && currentCover === null),
-      }))
-    } catch (err) {
-      msg.error('加载封面失败: ' + (err?.message || String(err)))
+    } catch (err: unknown) {
+      const msgStr = err instanceof Error ? err.message : String(err)
+      msg.error('加载封面失败: ' + msgStr)
     } finally {
       coverPickerLoading.value = false
     }
   }
 
-  async function selectCover(item: { coverUrl: string | null; label: string; sourceName: string; isCurrent: boolean }): Promise<void> {
+  async function selectCover(item: CoverOption): Promise<void> {
     if (!book) return
     if (item.isCurrent) {
       showCoverPicker.value = false
@@ -443,9 +428,11 @@ export function useBookDetail(book: Book | null, source: BookSource | null) {
     }
 
     try {
-      await bookshelfStore.updateBook(book.bookUrl, {
-        customCoverUrl: item.coverUrl,
-      })
+      const updateFields: Partial<Book> = {}
+      if (item.coverUrl !== null && item.coverUrl !== undefined) {
+        updateFields.customCoverUrl = item.coverUrl
+      }
+      await bookshelfStore.updateBook(book.bookUrl, updateFields)
       book.customCoverUrl = item.coverUrl || undefined
       coverOptions.value = coverOptions.value.map((opt) => ({
         ...opt,
@@ -453,8 +440,9 @@ export function useBookDetail(book: Book | null, source: BookSource | null) {
       }))
       msg.success('封面已更换')
       await init()
-    } catch (err) {
-      msg.error('更换封面失败: ' + (err?.message || String(err)))
+    } catch (err: unknown) {
+      const msgStr = err instanceof Error ? err.message : String(err)
+      msg.error('更换封面失败: ' + msgStr)
     }
   }
 
@@ -504,9 +492,9 @@ export function useBookDetail(book: Book | null, source: BookSource | null) {
     displayAuthor,
     displayIntro,
     fullIntroHtml,
-    loadedKind: safeKind,
-    loadedWordCount: safeWordCount,
-    loadedLastChapter: safeLastChapter,
+    loadedKind: computed(() => safeString(loadedKind.value) || null),
+    loadedWordCount: computed(() => safeString(loadedWordCount.value) || null),
+    loadedLastChapter: computed(() => safeString(loadedLastChapter.value) || null),
     loadedIntro,
     chapters,
     loadingToc,

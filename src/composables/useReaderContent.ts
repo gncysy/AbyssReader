@@ -15,22 +15,26 @@ import { engine } from '@/services/engine.js'
 import type { Book, BookSource, Chapter } from '@/types'
 import type TocPopup from '@/components/reader/TocPopup.vue'
 import type ReaderSettings from '@/components/reader/ReaderSettings.vue'
-import type { ContextMenu } from '@/components/common/ContextMenu/index.js'
 
 const SELECTION_DELAY_MS = 300
 
-export function useReaderContent(book: Book | null, source: BookSource | null, initialChapters?: Chapter[]) {
+interface ReaderContextMenuLike {
+  open: (items: unknown[], x: number, y: number) => void
+  close: () => void
+}
+
+export function useReaderContent(book: Book | null, source: BookSource | null, _initialChapters?: Chapter[]) {
   const readerStore = useReaderStore()
   const bookshelfStore = useBookshelfStore()
   const replaceRuleStore = useReplaceRuleStore()
 
-  const { content, loadingContent, chapterIndex, chapters, isComic, comicImages, scrollPercent, currentChapter, loadChaptersForBook, loadContent, startPreload, prevChapter: prevCh, nextChapter: nextCh, chineseConvert } = useChapterContent()
+  const { content, loadingContent, chapterIndex, chapters, isComic, comicImages, scrollPercent, currentChapter, loadChaptersForBook, loadContent, startPreload, prevChapter: prevCh, nextChapter: nextCh } = useChapterContent()
   const { dictVisible, dictRules, dictActiveTab, dictLoading, dictContents, openDictPanel, switchDictTab } = useDict()
-  const { showControls, lineHeight, clearHideTimer, resetHideTimer, toggleControls, saveProgress, markChapterRead } = useReader(book?.bookUrl || '', book?.name || '', book?.author || '')
+  const { showControls, lineHeight, clearHideTimer, resetHideTimer, toggleControls, saveProgress, markChapterRead, dispose } = useReader(book?.bookUrl || '', book?.name || '', book?.author || '')
 
   const tocPopupRef = ref<InstanceType<typeof TocPopup> | null>(null)
   const settingsRef = ref<InstanceType<typeof ReaderSettings> | null>(null)
-  const readerCtxRef = ref<InstanceType<typeof ContextMenu> | null>(null)
+  const readerCtxRef = ref<ReaderContextMenuLike | null>(null)
   const contentRef = ref<HTMLElement | null>(null)
 
   const isSelecting = ref(false)
@@ -45,10 +49,9 @@ export function useReaderContent(book: Book | null, source: BookSource | null, i
     return found || book
   })
 
-  // 修复：purifyEnabled 跟随 readConfig.useReplaceRule
   const purifyEnabled = computed(() => {
     const cfg = currentBook.value?.readConfig
-    if (cfg?.useReplaceRule !== undefined && cfg?.useReplaceRule !== null) {
+    if (cfg && cfg.useReplaceRule !== undefined && cfg.useReplaceRule !== null) {
       return cfg.useReplaceRule
     }
     return true
@@ -56,13 +59,13 @@ export function useReaderContent(book: Book | null, source: BookSource | null, i
 
   const effectiveTheme = computed(() => {
     const cfg = currentBook.value?.readConfig
-    if (cfg?._useGlobal === false && cfg._theme) return cfg._theme
+    if (cfg && cfg._useGlobal === false && typeof cfg._theme === 'string') return cfg._theme
     return readerStore.readerTheme
   })
 
   const effectiveFontSize = computed(() => {
     const cfg = currentBook.value?.readConfig
-    if (cfg?._useGlobal === false && cfg._fontSize) return cfg._fontSize
+    if (cfg && cfg._useGlobal === false && typeof cfg._fontSize === 'number') return cfg._fontSize
     return readerStore.fontSize
   })
 
@@ -70,7 +73,7 @@ export function useReaderContent(book: Book | null, source: BookSource | null, i
 
   const effectiveReSegment = computed(() => {
     const cfg = currentBook.value?.readConfig
-    if (cfg?._useGlobal === false && cfg.reSegment !== undefined) return cfg.reSegment
+    if (cfg && cfg._useGlobal === false && typeof cfg.reSegment === 'boolean') return cfg.reSegment
     return readerStore.reSegment
   })
 
@@ -95,7 +98,6 @@ export function useReaderContent(book: Book | null, source: BookSource | null, i
     if (isComic.value) return
 
     let processed = rawTextContent.value
-
     if (readerStore.chineseConverterType !== 0) {
       processed = await convertText(processed)
     }
@@ -232,6 +234,8 @@ export function useReaderContent(book: Book | null, source: BookSource | null, i
 
   async function handleClose(): Promise<void> {
     await saveProgress(currentChapter.value?.id ?? 0, scrollPercent.value, currentChapter.value?.title || '')
+    // 立即 flush pending 的进度保存
+    dispose()
     clearSelectionState()
     readerCtxRef.value?.close()
   }
@@ -270,6 +274,6 @@ export function useReaderContent(book: Book | null, source: BookSource | null, i
     prevChapter, nextChapter, retryComicImage, handleClose, handleKeydown,
     openToc, openSettings, onTocSelect, handleContentClick, handleScroll, handleTextSelect,
     copySelectionFromCtx, openDictFromCtx, switchDictTab,
-    clearHideTimer, resetHideTimer, purifyEnabled,
+    clearHideTimer, resetHideTimer, purifyEnabled, dispose,
   }
 }

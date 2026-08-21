@@ -3,7 +3,7 @@
 // ============================================
 
 import { getString, getStringList, resolveUrl } from '../../index.js'
-import type { EngineBook, EngineBookSource } from '../../types.js'
+import type { EngineBook, EngineBookSource, ParseContext } from '../../types.js'
 
 const NAME_MAX_LENGTH = 100
 const MAX_TAG_COUNT = 3
@@ -11,6 +11,16 @@ const INTRO_MAX_LENGTH = 500
 const NAME_REGEX = /\s+作\s*者.*|\s+\S+\s+著/
 const AUTHOR_REGEX = /^\s*作\s*者[:：\s]+|\s+著/
 const WORD_COUNT_THRESHOLD = 10000
+
+function getRuleString(rule: Record<string, unknown> | null | undefined, key: string): string {
+  if (!rule) return ''
+  const val = rule[key]
+  return typeof val === 'string' ? val : ''
+}
+
+function isHtmlContent(str: string): boolean {
+  return str.startsWith('<') && str.includes('>') && str.length > 100
+}
 
 function extractString(val: unknown, preferAttribute = false): string {
   if (val === null || val === undefined) return ''
@@ -25,40 +35,37 @@ function extractString(val: unknown, preferAttribute = false): string {
     return ''
   }
   if (typeof val === 'object') {
-    const obj = val as Record<string, any>
+    const obj = val as Record<string, unknown>
 
-    if (obj.getAttribute && typeof obj.getAttribute === 'function') {
-      const src = obj.getAttribute('src')
-      if (src && typeof src === 'string' && src.trim()) return src.trim()
-      const href = obj.getAttribute('href')
-      if (href && typeof href === 'string' && href.trim()) return href.trim()
-      const alt = obj.getAttribute('alt')
-      if (alt && typeof alt === 'string' && alt.trim()) return alt.trim()
-      const title = obj.getAttribute('title')
-      if (title && typeof title === 'string' && title.trim()) return title.trim()
+    if (typeof obj.getAttribute === 'function') {
+      const getAttr = obj.getAttribute as (name: string) => string | null
+      const src = getAttr('src')
+      if (src && src.trim()) return src.trim()
+      const href = getAttr('href')
+      if (href && href.trim()) return href.trim()
+      const alt = getAttr('alt')
+      if (alt && alt.trim()) return alt.trim()
+      const title = getAttr('title')
+      if (title && title.trim()) return title.trim()
 
       if (preferAttribute) return ''
     }
 
-    if (obj.src && typeof obj.src === 'string' && obj.src.trim()) return obj.src.trim()
-    if (obj.href && typeof obj.href === 'string' && obj.href.trim()) return obj.href.trim()
-    if (obj.alt && typeof obj.alt === 'string' && obj.alt.trim()) return obj.alt.trim()
-    if (obj.title && typeof obj.title === 'string' && obj.title.trim()) return obj.title.trim()
+    if (typeof obj.src === 'string' && obj.src.trim()) return obj.src.trim()
+    if (typeof obj.href === 'string' && obj.href.trim()) return obj.href.trim()
+    if (typeof obj.alt === 'string' && obj.alt.trim()) return obj.alt.trim()
+    if (typeof obj.title === 'string' && obj.title.trim()) return obj.title.trim()
 
-    if (obj.text && typeof obj.text === 'function') {
-      const text = obj.text()
-      if (text && typeof text === 'string') return text
+    if (typeof obj.text === 'function') {
+      const text = (obj.text as () => unknown)()
+      if (typeof text === 'string') return text
     }
-    if (obj.textContent && typeof obj.textContent === 'string') return obj.textContent.trim()
-    if (obj.innerText && typeof obj.innerText === 'string') return obj.innerText.trim()
-    if (obj.outerHTML && typeof obj.outerHTML === 'string') return obj.outerHTML.trim()
-    if (obj.html && typeof obj.html === 'function') {
-      const html = obj.html()
-      if (html && typeof html === 'string') return html
-    }
-    if (typeof obj.toString === 'function') {
-      const str = obj.toString()
-      if (str !== '[object Object]' && str !== '[object Array]') return str
+    if (typeof obj.textContent === 'string') return obj.textContent.trim()
+    if (typeof obj.innerText === 'string') return obj.innerText.trim()
+    if (typeof obj.outerHTML === 'string') return obj.outerHTML.trim()
+    if (typeof obj.html === 'function') {
+      const html = (obj.html as () => unknown)()
+      if (typeof html === 'string') return html
     }
     return ''
   }
@@ -110,7 +117,7 @@ export function matchesBookUrlPattern(url: string, pattern: string | null | unde
 }
 
 export async function parseSearchItem(
-  item: any,
+  item: unknown,
   source: EngineBookSource,
   baseUrl: string,
   ruleName: string,
@@ -126,23 +133,26 @@ export async function parseSearchItem(
   filter?: ((name: string, author: string, kind: string | null) => boolean) | null,
 ): Promise<EngineBook | null> {
   const bookPlaceholder: Partial<EngineBook> = {}
-  const itemCtx = { source, baseUrl, result: item, book: bookPlaceholder, key, page }
+  const itemCtx: ParseContext = { source, baseUrl, result: item, book: bookPlaceholder, key, page }
 
-  const rawName = await getString(item, ruleName, itemCtx)
+  // 修复：规则为空时使用空字符串，不调用 getString 避免回退到整个 HTML
+  const rawName = ruleName ? await getString(item, ruleName, itemCtx) : ''
   const nameRawStr = extractString(rawName)
   const name = formatBookName(nameRawStr)
   if (!name || !isValidBookName(name)) return null
 
-  const rawAuthor = await getString(item, ruleAuthor, itemCtx)
+  const rawAuthor = ruleAuthor ? await getString(item, ruleAuthor, itemCtx) : ''
   const authorRawStr = extractString(rawAuthor)
   const author = formatBookAuthor(authorRawStr) || '未知作者'
 
   let kind: string | null = null
   try {
-    const kindList = await getStringList(item, ruleKind, itemCtx)
-    if (kindList && kindList.length > 0) {
-      kind = kindList.join(',')
-      bookPlaceholder.kind = kind
+    if (ruleKind) {
+      const kindList = await getStringList(item, ruleKind, itemCtx)
+      if (kindList && kindList.length > 0) {
+        kind = kindList.join(',')
+        bookPlaceholder.kind = kind
+      }
     }
   } catch {
     // ignore
@@ -152,18 +162,22 @@ export async function parseSearchItem(
 
   let wordCount: string | null = null
   try {
-    const wc = await getString(item, ruleWordCount, itemCtx)
-    const wcStr = extractString(wc)
-    if (wcStr) wordCount = formatWordCount(wcStr)
+    if (ruleWordCount) {
+      const wc = await getString(item, ruleWordCount, itemCtx)
+      const wcStr = extractString(wc)
+      if (wcStr && !isHtmlContent(wcStr)) wordCount = formatWordCount(wcStr)
+    }
   } catch {
     // ignore
   }
 
   let lastChapter: string | null = null
   try {
-    const raw = await getString(item, ruleLastChapter, itemCtx)
-    const str = extractString(raw)
-    if (str) lastChapter = str
+    if (ruleLastChapter) {
+      const raw = await getString(item, ruleLastChapter, itemCtx)
+      const str = extractString(raw)
+      if (str && !isHtmlContent(str)) lastChapter = str
+    }
   } catch {
     // ignore
   }
@@ -173,7 +187,7 @@ export async function parseSearchItem(
     if (ruleIntro) {
       const rawIntro = await getString(item, ruleIntro, itemCtx)
       const introStr = extractString(rawIntro)
-      if (introStr) {
+      if (introStr && !isHtmlContent(introStr)) {
         intro = cleanIntro(introStr)
       }
     }
@@ -183,19 +197,26 @@ export async function parseSearchItem(
 
   let coverUrl: string | null = null
   try {
-    const rawCover = await getString(item, ruleCoverUrl, itemCtx)
-    const coverStr = extractString(rawCover, true)
-    if (coverStr) {
-      coverUrl = resolveUrl(coverStr, baseUrl)
+    if (ruleCoverUrl) {
+      const rawCover = await getString(item, ruleCoverUrl, itemCtx)
+      const coverStr = extractString(rawCover, true)
+      if (coverStr && !isHtmlContent(coverStr)) {
+        coverUrl = resolveUrl(coverStr, baseUrl)
+      }
     }
   } catch {
     // ignore
   }
 
-  const bookUrlStr = await getString(item, ruleBookUrl, itemCtx)
-  let bookUrlRaw = extractString(bookUrlStr, true)
+  let bookUrlRaw = ''
+  if (ruleBookUrl) {
+    const bookUrlStr = await getString(item, ruleBookUrl, itemCtx)
+    bookUrlRaw = extractString(bookUrlStr, true)
+  }
   const urlParts = bookUrlRaw.split(/[\n\r\t ]+/).filter(Boolean)
-  bookUrlRaw = urlParts.length > 0 ? urlParts[0] : bookUrlRaw
+  if (urlParts.length > 0 && urlParts[0]) {
+    bookUrlRaw = urlParts[0]
+  }
   const resolvedBookUrl = bookUrlRaw ? resolveUrl(bookUrlRaw, baseUrl) : baseUrl
 
   return {
@@ -218,37 +239,55 @@ export async function parseInfoItem(
   page: number,
   filter?: ((name: string, author: string, kind: string | null) => boolean) | null,
 ): Promise<EngineBook | null> {
-  const rule = source.ruleBookInfo
+  const rule = source.ruleBookInfo as Record<string, unknown> | null
   if (!rule) return null
 
-  const ctx = { source, baseUrl, result: body, book: {}, key, page }
+  const ctx: ParseContext = { source, baseUrl, result: body, book: {}, key, page }
 
-  const rawName = await getString(body, rule.name || '', ctx)
+  const nameRule = getRuleString(rule, 'name')
+  const rawName = nameRule ? await getString(body, nameRule, ctx) : ''
   const nameRawStr = extractString(rawName)
   const name = formatBookName(nameRawStr)
   if (!name || !isValidBookName(name)) return null
 
   if (filter && filter(name, '', null) === false) return null
 
-  const rawAuthor = await getString(body, rule.author || '', ctx)
+  const authorRule = getRuleString(rule, 'author')
+  const rawAuthor = authorRule ? await getString(body, authorRule, ctx) : ''
   const authorRawStr = extractString(rawAuthor)
   const author = formatBookAuthor(authorRawStr) || '未知作者'
 
-  const rawCover = await getString(body, rule.coverUrl || '', ctx)
-  const coverStr = extractString(rawCover, true)
-  const coverUrl = coverStr ? resolveUrl(String(coverStr), baseUrl) : null
+  const coverRule = getRuleString(rule, 'coverUrl')
+  let coverUrl: string | null = null
+  if (coverRule) {
+    const rawCover = await getString(body, coverRule, ctx)
+    const coverStr = extractString(rawCover, true)
+    if (coverStr && !isHtmlContent(coverStr)) coverUrl = resolveUrl(String(coverStr), baseUrl)
+  }
 
-  const rawIntro = await getString(body, rule.intro || '', ctx)
-  const introStr = extractString(rawIntro)
-  const intro = introStr ? cleanIntro(introStr) : null
+  const introRule = getRuleString(rule, 'intro')
+  let intro: string | null = null
+  if (introRule) {
+    const rawIntro = await getString(body, introRule, ctx)
+    const introStr = extractString(rawIntro)
+    if (introStr && !isHtmlContent(introStr)) intro = cleanIntro(introStr)
+  }
 
-  const rawKind = await getString(body, rule.kind || '', ctx)
-  const kindStr = extractString(rawKind)
-  const kind = kindStr || null
+  const kindRule = getRuleString(rule, 'kind')
+  let kind: string | null = null
+  if (kindRule) {
+    const rawKind = await getString(body, kindRule, ctx)
+    const kindStr = extractString(rawKind)
+    if (kindStr && !isHtmlContent(kindStr)) kind = kindStr
+  }
 
-  const rawLastChapter = await getString(body, rule.lastChapter || '', ctx)
-  const lastChapterStr = extractString(rawLastChapter)
-  const lastChapter = lastChapterStr || null
+  const lastChapterRule = getRuleString(rule, 'lastChapter')
+  let lastChapter: string | null = null
+  if (lastChapterRule) {
+    const rawLastChapter = await getString(body, lastChapterRule, ctx)
+    const lastChapterStr = extractString(rawLastChapter)
+    if (lastChapterStr && !isHtmlContent(lastChapterStr)) lastChapter = lastChapterStr
+  }
 
   return {
     name,

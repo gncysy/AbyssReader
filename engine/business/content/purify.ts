@@ -2,7 +2,7 @@
 // 段落重排 & 净化 — 对齐 Legado ContentHelp
 // ============================================
 
-import type { EngineBookSource } from '../../types.js'
+import { getCachedRegex } from '../../utils/regex-cache.js'
 
 interface ReplaceRule {
   id?: number
@@ -14,7 +14,8 @@ interface ReplaceRule {
   scopeTitle?: boolean
   scopeContent?: boolean
   timeoutMillisecond?: number
-  order?: number; [key: string]: any
+  order?: number
+  [key: string]: unknown
 }
 
 const MARK_SENTENCES_END = '？。！?!~'
@@ -32,6 +33,19 @@ const FORCE_SPLIT_QUOTE_GAIN = 4
 const FORCE_SPLIT_QUOTE_MIN = 2
 const FORCE_SPLIT_QUOTE_TRIGGER = 4
 const REPLACE_TIMEOUT_DEFAULT = 5000
+
+function sAt(str: string, index: number): string {
+  if (index < 0 || index >= str.length) return ''
+  return str[index] || ''
+}
+
+function nAt(arr: number[], index: number): number {
+  return arr[index] || 0
+}
+
+function strAt(arr: string[], index: number): string {
+  return arr[index] || ''
+}
 
 function match(rule: string, chr: string): boolean {
   return rule.indexOf(chr) !== -1
@@ -59,7 +73,7 @@ function seekLast(str: string, key: string, from: number, to: number): number {
   let t = 0
   if (to > 0) t = to
   while (i > t) {
-    if (key.indexOf(str[i]) !== -1) return i
+    if (key.indexOf(sAt(str, i)) !== -1) return i
     i--
   }
   return -1
@@ -71,7 +85,7 @@ function seekIndex(str: string, key: string, from: number, to: number, inOrder: 
   if (from > 0) i = from
   const t = Math.min(str.length, to > 0 ? to : str.length)
   while (i < t) {
-    const c = inOrder ? str[i] : str[str.length - i - 1]
+    const c = inOrder ? sAt(str, i) : sAt(str, str.length - i - 1)
     if (key.indexOf(c) !== -1) return i
     i++
   }
@@ -84,9 +98,9 @@ function seekIndexes(str: string, key: string, from: number, to: number, inOrder
   let i = from > 0 ? from : 0
   const t = Math.min(str.length, to > 0 ? to : str.length)
   while (i < t) {
-    const c = inOrder ? str[i] : str[str.length - i - 1]
+    const c = inOrder ? sAt(str, i) : sAt(str, str.length - i - 1)
     if (key.indexOf(c) !== -1) {
-      if (list.length > 0 && i - list[list.length - 1] === 1) {
+      if (list.length > 0 && i - (list[list.length - 1] || 0) === 1) {
         list[list.length - 1] = i
       } else {
         list.push(i)
@@ -98,14 +112,12 @@ function seekIndexes(str: string, key: string, from: number, to: number, inOrder
 }
 
 function makeDict(str: string): string[] {
-  const patten = new RegExp(
-    '(?<=["' + "'" + '\u201C\u201D])([^\\n\\p{P}]{1,' + WORD_MAX_LENGTH + '})(?=["' + "'" + '\u201C\u201D])',
-    'gu',
-  )
+  const regex = getCachedRegex('(?<=["' + "'" + '\u201C\u201D])([^\\n\\p{P}]{1,' + WORD_MAX_LENGTH + '})(?=["' + "'" + '\u201C\u201D])', 'gu')
+  if (!regex) return []
   const cache: string[] = []
   const dict: string[] = []
   let matcher: RegExpExecArray | null
-  while ((matcher = patten.exec(str)) !== null) {
+  while ((matcher = regex.exec(str)) !== null) {
     const word = matcher[0]
     if (cache.includes(word)) {
       if (!dict.includes(word)) dict.push(word)
@@ -133,11 +145,11 @@ function forceSplit(
   while (i < arrayEnd.length) {
     let k = 0
     while (j < arrayMid.length) {
-      if (arrayMid[j] < arrayEnd[i]) k++
+      if (nAt(arrayMid, j) < nAt(arrayEnd, i)) k++
       j++
     }
     if (random() * gain < 0.8 + k / 2.5) {
-      result.push(arrayEnd[i] + offset)
+      result.push(nAt(arrayEnd, i) + offset)
       i = Math.max(i + min, i)
     }
     i++
@@ -145,19 +157,24 @@ function forceSplit(
   return result
 }
 
-const PARAGRAPH_DIAGLOG = /^["\u201C\u201D][^"\u201C\u201D]+["\u201C\u201D]$/
+const PARAGRAPH_DIAGLOG_KEY = '^["\\u201C\\u201D][^"\\u201C\\u201D]+["\\u201C\\u201D]$'
+
+function isParagraphDialog(str: string): boolean {
+  const regex = getCachedRegex(PARAGRAPH_DIAGLOG_KEY)
+  return regex ? regex.test(str) : false
+}
 
 function splitQuote(str: string): string {
   const length = str.length
   if (length < 3) return str
-  if (match(MARK_QUOTATION, str[0])) {
+  if (match(MARK_QUOTATION, sAt(str, 0))) {
     const i = seekIndex(str, MARK_QUOTATION, 1, length - 2, true) + 1
-    if (i > 1 && !match(MARK_QUOTATION_BEFORE, str[i - 1])) {
+    if (i > 1 && !match(MARK_QUOTATION_BEFORE, sAt(str, i - 1))) {
       return str.substring(0, i) + '\n' + str.substring(i)
     }
-  } else if (match(MARK_QUOTATION, str[length - 1])) {
+  } else if (match(MARK_QUOTATION, sAt(str, length - 1))) {
     const i = length - 1 - seekIndex(str, MARK_QUOTATION, 1, length - 2, false)
-    if (i > 1 && !match(MARK_QUOTATION_BEFORE, str[i - 1])) {
+    if (i > 1 && !match(MARK_QUOTATION_BEFORE, sAt(str, i - 1))) {
       return str.substring(0, i) + '\n' + str.substring(i)
     }
   }
@@ -173,7 +190,7 @@ class StringBuilder {
 
   charAt(index: number): string {
     const str = this.toString()
-    return index >= 0 && index < str.length ? str[index] : ''
+    return index >= 0 && index < str.length ? (str[index] || '') : ''
   }
 
   setCharAt(index: number, ch: string): void {
@@ -183,6 +200,13 @@ class StringBuilder {
       arr[index] = ch
     }
     this.chars = [arr.join('')]
+  }
+
+  replaceLastChar(ch: string): void {
+    const str = this.toString()
+    if (str.length > 0) {
+      this.chars = [str.substring(0, str.length - 1) + ch]
+    }
   }
 
   toString(): string {
@@ -195,11 +219,7 @@ class StringBuilder {
 
   last(): string {
     const s = this.toString()
-    return s.length > 0 ? s[s.length - 1] : ''
-  }
-
-  get lastIndex(): number {
-    return this.length - 1
+    return s.length > 0 ? (s[s.length - 1] || '') : ''
   }
 }
 
@@ -208,7 +228,7 @@ function reduceLength(str: StringBuilder): StringBuilder {
   const l = p.length
   const b: boolean[] = new Array(l)
   for (let i = 0; i < l; i++) {
-    b[i] = PARAGRAPH_DIAGLOG.test(p[i])
+    b[i] = isParagraphDialog(strAt(p, i))
   }
   let dialogue = 0
   for (let i = 0; i < l; i++) {
@@ -217,17 +237,17 @@ function reduceLength(str: StringBuilder): StringBuilder {
       else if (dialogue < 2) dialogue++
     } else {
       if (dialogue > 1) {
-        p[i] = splitQuote(p[i])
+        p[i] = splitQuote(strAt(p, i))
         dialogue--
       } else if (dialogue > 0 && i < l - 2) {
-        if (b[i + 1]) p[i] = splitQuote(p[i])
+        if (b[i + 1]) p[i] = splitQuote(strAt(p, i))
       }
     }
   }
   const string = new StringBuilder()
   for (let i = 0; i < l; i++) {
     string.append('\n')
-    string.append(p[i])
+    string.append(strAt(p, i))
   }
   return string
 }
@@ -241,16 +261,16 @@ function findNewLines(str: string, dict: string[], random: () => number): string
   let waitClose = false
 
   for (let i = 0; i < str.length; i++) {
-    const c = str[i]
+    const c = sAt(str, i)
     if (match(MARK_QUOTATION, c)) {
       const size = arrayQuote.length
       if (size > 0) {
-        const quotePre = arrayQuote[size - 1]
+        const quotePre = arrayQuote[size - 1] || 0
         if (i - quotePre === 2) {
           let remove = false
           if (waitClose) {
-            if (match(',，、/', str[i - 1])) remove = true
-          } else if (match(',，、/和与或', str[i - 1])) {
+            if (match(',，、/', sAt(str, i - 1))) remove = true
+          } else if (match(',，、/和与或', sAt(str, i - 1))) {
             remove = true
           }
           if (remove) {
@@ -258,23 +278,23 @@ function findNewLines(str: string, dict: string[], random: () => number): string
             string.setCharAt(i - 2, '\u201D')
             arrayQuote.splice(size - 1, 1)
             mod[size - 1] = 1
-            mod[size] = -1
+            if (size < mod.length) mod[size] = -1
             continue
           }
         }
       }
       arrayQuote.push(i)
       if (i > 1) {
-        const charB1 = str[i - 1]
+        const charB1 = sAt(str, i - 1)
         let charB2 = '\x00'
         if (match(MARK_QUOTATION_BEFORE, charB1)) {
           if (arrayQuote.length > 1) {
-            const lastQuote = arrayQuote[arrayQuote.length - 2]
+            const lastQuote = arrayQuote[arrayQuote.length - 2] || 0
             let p = 0
             if (charB1 === ',' || charB1 === '，') {
               if (arrayQuote.length > 2) {
-                p = arrayQuote[arrayQuote.length - 3]
-                if (p > 0) charB2 = str[p - 1]
+                p = arrayQuote[arrayQuote.length - 3] || 0
+                if (p > 0) charB2 = sAt(str, p - 1)
               }
             }
             if (match(MARK_SENTENCES_END_P, charB2)) {
@@ -302,8 +322,9 @@ function findNewLines(str: string, dict: string[], random: () => number): string
   let opend = false
   if (size > 0) {
     for (let i = 0; i < size; i++) {
-      if (mod[i] > 0) opend = true
-      else if (mod[i] < 0) {
+      const m = mod[i] || 0
+      if (m > 0) opend = true
+      else if (m < 0) {
         if (!opend && i > 0) mod[i] = 3
         opend = false
       } else {
@@ -312,22 +333,23 @@ function findNewLines(str: string, dict: string[], random: () => number): string
       }
     }
     if (opend) {
-      if (arrayQuote[size - 1] - string.length > -3) {
+      const lastQuote = arrayQuote[size - 1] || 0
+      if (lastQuote - string.length > -3) {
         if (size > 1) mod[size - 2] = 4
         mod[size - 1] = -4
-      } else if (!match(MARK_SENTENCES_SAY, string.toString()[string.length - 2])) {
+      } else if (!match(MARK_SENTENCES_SAY, sAt(string.toString(), string.length - 2))) {
         string.append('\u201D')
       }
     }
     let loop2Mod1 = -1
     let i = 0
-    let j = arrayQuote[0] - 1
+    let j = (arrayQuote[0] || 0) - 1
     if (j < 0) { i = 1; loop2Mod1 = 0 }
     while (i < size) {
-      j = arrayQuote[i] - 1
-      const loop2Mod2 = mod[i]
+      j = (arrayQuote[i] || 0) - 1
+      const loop2Mod2 = mod[i] || 0
       if (loop2Mod1 < 0 && loop2Mod2 > 0) {
-        if (match(MARK_SENTENCES_END, string.toString()[j])) insN.push(j)
+        if (match(MARK_SENTENCES_END, sAt(string.toString(), j))) insN.push(j)
       }
       loop2Mod1 = loop2Mod2
       i++
@@ -336,12 +358,12 @@ function findNewLines(str: string, dict: string[], random: () => number): string
 
   const insN1: number[] = []
   for (const n of insN) {
-    if (match('"\'"\u201C\u201D', string.toString()[n])) {
+    if (match('"\'"\u201C\u201D', sAt(string.toString(), n))) {
       const start = seekLast(str, '"' + "'" + '\u201C\u201D', n - 1, n - WORD_MAX_LENGTH)
       if (start > 0) {
         const word = str.substring(start + 1, n)
         if (dict.includes(word)) continue
-        if (match('的地得', str[start])) continue
+        if (match('的地得', sAt(str, start))) continue
       }
     }
     insN1.push(n)
@@ -352,18 +374,18 @@ function findNewLines(str: string, dict: string[], random: () => number): string
   let j = 0
   let progress = 0
   let nextLine = -1
-  if (insN.length > 0) nextLine = insN[j]
+  if (insN.length > 0) nextLine = insN[j] || 0
 
   for (let ai = 0; ai < arrayQuote.length; ai++) {
-    const qutoe = arrayQuote[ai]
-    const isBeforeQuote = qutoe > 0
+    const quote = arrayQuote[ai] || 0
+    const isBeforeQuote = quote > 0
     const gain = isBeforeQuote ? FORCE_SPLIT_QUOTE_GAIN : FORCE_SPLIT_DEFAULT_GAIN
     const min = isBeforeQuote ? FORCE_SPLIT_QUOTE_MIN : FORCE_SPLIT_DEFAULT_MIN
     const trigger = isBeforeQuote ? FORCE_SPLIT_QUOTE_TRIGGER : FORCE_SPLIT_DEFAULT_TRIGGER
 
     while (j < insN.length) {
-      if (nextLine >= qutoe) break
-      nextLine = insN[j]
+      if (nextLine >= quote) break
+      nextLine = insN[j] || 0
       if (progress < nextLine) {
         const subs = s.substring(progress, nextLine)
         insN.push(...forceSplit(subs, progress, min, gain, trigger, random))
@@ -371,14 +393,14 @@ function findNewLines(str: string, dict: string[], random: () => number): string
       }
       j++
     }
-    if (progress < qutoe) {
-      const subs = s.substring(progress, qutoe + 1)
+    if (progress < quote) {
+      const subs = s.substring(progress, quote + 1)
       insN.push(...forceSplit(subs, progress, min, gain, trigger, random))
-      progress = qutoe + 1
+      progress = quote + 1
     }
   }
   while (j < insN.length) {
-    nextLine = insN[j]
+    nextLine = insN[j] || 0
     if (progress < nextLine) {
       const subs = s.substring(progress, nextLine)
       insN.push(...forceSplit(subs, progress, FORCE_SPLIT_DEFAULT_MIN, FORCE_SPLIT_DEFAULT_GAIN, FORCE_SPLIT_DEFAULT_TRIGGER, random))
@@ -394,12 +416,13 @@ function findNewLines(str: string, dict: string[], random: () => number): string
   const insQuote: boolean[] = new Array(size).fill(false)
   opend = false
   for (let i = 0; i < size; i++) {
-    const p = arrayQuote[i]
-    if (mod[i] > 0) {
+    const p = arrayQuote[i] || 0
+    const m = mod[i] || 0
+    if (m > 0) {
       string.setCharAt(p, '\u201C')
       if (opend) insQuote[i] = true
       opend = true
-    } else if (mod[i] < 0) {
+    } else if (m < 0) {
       string.setCharAt(p, '\u201D')
       opend = false
     } else {
@@ -413,12 +436,12 @@ function findNewLines(str: string, dict: string[], random: () => number): string
   j = 0
   progress = 0
   nextLine = -1
-  if (insN.length > 0) nextLine = insN[j]
+  if (insN.length > 0) nextLine = insN[j] || 0
   for (let i = 0; i < arrayQuote.length; i++) {
-    const quote = arrayQuote[i]
+    const quote = arrayQuote[i] || 0
     while (j < insN.length) {
       if (nextLine >= quote) break
-      nextLine = insN[j]
+      nextLine = insN[j] || 0
       buffer.append(string.toString().substring(progress, nextLine + 1))
       buffer.append('\n')
       progress = nextLine + 1
@@ -430,14 +453,14 @@ function findNewLines(str: string, dict: string[], random: () => number): string
     }
     if (insQuote[i] && buffer.length > 2) {
       const bufStr = buffer.toString()
-      if (bufStr[bufStr.length - 1] === '\n') buffer.append('\u201C')
-      else {
-        buffer.chars = [bufStr.substring(0, bufStr.length - 1) + '\u201D\n' + bufStr[bufStr.length - 1]]
+      if (bufStr.length > 0 && bufStr[bufStr.length - 1] === '\n') buffer.append('\u201C')
+      else if (bufStr.length > 0) {
+        buffer.replaceLastChar('\u201D\n' + sAt(bufStr, bufStr.length - 1))
       }
     }
   }
   while (j < insN.length) {
-    nextLine = insN[j]
+    nextLine = insN[j] || 0
     if (progress <= nextLine) {
       buffer.append(string.toString().substring(progress, nextLine + 1))
       buffer.append('\n')
@@ -458,51 +481,69 @@ export function reSegment(content: string, chapterName: string): string {
     const dict = makeDict(content1)
     const random = createSeededRandom(content1)
 
+    const quoteReplaceRegex = getCachedRegex('["\\u201C\\u201D]+\\s*["\\u201C\\u201D][\\s"\\u201C\\u201D]*', 'g')
+    const quoteWithPunctRegex = getCachedRegex('["\\u201C\\u201D]+(？。！?!~)["\\u201C\\u201D]+', 'g')
+    const quotePunctBeforeRegex = getCachedRegex('["\\u201C\\u201D]+(？。！?!~)([^"\\u201C\\u201D])', 'g')
+    const sayPunctRegex = getCachedRegex('([问说喊唱叫骂道着答])[.。]', 'g')
+
     let p = content1
-      .replace(/&quot;/g, '\u201C')
-      .replace(/[:：]['"'\u201C\u201D]+/g, '：\u201C')
-      .replace(/["\u201C\u201D]+\s*["\u201C\u201D][\s"\u201C\u201D]*/g, '\u201D\n\u201C')
-      .split(/\n(\s*)/)
+    if (quoteReplaceRegex) p = p.replace(quoteReplaceRegex, '\u201D\n\u201C')
+    if (quoteWithPunctRegex) p = p.replace(quoteWithPunctRegex, '\u201D$1\n\u201C')
+    if (quotePunctBeforeRegex) p = p.replace(quotePunctBeforeRegex, '\u201D$1\n$2')
+    if (sayPunctRegex) p = p.replace(sayPunctRegex, '$1。\n')
+
+    const paragraphs = p.split(/\n(\s*)/)
 
     let buffer = new StringBuilder()
     buffer.append('  ')
-    if (chapterName.trim() !== (p[0] || '').trim()) {
-      buffer.append(p[0].replace(/[\u3000\s]+/g, ''))
+    if (chapterName.trim() !== strAt(paragraphs, 0).trim()) {
+      buffer.append(strAt(paragraphs, 0).replace(/[\u3000\s]+/g, ''))
     }
 
-    for (let i = 1; i < p.length; i++) {
+    for (let i = 1; i < paragraphs.length; i++) {
       if (
         match(MARK_SENTENCES_END, buffer.last()) ||
         (match(MARK_QUOTATION_RIGHT, buffer.last()) &&
           buffer.length >= 2 &&
-          match(MARK_SENTENCES_END, buffer.toString()[buffer.length - 2]))
+          match(MARK_SENTENCES_END, sAt(buffer.toString(), buffer.length - 2)))
       ) {
         buffer.append('\n')
       }
-      buffer.append(p[i].replace(/[\u3000\s]+/g, ''))
+      buffer.append(strAt(paragraphs, i).replace(/[\u3000\s]+/g, ''))
     }
 
-    p = buffer
-      .toString()
-      .replace(/["\u201C\u201D]+\s*["\u201C\u201D]+/g, '\u201D\n\u201C')
-      .replace(/["\u201C\u201D]+(？。！?!~)["\u201C\u201D]+/g, '\u201D$1\n\u201C')
-      .replace(/["\u201C\u201D]+(？。！?!~)([^"\u201C\u201D])/g, '\u201D$1\n$2')
-      .replace(/([问说喊唱叫骂道着答])[.。]/g, '$1。\n')
-      .split('\n')
+    const htmlReplace1 = getCachedRegex('["\\u201C\\u201D]+\\s*["\\u201C\\u201D]+', 'g')
+    const htmlReplace2 = getCachedRegex('["\\u201C\\u201D]+(？。！?!~)["\\u201C\\u201D]+', 'g')
+    const htmlReplace3 = getCachedRegex('["\\u201C\\u201D]+(？。！?!~)([^"\\u201C\\u201D])', 'g')
+    const htmlReplace4 = getCachedRegex('([问说喊唱叫骂道着答])[.。]', 'g')
+    const htmlReplace5 = getCachedRegex('\\n["\\u201C\\u201D]([^\\n"\\u201C\\u201D]+)([,:，：]["\\u201C\\u201D])([^\\n"\\u201C\\u201D]+)', 'g')
+    const htmlReplace6 = getCachedRegex('\\n(\\s*)', 'g')
+
+    let text = buffer.toString()
+    if (htmlReplace1) text = text.replace(htmlReplace1, '\u201D\n\u201C')
+    if (htmlReplace2) text = text.replace(htmlReplace2, '\u201D$1\n\u201C')
+    if (htmlReplace3) text = text.replace(htmlReplace3, '\u201D$1\n$2')
+    if (htmlReplace4) text = text.replace(htmlReplace4, '$1。\n')
+    if (htmlReplace5) text = text.replace(htmlReplace5, '\n$1：\u201C$3')
+    if (htmlReplace6) text = text.replace(htmlReplace6, '\n')
+
+    const textParagraphs = text.split('\n')
 
     buffer = new StringBuilder()
-    for (const s of p) {
+    for (const s of textParagraphs) {
       buffer.append('\n')
       buffer.append(findNewLines(s, dict, random))
     }
     buffer = reduceLength(buffer)
-    content1 = buffer
-      .toString()
-      .replace(/^\s+/, '')
-      .replace(/\s*["\u201C\u201D]+\s*["\u201C\u201D][\s"\u201C\u201D]*/g, '\u201D\n\u201C')
-      .replace(/[:：]["\u201C\u201D\s]+/g, '：\u201C')
-      .replace(/\n["\u201C\u201D]([^\n"\u201C\u201D]+)([,:，：]["\u201C\u201D])([^\n"\u201C\u201D]+)/g, '\n$1：\u201C$3')
-      .replace(/\n(\s*)/g, '\n')
+    content1 = buffer.toString()
+    const finalReplace1 = getCachedRegex('^\\s+')
+    const finalReplace2 = getCachedRegex('\\s*["\\u201C\\u201D]+\\s*["\\u201C\\u201D][\\s"\\u201C\\u201D]*', 'g')
+    const finalReplace3 = getCachedRegex('[:：]["\\u201C\\u201D\\s]+', 'g')
+    const finalReplace4 = getCachedRegex('\\n(\\s*)', 'g')
+    if (finalReplace1) content1 = content1.replace(finalReplace1, '')
+    if (finalReplace2) content1 = content1.replace(finalReplace2, '\u201D\n\u201C')
+    if (finalReplace3) content1 = content1.replace(finalReplace3, '：\u201C')
+    if (finalReplace4) content1 = content1.replace(finalReplace4, '\n')
     return content1
   } catch {
     return content
@@ -541,16 +582,13 @@ function applyReplaceRuleSync(text: string, rule: PurifyRule): string {
     const isJsReplace = replacement.startsWith('@js:') || replacement.startsWith('<js>')
 
     if (rule.isRegex) {
-      const re = new RegExp(rule.pattern, 'g')
-      let result = text.replace(re, (match) => {
+      const re = getCachedRegex(rule.pattern, 'g')
+      if (!re) return text
+      re.lastIndex = 0
+      const result = text.replace(re, (match) => {
         if (Date.now() - start > timeout) throw new Error('timeout')
         return isJsReplace ? execJsReplacement(replacement, match) : replacement
       })
-
-      if (result !== text && /^\$\d+$/.test(result.trim())) {
-        return text
-      }
-
       return result
     }
 
@@ -567,9 +605,11 @@ function removeSameTitle(text: string, chapterTitle: string, bookName: string): 
       .replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
       .replace(/\s+/g, '\\\\s*')
     const escapedName = bookName ? bookName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') : ''
-    const prefixPattern = escapedName
-      ? new RegExp('^(\\s|[\\p{P}])*(' + escapedName + ')*(\\s)*' + escapedTitle + '(\\s)*', 'u')
-      : new RegExp('^(\\s|[\\p{P}])*' + escapedTitle + '(\\s)*', 'u')
+    const pattern = escapedName
+      ? '^(\\s|[\\p{P}])*(' + escapedName + ')*(\\s)*' + escapedTitle + '(\\s)*'
+      : '^(\\s|[\\p{P}])*' + escapedTitle + '(\\s)*'
+    const prefixPattern = getCachedRegex(pattern, 'u')
+    if (!prefixPattern) return text
     const match = text.match(prefixPattern)
     if (match && match[0]) return text.substring(match[0].length)
   } catch {
@@ -592,7 +632,8 @@ export function purifyText(rawText: string, options: PurifyOptions): string {
     text = removeSameTitle(text, options.chapterTitle, options.bookName)
     if (options.reSegmentEnabled) {
       text = reSegment(text, options.chapterTitle)
-      text = text.replace(/^\n+/, '')
+      const leadingNewlines = getCachedRegex('^\\n+')
+      if (leadingNewlines) text = text.replace(leadingNewlines, '')
     }
     if (options.purifyEnabled) {
       for (const rule of options.rules) {
@@ -604,9 +645,7 @@ export function purifyText(rawText: string, options: PurifyOptions): string {
           isRegex: rule.isRegex,
           timeoutMs: rule.timeoutMillisecond || REPLACE_TIMEOUT_DEFAULT,
         })
-        if (newText && !/^\$\d+$/.test(newText.trim())) {
-          text = newText
-        }
+        if (newText) text = newText
       }
     }
   } catch {
@@ -621,6 +660,10 @@ export function textToHtml(text: string): string {
     .split('\n')
     .map((l) => (l.trim() ? INDENT + l.trim() : ''))
     .join('\n')
-  return '<p>' + text.replace(/\n\n/g, '</p><p>').replace(/\n/g, '<br>') + '</p>'
+  const doubleNewlines = getCachedRegex('\\n\\n', 'g')
+  const singleNewlines = getCachedRegex('\\n', 'g')
+  let result = '<p>' + text
+  if (doubleNewlines) result = result.replace(doubleNewlines, '</p><p>')
+  if (singleNewlines) result = result.replace(singleNewlines, '<br>')
+  return result + '</p>'
 }
-

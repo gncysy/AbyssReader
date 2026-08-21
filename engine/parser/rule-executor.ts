@@ -9,7 +9,7 @@ import { getJsRuntime } from './js-executor.js'
 import { RuleCache } from './rule-cache.js'
 import { RuleParser } from './rule-parser.js'
 import { toDomNode } from './dom/to-dom-node.js'
-import type { ParseContext } from '../types.js'
+import type { ParseContext, EngineBookSource } from '../types.js'
 
 const HTML_ENTITIES: Record<string, string> = {
   '&amp;': '&', '&lt;': '<', '&gt;': '>',
@@ -40,13 +40,13 @@ export class RuleExecutor {
   private content: unknown
   private baseUrl: string | null = null
   private redirectUrl: string | null = null
-  private source: any = null
+  private source: EngineBookSource | null = null
   private lastContext: ParseContext | null = null
   private variableProvider: (key: string) => string
   private variableSetter: (key: string, value: string) => void
   private webJsExecutor: WebJsExecutor | null = null
 
-  constructor(source?: any, cache?: RuleCache) {
+  constructor(source?: EngineBookSource | null, cache?: RuleCache) {
     this.source = source || null
     this.cache = cache || new RuleCache()
     this.parser = new RuleParser()
@@ -90,7 +90,7 @@ export class RuleExecutor {
     if (!ruleStr) return ''
     this.lastContext = context || null
     const ruleList = this.parser.splitSourceRuleCacheString(ruleStr, this.cache.getRuleCache())
-    return this.getStringInternal(ruleList, context, (context as any)?.isUrl === true)
+    return this.getStringInternal(ruleList, context, context?.isUrl === true)
   }
 
   async getStringList(ruleStr: string | null, context?: ParseContext): Promise<string[]> {
@@ -100,14 +100,14 @@ export class RuleExecutor {
     return (await this.getStringListInternal(ruleList, context)) || []
   }
 
-  async getElements(ruleStr: string | null, context?: ParseContext): Promise<any[]> {
+  async getElements(ruleStr: string | null, context?: ParseContext): Promise<unknown[]> {
     if (!ruleStr) return []
     this.lastContext = context || null
     const ruleList = this.parser.splitSourceRule(ruleStr, true)
     return this.getElementsInternal(ruleList, context)
   }
 
-  async getElement(ruleStr: string | null, context?: ParseContext): Promise<any | null> {
+  async getElement(ruleStr: string | null, context?: ParseContext): Promise<unknown | null> {
     const list = await this.getElements(ruleStr, context)
     return list.length > 0 ? list[0] : null
   }
@@ -117,7 +117,7 @@ export class RuleExecutor {
     context?: ParseContext,
     isUrl = false,
   ): Promise<string> {
-    let result: any = context?.result ?? this.content
+    let result: unknown = context?.result ?? this.content
 
     for (const sr of ruleList) {
       this.putRuleMap(sr.putMap)
@@ -142,11 +142,6 @@ export class RuleExecutor {
     return str
   }
 
-  private isPlainObject(val: unknown): boolean {
-    return val !== null && typeof val === 'object' &&
-      !Array.isArray(val) && !(val instanceof Date) && !(val instanceof RegExp)
-  }
-
   private putRuleMap(map: Record<string, string>): void {
     for (const [key, value] of Object.entries(map)) {
       this.variableSetter(key, value)
@@ -155,19 +150,19 @@ export class RuleExecutor {
 
   private async executeRuleForString(
     rule: string,
-    input: any,
+    input: unknown,
     mode: string,
     context?: ParseContext,
     isUrl = false,
-  ): Promise<any> {
+  ): Promise<unknown> {
     if (!rule) return input
     switch (mode) {
       case 'webjs':
-        return this.getWebJsResultAsync(rule, input)
+        return this.getWebJsResultAsync(rule)
       case 'js':
         return this.evalJS(rule, input, context)
       case 'json':
-        return this.cache.getJSONPathAnalyzer(input).getString(rule, (inner) => this.getString(inner, context) || '')
+        return this.cache.getJSONPathAnalyzer(input).getString(rule)
       case 'xpath':
         return this.cache.getXPathAnalyzer(input).getString(rule)
       case 'regex':
@@ -177,7 +172,7 @@ export class RuleExecutor {
     }
   }
 
-  private executeDefaultForString(rule: string, input: any, isUrl = false): string {
+  private executeDefaultForString(rule: string, input: unknown, isUrl = false): string {
     const root = toDomNode(input)
     if (!root) return ''
 
@@ -211,22 +206,29 @@ export class RuleExecutor {
       const baseLen = Math.max(...results.map((r) => r.length), 0)
       for (let i = 0; i < baseLen; i++) {
         for (const r of results) {
-          merged.push(i < r.length ? r[i] : '')
+          const val = r[i]
+          merged.push(val !== undefined ? val : '')
         }
       }
       return isUrl ? (merged[0] || '') : merged.join('\n')
     }
     const merged = ([] as string[]).concat(...results)
-    if (isUrl) return merged.length > 0 ? merged[0] : ''
-    if (merged.length === 1) return merged[0]
+    if (isUrl) return merged.length > 0 ? (merged[0] || '') : ''
+    if (merged.length === 1) return merged[0] || ''
     return merged.join('\n')
   }
 
-  private executeCssString(root: any, rs: string): string[] | null {
+  private executeCssString(root: unknown, rs: string): string[] | null {
     const cssAnalyzer = this.cache.getCSSAnalyzer(root)
     const lastIndex = rs.lastIndexOf('@')
     if (lastIndex > 0) {
-      return cssAnalyzer.getStringList(rs)
+      const list = cssAnalyzer.getStringList(rs)
+      // 修复：@属性提取只取第一个结果（避免多个匹配元素导致多行）
+      if (list && list.length > 0) {
+        const first = list[0]
+        return first !== undefined ? [first] : null
+      }
+      return null
     }
     return [cssAnalyzer.getString(rs)]
   }
@@ -236,7 +238,7 @@ export class RuleExecutor {
     context?: ParseContext,
     isUrl = false,
   ): Promise<string[] | null> {
-    let result: any = context?.result ?? this.content
+    let result: unknown = context?.result ?? this.content
     for (const sr of ruleList) {
       this.putRuleMap(sr.putMap)
       await sr.makeUpRule(
@@ -249,7 +251,7 @@ export class RuleExecutor {
       result = await this.executeRuleForStringList(result, sr, context)
       if (result !== null && sr.replaceRegex) {
         if (Array.isArray(result)) {
-          result = result.map((v: any) => this.replaceRegex(String(v), sr))
+          result = result.map((v: unknown) => this.replaceRegex(String(v), sr))
         } else {
           result = this.replaceRegex(String(result), sr)
         }
@@ -271,10 +273,10 @@ export class RuleExecutor {
     return [String(result)]
   }
 
-  private async executeRuleForStringList(input: any, sr: SourceRule, context?: ParseContext): Promise<any> {
+  private async executeRuleForStringList(input: unknown, sr: SourceRule, context?: ParseContext): Promise<unknown> {
     if (!sr.rule) return input
     switch (sr.mode) {
-      case 'webjs': return this.getWebJsResultAsync(sr.rule, input)
+      case 'webjs': return this.getWebJsResultAsync(sr.rule)
       case 'js': return this.evalJS(sr.rule, input, context)
       case 'json': return this.cache.getJSONPathAnalyzer(input).getStringList(sr.rule)
       case 'xpath': return this.cache.getXPathAnalyzer(input).getStringList(sr.rule)
@@ -283,7 +285,7 @@ export class RuleExecutor {
     }
   }
 
-  private executeDefaultForStringList(rule: string, input: any): string[] | null {
+  private executeDefaultForStringList(rule: string, input: unknown): string[] | null {
     const root = toDomNode(input)
     if (!root) return null
 
@@ -316,7 +318,8 @@ export class RuleExecutor {
       const baseLen = Math.max(...results.map((r) => r.length), 0)
       for (let i = 0; i < baseLen; i++) {
         for (const r of results) {
-          merged.push(i < r.length ? r[i] : '')
+          const val = r[i]
+          merged.push(val !== undefined ? val : '')
         }
       }
       return merged
@@ -324,8 +327,8 @@ export class RuleExecutor {
     return ([] as string[]).concat(...results)
   }
 
-  private async getElementsInternal(ruleList: SourceRule[], context?: ParseContext): Promise<any[]> {
-    let result: any = context?.result ?? this.content
+  private async getElementsInternal(ruleList: SourceRule[], context?: ParseContext): Promise<unknown[]> {
+    let result: unknown = context?.result ?? this.content
     for (const sr of ruleList) {
       this.putRuleMap(sr.putMap)
       await sr.makeUpRule(
@@ -340,7 +343,7 @@ export class RuleExecutor {
           result = this.executeRegexElements(String(result), sr.rule.split(/\s+/).filter(Boolean))
           break
         case 'webjs':
-          result = JSON.parse((await this.getWebJsResultAsync(sr.rule, result)) || '[]')
+          result = JSON.parse((await this.getWebJsResultAsync(sr.rule)) || '[]')
           break
         case 'js':
           result = await this.evalJS(sr.rule, result, context)
@@ -365,7 +368,9 @@ export class RuleExecutor {
   }
 
   private executeRegexGetElements(res: string, regs: string[], index: number): string[][] {
-    const pattern = this.compileRegex(regs[index])
+    const reg = regs[index]
+    if (!reg) return []
+    const pattern = this.compileRegex(reg)
     if (!pattern) return []
     pattern.lastIndex = 0
     const firstMatch = pattern.exec(res)
@@ -414,7 +419,10 @@ export class RuleExecutor {
   private compileRegex(pattern: string): RegExp | null {
     const regexCache = this.cache.getRegexCache()
     const cached = regexCache.get(pattern)
-    if (cached !== undefined) return cached
+    if (cached !== undefined) {
+      if (cached === null) return null
+      return new RegExp(cached.source, cached.flags)
+    }
     try {
       const re = new RegExp(pattern, 'g')
       regexCache.set(pattern, re)
@@ -429,7 +437,7 @@ export class RuleExecutor {
     }
   }
 
-  async evalJS(jsStr: string, result: any = null, context?: ParseContext): Promise<any> {
+  async evalJS(jsStr: string, result: unknown = null, context?: ParseContext): Promise<unknown> {
     const code = jsStr.replace(/^@js:\s*/, '').replace(/^<js>/, '').replace(/<\/js>$/, '').trim()
     try {
       const runtime = getJsRuntime()
@@ -444,7 +452,7 @@ export class RuleExecutor {
           key: ctx.key || '',
           page: ctx.page || 1,
           chapter: ctx.chapter || {},
-          title: (ctx.chapter as any)?.title || '',
+          title: ctx.chapter?.title || '',
           nextChapterUrl: ctx.nextChapterUrl || '',
         })
       }
@@ -454,7 +462,7 @@ export class RuleExecutor {
     }
   }
 
-  private async getWebJsResultAsync(jsStr: string, result: any): Promise<string> {
+  private async getWebJsResultAsync(jsStr: string): Promise<string> {
     if (this.webJsExecutor) {
       try {
         const html = typeof this.content === 'string' ? this.content : String(this.content ?? '')

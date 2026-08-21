@@ -6,31 +6,25 @@ import { RuleParser } from './rule-parser.js'
 import { RuleExecutor } from './rule-executor.js'
 import { RuleCache } from './rule-cache.js'
 import { SourceRule } from './source-rule.js'
-import type { ParseContext } from '../types.js'
+import type { ParseContext, EngineBookSource } from '../types.js'
 
 export class AnalyzeRule {
   private parser: RuleParser
   private executor: RuleExecutor
   private cache: RuleCache
 
-  private content: any
-  private baseUrl: string | null = null
-
-  constructor(source?: any) {
+  constructor(source?: EngineBookSource | null) {
     this.cache = new RuleCache()
     this.parser = new RuleParser()
     this.executor = new RuleExecutor(source, this.cache)
   }
 
-  setContent(content: any, baseUrl?: string): this {
-    this.content = content
+  setContent(content: unknown, baseUrl?: string): this {
     this.executor.setContent(content, baseUrl)
-    if (baseUrl) this.baseUrl = baseUrl
     return this
   }
 
   setBaseUrl(url: string): this {
-    this.baseUrl = url
     this.executor.setBaseUrl(url)
     return this
   }
@@ -63,15 +57,15 @@ export class AnalyzeRule {
     return this.executor.getStringList(ruleStr, context)
   }
 
-  async getElements(ruleStr: string | null, context?: ParseContext): Promise<any[]> {
+  async getElements(ruleStr: string | null, context?: ParseContext): Promise<unknown[]> {
     return this.executor.getElements(ruleStr, context)
   }
 
-  async getElement(ruleStr: string | null, context?: ParseContext): Promise<any | null> {
+  async getElement(ruleStr: string | null, context?: ParseContext): Promise<unknown | null> {
     return this.executor.getElement(ruleStr, context)
   }
 
-  async evalJS(jsStr: string, result: any = null, context?: ParseContext): Promise<any> {
+  async evalJS(jsStr: string, result: unknown = null, context?: ParseContext): Promise<unknown> {
     return this.executor.evalJS(jsStr, result, context)
   }
 

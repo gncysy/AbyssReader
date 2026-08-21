@@ -34,32 +34,55 @@ function saveTodayCount(count: number): void {
   }
 }
 
-export const useReaderStore = defineStore('reader', () => {
-  const readerTheme = ref('dark')
-  const fontSize = ref(READER.FONT_SIZE_DEFAULT)
-  const lineHeight = ref(READER.LINE_HEIGHT_DEFAULT)
-  const chineseConverterType = ref(0)
-  const reSegment = ref(false)
-  const todayReadCount = ref(loadTodayCount())
-  const loaded = ref(false)
-  const bookSettings = ref<Record<string, any>>({})
+interface ReadingProgressRecord {
+  bookUrl: string
+  chapterId: number
+  chapterPos: number
+  chapterTitle: string
+  updatedAt: string
+}
 
-  // 内存缓存 readingProgress，避免频繁读写磁盘
-  let progressCache: Record<string, any> | null = null
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+}
+
+function isReadingProgressMap(value: unknown): value is Record<string, ReadingProgressRecord> {
+  return isRecord(value)
+}
+
+function isBookSettingsMap(value: unknown): value is Record<string, Record<string, unknown>> {
+  if (!isRecord(value)) return false
+  for (const v of Object.values(value)) {
+    if (!isRecord(v)) return false
+  }
+  return true
+}
+
+export const useReaderStore = defineStore('reader', () => {
+  const readerTheme = ref<string>(READER.FONT_SIZE_DEFAULT !== undefined ? 'dark' : 'dark')
+  const fontSize = ref<number>(READER.FONT_SIZE_DEFAULT)
+  const lineHeight = ref<number>(READER.LINE_HEIGHT_DEFAULT)
+  const chineseConverterType = ref<number>(0)
+  const reSegment = ref<boolean>(false)
+  const todayReadCount = ref<number>(loadTodayCount())
+  const loaded = ref<boolean>(false)
+  const bookSettings = ref<Record<string, Record<string, unknown>>>({})
+
+  let progressCache: Record<string, ReadingProgressRecord> | null = null
 
   async function loadSettings(): Promise<void> {
     try {
-      const settings = await store.get('readerSettings')
-      if (settings) {
-        readerTheme.value = settings.readerTheme || 'dark'
-        fontSize.value = settings.fontSize || READER.FONT_SIZE_DEFAULT
-        lineHeight.value = settings.lineHeight || READER.LINE_HEIGHT_DEFAULT
-        chineseConverterType.value = settings.chineseConverterType ?? 0
-        reSegment.value = settings.reSegment ?? false
+      const settingsRaw = await store.get('readerSettings')
+      if (isRecord(settingsRaw)) {
+        if (typeof settingsRaw.readerTheme === 'string') readerTheme.value = settingsRaw.readerTheme
+        if (typeof settingsRaw.fontSize === 'number') fontSize.value = settingsRaw.fontSize
+        if (typeof settingsRaw.lineHeight === 'number') lineHeight.value = settingsRaw.lineHeight
+        if (typeof settingsRaw.chineseConverterType === 'number') chineseConverterType.value = settingsRaw.chineseConverterType
+        if (typeof settingsRaw.reSegment === 'boolean') reSegment.value = settingsRaw.reSegment
       }
-      const saved = await store.get('bookReaderSettings')
-      if (saved) {
-        bookSettings.value = saved
+      const savedRaw = await store.get('bookReaderSettings')
+      if (isBookSettingsMap(savedRaw)) {
+        bookSettings.value = savedRaw
       }
     } catch {
       // ignore
@@ -78,7 +101,7 @@ export const useReaderStore = defineStore('reader', () => {
     })
   }
 
-  function saveBookSettings(bookUrl: string, settings: any): void {
+  function saveBookSettings(bookUrl: string, settings: Record<string, unknown>): void {
     bookSettings.value = {
       ...bookSettings.value,
       [bookUrl]: settings,
@@ -86,7 +109,7 @@ export const useReaderStore = defineStore('reader', () => {
     store.set('bookReaderSettings', bookSettings.value).catch(() => {})
   }
 
-  function getBookSettings(bookUrl: string): any {
+  function getBookSettings(bookUrl: string): Record<string, unknown> {
     return bookSettings.value[bookUrl] || {}
   }
 
@@ -148,7 +171,7 @@ export const useReaderStore = defineStore('reader', () => {
     try {
       if (!progressCache) {
         const raw = await store.get('readingProgress')
-        progressCache = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {}
+        progressCache = isReadingProgressMap(raw) ? raw : {}
       }
       progressCache[bookUrl] = {
         bookUrl,
@@ -167,14 +190,14 @@ export const useReaderStore = defineStore('reader', () => {
     bookUrl: string,
     _bookName?: string,
     _author?: string,
-  ): Promise<any> {
+  ): Promise<ReadingProgressRecord | null> {
     if (!bookUrl) return null
     try {
       if (progressCache && progressCache[bookUrl] !== undefined) {
-        return progressCache[bookUrl]
+        return progressCache[bookUrl] || null
       }
       const raw = await store.get('readingProgress')
-      if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
+      if (isReadingProgressMap(raw)) {
         progressCache = raw
         return raw[bookUrl] || null
       }

@@ -4,7 +4,7 @@
 
 import { invoke } from '@tauri-apps/api/core'
 import { getString } from '@engine/parser/index.js'
-import { logError } from '@engine/log/index.js'
+import type { ParseContext } from '@engine/types.js'
 import { parseRuleSegments } from './rule-parser.js'
 import { executeJsSegment } from './rule-js-executor.js'
 
@@ -18,20 +18,16 @@ export function shouldExecuteInDeno(rule: string): boolean {
   return false
 }
 
-/**
- * 从 Rust STORAGE 读取单个变量值
- * 直接调用 op_java_get，不执行 JS 收集
- */
 async function getVariableValue(key: string): Promise<string> {
   try {
-    // 通过执行一个极简 JS 读取变量
     const code = `java.get(${JSON.stringify(key)})`
-    const response: any = await invoke('execute_js_rule', {
+    const response = await invoke('execute_js_rule', {
       code,
       context: {},
       timeoutMs: 3000,
     })
-    if (response?.success) return response.result || ''
+    const obj = response as Record<string, unknown>
+    if (obj.success === true) return typeof obj.result === 'string' ? obj.result : ''
     return ''
   } catch {
     return ''
@@ -40,20 +36,20 @@ async function getVariableValue(key: string): Promise<string> {
 
 export async function evaluateRule(
   rule: string,
-  data: any,
-  context: Record<string, any>,
+  data: unknown,
+  context: Record<string, unknown>,
   options?: { forceDeno?: boolean; cacheKey?: string }
-): Promise<any> {
+): Promise<unknown> {
   if (!rule) return data
 
-  // @get:{key} 预处理：逐个读取，无副作用
   if (rule.includes('@get:')) {
     try {
       const getMatches = rule.match(/@get:\{([^}]+)\}/g)
       if (getMatches) {
         const uniqueKeys = new Set<string>()
         for (const m of getMatches) {
-          const key = m.replace(/^@get:\{/, '').replace(/\}$/, '')
+          const keyMatch = /^@get:\{([^}]+)\}$/.exec(m)
+          const key = keyMatch && keyMatch[1] !== undefined ? keyMatch[1] : m.substring(6, m.length - 1)
           uniqueKeys.add(key)
         }
         for (const key of uniqueKeys) {
@@ -73,37 +69,37 @@ export async function evaluateRule(
     if (rule && !rule.includes('@') && !rule.includes('.') && !rule.includes('#') && !rule.includes('[') && !rule.includes(' ') && !rule.startsWith('//')) {
       return rule
     }
-    return getString(data, rule, context)
+    return getString(data, rule, context as ParseContext)
   }
 
   const segments = parseRuleSegments(rule)
   if (segments.length === 0) return data
 
-  const ruleTag = typeof context?.source?.bookSourceUrl === 'string'
-    ? context.source.bookSourceUrl
+  const ruleTag = typeof context?.source === 'object' && context.source !== null
+    ? String((context.source as Record<string, unknown>).bookSourceUrl || rule.substring(0, 100))
     : rule.substring(0, 100)
 
   if (segments.length === 1) {
     const seg = segments[0]
-    if (seg.type === 'pure') return getString(data, seg.rule, context)
-    if (seg.type === 'js') return executeJsSegment(seg.code, data, context, ruleTag)
+    if (seg !== undefined) {
+      if (seg.type === 'pure') return getString(data, seg.rule, context as ParseContext)
+      if (seg.type === 'js') return executeJsSegment(seg.code, data, context, ruleTag)
+    }
+    return data
   }
 
-  let prevResult: any = data
+  let prevResult: unknown = data
 
   for (let i = 0; i < segments.length; i++) {
     const seg = segments[i]
+    if (seg === undefined) continue
     if (seg.type === 'pure') {
       const input = i === 0 ? data : prevResult
-      prevResult = await getString(input, seg.rule, context)
+      prevResult = await getString(input, seg.rule, context as ParseContext)
     } else if (seg.type === 'js') {
       prevResult = await executeJsSegment(seg.code, prevResult, context, ruleTag)
     }
   }
 
   return prevResult
-}
-
-export function clearRuleCache(): void {
-  // 保留接口
 }

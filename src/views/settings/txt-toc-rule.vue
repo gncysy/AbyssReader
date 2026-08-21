@@ -14,7 +14,7 @@
     </div>
     <EmptyState v-else title="暂无规则" description="添加规则来识别 TXT 中的章节目录" />
     <n-modal v-model:show="showDialog" preset="dialog" :title="editingRule ? '编辑规则' : '添加规则'" positive-text="保存" @positive-click="saveRule">
-      <div class="dialog-form"><div class="form-group"><label>名称</label><n-input v-model:value="form.name" placeholder="如：目录" /></div><div class="form-group"><label>正则规则</label><n-input v-model:value="form.rule" placeholder="如：^第[\\d]+章" /></div><div class="form-group"><label>示例</label><n-input v-model:value="form.example" placeholder="如：第一章 标题" /></div><label class="checkbox-label"><input type="checkbox" v-model="form.enable" /><span>启用</span></label></div>
+      <div class="dialog-form"><div class="form-group"><label>名称</label><n-input v-model:value="form.name" placeholder="如：目录" /></div><div class="form-group"><label>正则规则</label><n-input v-model:value="form.rule" placeholder="如：^第[\\d]+章" /></div><div class="form-group"><label>示例</label><n-input v-model:value="form.example" placeholder="如：第一章 标题" /></div></div>
     </n-modal>
   </div></template>
 
@@ -22,25 +22,49 @@
 import { ref, onMounted } from 'vue'
 import { NModal, NInput, useMessage } from 'naive-ui'
 import { store } from '@/services'
+import { asArray } from '@/services/store.js'
 import BackButton from '@/components/common/BackButton.vue'
-import { useNaiveTheme } from '@/composables/useNaiveTheme.js'
 import EmptyState from '@/components/common/EmptyState.vue'
 
+interface TxtTocRuleLike {
+  id: number
+  name: string
+  rule: string
+  example: string
+  enable: boolean
+  serialNumber?: number
+}
+
 const msg = useMessage()
-const { naiveTheme, themeOverrides } = useNaiveTheme()
-const rules = ref<any[]>([])
+const rules = ref<TxtTocRuleLike[]>([])
 const showDialog = ref(false)
-const editingRule = ref<any>(null)
+const editingRule = ref<TxtTocRuleLike | null>(null)
 const form = ref({ name: '', rule: '', example: '', enable: true })
 
 onMounted(async () => { await loadRules() })
-async function loadRules(): Promise<void> { try { rules.value = (await store.get('txtTocRule')) || [] } catch { rules.value = [] } }
+async function loadRules(): Promise<void> {
+  try {
+    const raw = await store.get('txtTocRule')
+    rules.value = asArray<TxtTocRuleLike>(raw)
+  } catch { rules.value = [] }
+}
 async function saveRules(): Promise<void> { await store.set('txtTocRule', rules.value) }
 function addRule(): void { editingRule.value = null; form.value = { name: '', rule: '', example: '', enable: true }; showDialog.value = true }
-function editRule(rule: any): void { editingRule.value = rule; form.value = { name: rule.name, rule: rule.rule, example: rule.example, enable: rule.enable }; showDialog.value = true }
-async function saveRule(): Promise<void> { if (!form.value.name.trim() || !form.value.rule.trim()) { msg.warning('名称和规则不能为空'); return }; const list = [...rules.value]; if (editingRule.value) { const idx = list.findIndex((r: any) => r.id === editingRule.value.id); if (idx !== -1) list[idx] = { ...editingRule.value, ...form.value } } else list.push({ id: Date.now(), ...form.value, serialNumber: list.length }); rules.value = list; await saveRules(); showDialog.value = false; msg.success('已保存') }
-async function deleteRule(rule: any): Promise<void> { rules.value = rules.value.filter((r: any) => r.id !== rule.id); await saveRules(); msg.success('已删除') }
-async function toggleRule(rule: any): Promise<void> { rule.enable = !rule.enable; await saveRules() }
+function editRule(rule: TxtTocRuleLike): void { editingRule.value = rule; form.value = { name: rule.name, rule: rule.rule, example: rule.example, enable: rule.enable }; showDialog.value = true }
+async function saveRule(): Promise<void> {
+  if (!form.value.name.trim() || !form.value.rule.trim()) { msg.warning('名称和规则不能为空'); return }
+  const list = [...rules.value]
+  if (editingRule.value) {
+    const idx = list.findIndex((r) => r.id === editingRule.value!.id)
+    if (idx !== -1) list[idx] = { ...editingRule.value!, ...form.value }
+  } else list.push({ id: Date.now(), ...form.value, serialNumber: list.length })
+  rules.value = list
+  await saveRules()
+  showDialog.value = false
+  msg.success('已保存')
+}
+async function deleteRule(rule: TxtTocRuleLike): Promise<void> { rules.value = rules.value.filter((r) => r.id !== rule.id); await saveRules(); msg.success('已删除') }
+async function toggleRule(rule: TxtTocRuleLike): Promise<void> { rule.enable = !rule.enable; await saveRules() }
 </script>
 
 <style scoped>
@@ -59,6 +83,4 @@ async function toggleRule(rule: any): Promise<void> { rule.enable = !rule.enable
 .rule-row code { font-size: 12px; color: var(--text-secondary); word-break: break-all; font-family: var(--font-mono); }
 .rule-actions { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
 .dialog-form { display: flex; flex-direction: column; gap: 14px; padding: 4px 0; }
-.checkbox-label { display: flex; align-items: center; gap: 8px; cursor: pointer; font-size: 13px; color: var(--text-secondary); }
 </style>
-

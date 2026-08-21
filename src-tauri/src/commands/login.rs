@@ -2,6 +2,7 @@ use crate::error::Result;
 use crate::js_runtime::runtime;
 use crate::commands::JsExecutionResponse;
 
+#[tauri::command]
 pub async fn source_login(source: serde_json::Value) -> Result<JsExecutionResponse> {
     let login_url = source.get("loginUrl").and_then(|v| v.as_str()).unwrap_or("");
     if login_url.is_empty() {
@@ -31,17 +32,11 @@ pub async fn source_login(source: serde_json::Value) -> Result<JsExecutionRespon
     let context_json = serde_json::to_string(&context).unwrap_or_else(|_| "{}".into());
 
     match runtime::execute(&code, &context_json) {
-        Ok(result) => {
-            // 尝试解析结果中的 cookie
-            let cookies = serde_json::from_str::<serde_json::Value>(&result)
-                .ok()
-                .and_then(|v| v.get("cookies").cloned());
-            Ok(JsExecutionResponse {
-                success: true,
-                result: if cookies.is_some() { result } else { result },
-                error: None,
-            })
-        }
+        Ok(result) => Ok(JsExecutionResponse {
+            success: true,
+            result,
+            error: None,
+        }),
         Err(e) => Ok(JsExecutionResponse {
             success: false,
             result: String::new(),
@@ -50,6 +45,7 @@ pub async fn source_login(source: serde_json::Value) -> Result<JsExecutionRespon
     }
 }
 
+#[tauri::command]
 pub async fn source_login_ui(source: serde_json::Value) -> Result<JsExecutionResponse> {
     let login_ui = source.get("loginUi").and_then(|v| v.as_str()).unwrap_or("");
     if login_ui.is_empty() {
@@ -94,40 +90,30 @@ pub async fn source_login_ui(source: serde_json::Value) -> Result<JsExecutionRes
     }
 }
 
+#[tauri::command]
 pub async fn source_login_action(source: serde_json::Value, action: String) -> Result<JsExecutionResponse> {
     let js_lib = source.get("jsLib").and_then(|v| v.as_str()).unwrap_or("");
     let login_url = source.get("loginUrl").and_then(|v| v.as_str()).unwrap_or("");
     let login_ui = source.get("loginUi").and_then(|v| v.as_str()).unwrap_or("");
 
-    // 分别执行，而不是简单拼接
-    let mut all_results = Vec::new();
+    let ctx = serde_json::json!({
+        "source": source,
+        "result": "",
+        "baseUrl": source.get("bookSourceUrl").and_then(|v| v.as_str()).unwrap_or("")
+    });
+    let ctx_json = serde_json::to_string(&ctx).unwrap_or_default();
 
+    // 分别执行 jsLib、loginUrl JS、loginUi JS
     if !js_lib.is_empty() {
-        if let Ok(r) = runtime::execute(js_lib, "{}") {
-            all_results.push(r);
-        }
+        let _ = runtime::execute(js_lib, "{}");
     }
     if !login_url.is_empty() && login_url.starts_with("@js:") {
         let code = login_url.replace("@js:", "").trim().to_string();
-        let ctx = serde_json::json!({
-            "source": source,
-            "result": "",
-            "baseUrl": source.get("bookSourceUrl").and_then(|v| v.as_str()).unwrap_or("")
-        });
-        if let Ok(r) = runtime::execute(&code, &serde_json::to_string(&ctx).unwrap_or_default()) {
-            all_results.push(r);
-        }
+        let _ = runtime::execute(&code, &ctx_json);
     }
     if !login_ui.is_empty() && login_ui.starts_with("@js:") {
         let code = login_ui.replace("@js:", "").trim().to_string();
-        let ctx = serde_json::json!({
-            "source": source,
-            "result": "",
-            "baseUrl": source.get("bookSourceUrl").and_then(|v| v.as_str()).unwrap_or("")
-        });
-        if let Ok(r) = runtime::execute(&code, &serde_json::to_string(&ctx).unwrap_or_default()) {
-            all_results.push(r);
-        }
+        let _ = runtime::execute(&code, &ctx_json);
     }
 
     // 执行 action
@@ -142,13 +128,7 @@ pub async fn source_login_action(source: serde_json::Value, action: String) -> R
         .trim()
         .to_string();
 
-    let ctx = serde_json::json!({
-        "source": source,
-        "result": "",
-        "baseUrl": source.get("bookSourceUrl").and_then(|v| v.as_str()).unwrap_or("")
-    });
-
-    match runtime::execute(&action_code, &serde_json::to_string(&ctx).unwrap_or_default()) {
+    match runtime::execute(&action_code, &ctx_json) {
         Ok(result) => Ok(JsExecutionResponse {
             success: true,
             result,

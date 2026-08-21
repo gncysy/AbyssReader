@@ -15,6 +15,7 @@ static PUT_COUNTER: LazyLock<Mutex<u32>> = LazyLock::new(|| Mutex::new(0));
 const ENFORCE_EVERY_PUTS: u32 = 10;
 const ENFORCE_INTERVAL_SECS: u64 = 30;
 const MAX_DIR_DEPTH: usize = 3;
+const STARTUP_CLEAN_BATCH_SIZE: usize = 200;
 
 pub fn init_cache_dir(app_data_dir: &PathBuf) -> PathBuf {
     let root = if let Ok(Some(saved)) = db::store_get(CACHE_PATH_DB_KEY) {
@@ -33,8 +34,80 @@ pub fn init_cache_dir(app_data_dir: &PathBuf) -> PathBuf {
     for cat in CacheCategory::all() {
         fs::create_dir_all(root.join(cat.dir_name())).ok();
     }
-    CACHE_ROOT.set(root.clone()).ok();
+    // 修复：CACHE_ROOT.set() 失败时记录错误日志而不是静默忽略
+    if CACHE_ROOT.set(root.clone()).is_err() {
+        crate::js_runtime::ops::emit_log(
+            "warn",
+            "[cache] CACHE_ROOT 已初始化，跳过重复设置",
+        );
+    }
+
+    // 启动时异步清理过期缓存（不阻塞启动）
+    std::thread::spawn(|| {
+        cleanup_expired_cache();
+        enforce_total_limit();
+    });
+
     root
+}
+
+/// 启动时清理所有过期缓存
+pub fn cleanup_expired_cache() {
+    let root = get_cache_root();
+    let mut total_removed = 0;
+
+    for cat in CacheCategory::all() {
+        let ttl = cat.ttl_secs();
+        if ttl == 0 { continue; } // 永不过期的跳过
+        let dir = root.join(cat.dir_name());
+        total_removed += cleanup_expired_in_dir(&dir, ttl);
+    }
+
+    if total_removed > 0 {
+        crate::js_runtime::ops::emit_log(
+            "info",
+            &format!("[cache] 启动清理: 删除 {} 个过期缓存", total_removed),
+        );
+    }
+}
+
+fn cleanup_expired_in_dir(dir: &PathBuf, ttl: u64) -> usize {
+    let mut removed = 0;
+    let mut batch = 0;
+
+    if let Ok(entries) = fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                removed += cleanup_expired_in_dir(&path, ttl);
+                continue;
+            }
+
+            let expired = if let Ok(meta) = path.metadata() {
+                meta.modified()
+                    .ok()
+                    .and_then(|mtime| mtime.elapsed().ok())
+                    .map(|elapsed| elapsed.as_secs() > ttl)
+                    .unwrap_or(false)
+            } else {
+                false
+            };
+
+            if expired {
+                if fs::remove_file(&path).is_ok() {
+                    removed += 1;
+                    batch += 1;
+                }
+            }
+
+            // 分批处理，避免长时间阻塞
+            if batch >= STARTUP_CLEAN_BATCH_SIZE {
+                batch = 0;
+                std::thread::yield_now();
+            }
+        }
+    }
+    removed
 }
 
 pub fn get_cache_root() -> PathBuf {
@@ -59,7 +132,13 @@ pub fn set_cache_dir(new_root: &PathBuf) -> Result<()> {
         }
     }
     db::store_set(CACHE_PATH_DB_KEY, &new_root.to_string_lossy())?;
-    CACHE_ROOT.set(new_root.clone()).ok();
+    // 修复：使用 OnceLock::set 的结果，失败时记录日志
+    if CACHE_ROOT.set(new_root.clone()).is_err() {
+        crate::js_runtime::ops::emit_log(
+            "warn",
+            "[cache] 缓存目录已设置，跳过重复设置",
+        );
+    }
     Ok(())
 }
 
@@ -157,7 +236,7 @@ impl CacheCategory {
             CacheCategory::Content => 7 * 24 * 3600,
             CacheCategory::Comic => 7 * 24 * 3600,
             CacheCategory::Image => 7 * 24 * 3600,
-            CacheCategory::Lib => 0,
+            CacheCategory::Lib => 0, // 永不过期
         }
     }
 }
@@ -291,7 +370,8 @@ fn enforce_limits(cat: CacheCategory) {
             }
         }
     }
-    files.sort_by_key(|(_, t, _)| *t);
+    // 修复：按修改时间排序，并处理相同时间戳的情况
+    files.sort_by(|a, b| a.1.cmp(&b.1).then_with(|| a.0.cmp(&b.0)));
 
     let mut total_size: u64 = files.iter().map(|(_, _, s)| s).sum();
     let mut removed = 0;
@@ -333,15 +413,17 @@ fn enforce_total_limit() {
         return;
     }
 
-    all_files.sort_by_key(|(_, t, _)| *t);
+    // 修复：按修改时间排序，并处理相同时间戳的情况
+    all_files.sort_by(|a, b| a.1.cmp(&b.1).then_with(|| a.0.cmp(&b.0)));
     let mut to_free = current_total - max_total;
     for (path, _, size) in &all_files {
         if to_free == 0 {
             break;
         }
         if path.exists() {
-            let _ = fs::remove_file(path);
-            to_free = to_free.saturating_sub(*size);
+            if fs::remove_file(path).is_ok() {
+                to_free = to_free.saturating_sub(*size);
+            }
         }
     }
 }

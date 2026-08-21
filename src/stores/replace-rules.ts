@@ -3,20 +3,23 @@ import { ref } from 'vue'
 import { store } from '@/services'
 import type { ReplaceRule } from '@/types'
 
+function isReplaceRuleArray(value: unknown): value is ReplaceRule[] {
+  return Array.isArray(value)
+}
+
 export const useReplaceRuleStore = defineStore('replaceRules', () => {
   const rules = ref<ReplaceRule[]>([])
 
   async function loadRules(): Promise<void> {
     try {
       const raw = await store.get('replaceRule')
-      rules.value = Array.isArray(raw) ? raw : []
+      rules.value = isReplaceRuleArray(raw) ? raw : []
     } catch {
       rules.value = []
     }
   }
 
   async function saveRules(): Promise<void> {
-    // 直接引用保存，避免深拷贝开销
     await store.set('replaceRule', [...rules.value])
   }
 
@@ -29,9 +32,12 @@ export const useReplaceRuleStore = defineStore('replaceRules', () => {
     const idx = rules.value.findIndex((r) => r.id === id)
     if (idx !== -1) {
       const arr = [...rules.value]
-      arr[idx] = { ...arr[idx], ...updates }
-      rules.value = arr
-      await saveRules()
+      const existing = arr[idx]
+      if (existing) {
+        arr[idx] = { ...existing, ...updates }
+        rules.value = arr
+        await saveRules()
+      }
     }
   }
 
@@ -44,9 +50,12 @@ export const useReplaceRuleStore = defineStore('replaceRules', () => {
     const idx = rules.value.findIndex((r) => r.id === id)
     if (idx !== -1) {
       const arr = [...rules.value]
-      arr[idx] = { ...arr[idx], isEnabled: !arr[idx].isEnabled }
-      rules.value = arr
-      await saveRules()
+      const existing = arr[idx]
+      if (existing) {
+        arr[idx] = { ...existing, isEnabled: !existing.isEnabled }
+        rules.value = arr
+        await saveRules()
+      }
     }
   }
 

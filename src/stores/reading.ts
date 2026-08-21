@@ -2,15 +2,19 @@ import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import { store } from '@/services'
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+}
+
 export const useReadingStore = defineStore('reading', () => {
   const theme = ref('dark')
   const loaded = ref(false)
 
   async function loadSettings(): Promise<void> {
     try {
-      const settings = await store.get('appSettings')
-      if (settings) {
-        theme.value = settings.theme || 'dark'
+      const settingsRaw = await store.get('appSettings')
+      if (isRecord(settingsRaw) && typeof settingsRaw.theme === 'string') {
+        theme.value = settingsRaw.theme
       }
     } catch {
       // ignore

@@ -21,7 +21,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch, onMounted } from 'vue'
+import { ref, computed, watch } from 'vue'
 import type { Chapter } from '@/types'
 import ChapterItem from './ChapterItem.vue'
 import Pagination from '@/components/common/Pagination.vue'
@@ -77,9 +77,11 @@ watch(() => props.currentChapterId, () => {
   jumpToActiveChapter()
 }, { immediate: true })
 
+// 修复：使用浅监听替代 deep: true，避免大数组深度比较
+// props.chapters 的引用变化时触发
 watch(() => props.chapters, () => {
   jumpToActiveChapter()
-}, { deep: true })
+})
 </script>
 
 <style scoped>

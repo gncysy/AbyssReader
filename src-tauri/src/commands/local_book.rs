@@ -4,6 +4,8 @@ use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use fancy_regex::Regex;
 
+const INTRO_MAX_LENGTH: usize = 500;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ImportResult {
     pub name: String,
@@ -46,8 +48,8 @@ pub async fn import_txt(_app: tauri::AppHandle, name: String, content: String) -
         &format!("local_chapters_{}", book_id),
         &serde_json::to_string(&chapters)?,
     )?;
-    let intro = content.chars().take(500).collect::<String>();
-    let intro = if content.chars().count() > 500 {
+    let intro = content.chars().take(INTRO_MAX_LENGTH).collect::<String>();
+    let intro = if content.chars().count() > INTRO_MAX_LENGTH {
         format!("{}...", intro)
     } else {
         intro

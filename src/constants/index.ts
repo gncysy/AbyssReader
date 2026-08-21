@@ -69,6 +69,10 @@ export const READER_THEMES = [
 
 export { Z_INDEX, UI, ANIMATION_DURATION, SPACING } from './ui.js'
 
+// ─── 从 theme.ts 重导出 ───
+
+export { BRAND_COLORS } from './theme.js'
+
 // ─── 从 reader.ts 重导出 ───
 
 export { READER, COMIC, BOOK_INFO, TOC, CHANGE_SOURCE } from './reader.js'

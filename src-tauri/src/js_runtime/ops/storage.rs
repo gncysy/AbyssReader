@@ -11,8 +11,8 @@ pub static COOKIE_STORE: LazyLock<Mutex<HashMap<String, HashMap<String, String>>
 
 const COOKIE_MAX_STRING_LENGTH: usize = 4096;
 const COOKIE_MAX_KEY_COUNT: usize = 50;
+const MAX_STORAGE_VALUE_LENGTH: usize = 1024 * 1024; // 1MB
 
-// SEC-3 修复：使用 OS 密钥环存储加密密钥
 const KEYRING_SERVICE: &str = "com.gncysy.abyss-reader";
 const KEYRING_USERNAME: &str = "cookie-encryption-key";
 const KEYRING_KEY_LENGTH: usize = 32;
@@ -21,7 +21,6 @@ static ENCRYPTION_KEY: LazyLock<Mutex<Option<[u8; KEYRING_KEY_LENGTH]>>> =
     LazyLock::new(|| Mutex::new(None));
 
 fn get_or_create_encryption_key() -> [u8; KEYRING_KEY_LENGTH] {
-    // 先查内存缓存
     {
         let cache = ENCRYPTION_KEY.lock();
         if let Some(key) = *cache {
@@ -29,19 +28,19 @@ fn get_or_create_encryption_key() -> [u8; KEYRING_KEY_LENGTH] {
         }
     }
 
-    // 尝试从系统密钥环读取
     let entry = match keyring::Entry::new(KEYRING_SERVICE, KEYRING_USERNAME) {
         Ok(e) => e,
         Err(_) => {
-            // 密钥环不可用：降级为设备名派生
-            let device_name = hostname::get()
-                .map(|h| h.to_string_lossy().to_string())
-                .unwrap_or_else(|_| "abyss-reader".into());
+            // 修复：keyring 不可用时使用随机密钥，而不是可预测的主机名
+            // 随机密钥仅在当前进程内有效，重启后 cookie 解密会失败
+            // 但这是比使用可预测密钥更安全的选择
+            use rand::RngCore;
             let mut key = [0u8; KEYRING_KEY_LENGTH];
-            let bytes = device_name.as_bytes();
-            for i in 0..KEYRING_KEY_LENGTH {
-                key[i] = bytes[i % bytes.len().max(1)];
-            }
+            rand::rngs::OsRng.fill_bytes(&mut key);
+            crate::js_runtime::ops::emit_log(
+                "warn",
+                "[storage] keyring 不可用，使用临时随机密钥（重启后 cookie 需要重新登录）",
+            );
             let mut cache = ENCRYPTION_KEY.lock();
             *cache = Some(key);
             return key;
@@ -50,7 +49,6 @@ fn get_or_create_encryption_key() -> [u8; KEYRING_KEY_LENGTH] {
 
     match entry.get_password() {
         Ok(password) => {
-            // 密钥环中已存在
             let mut key = [0u8; KEYRING_KEY_LENGTH];
             let bytes = password.as_bytes();
             let len = bytes.len().min(KEYRING_KEY_LENGTH);
@@ -60,7 +58,6 @@ fn get_or_create_encryption_key() -> [u8; KEYRING_KEY_LENGTH] {
             key
         }
         Err(_) => {
-            // 生成新密钥并存入密钥环
             use rand::RngCore;
             let mut key = [0u8; KEYRING_KEY_LENGTH];
             rand::rngs::OsRng.fill_bytes(&mut key);
@@ -131,8 +128,6 @@ pub fn decrypt_cookie_data(ciphertext: &str) -> String {
     }
 }
 
-// ─── 内部辅助函数（供 network/http.rs 调用，不经 op2 宏） ───
-
 pub fn get_cookie_internal(url: &str, key: &str) -> String {
     let store = COOKIE_STORE.lock();
     let domain = url::Url::parse(url)
@@ -193,11 +188,15 @@ pub fn set_cookie_internal(url: &str, cookie_str: &str) {
     }
 }
 
-// ─── deno_core ops ───
-
 #[op2]
 #[string]
 pub fn op_java_put(#[string] source_key: String, #[string] key: String, #[string] value: String) -> String {
+    // 修复：限制 value 大小，防止恶意书源导致内存耗尽
+    if value.len() > MAX_STORAGE_VALUE_LENGTH {
+        let truncated = &value[..MAX_STORAGE_VALUE_LENGTH];
+        STORAGE.lock().entry(source_key).or_default().insert(key, truncated.to_string());
+        return "false".into();
+    }
     STORAGE.lock().entry(source_key).or_default().insert(key, value);
     "true".into()
 }
@@ -230,7 +229,6 @@ pub fn op_java_save_cookies() -> String {
     let store = COOKIE_STORE.lock();
     match serde_json::to_string(&*store) {
         Ok(json) => {
-            // SEC-3 修复：加密后写入文件
             let encrypted = encrypt_cookie_data(&json);
             if let Some(dir) = crate::js_runtime::ops::COOKIE_SAVE_PATH.get() {
                 let _ = std::fs::write(dir.join("cookies.json"), &encrypted);
@@ -314,7 +312,8 @@ pub fn op_java_start_browser_await(#[string] url: String, #[string] _title: Stri
 #[op2]
 #[string]
 pub fn op_java_time_format(#[bigint] timestamp: i64) -> String {
-    let ts_sec = if timestamp > 9999999999 { timestamp / 1000 } else { timestamp };
+    // 修复：13 位时间戳按毫秒处理，其他按秒处理
+    let ts_sec = if timestamp > 99_999_999_999 { timestamp / 1000 } else { timestamp };
     chrono::DateTime::from_timestamp(ts_sec, 0)
         .map(|dt| dt.format("%Y-%m-%d %H:%M:%S").to_string())
         .unwrap_or_default()

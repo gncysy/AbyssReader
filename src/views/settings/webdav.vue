@@ -5,7 +5,6 @@
     <div class="setting-item"><div class="setting-label"><span class="label-text">密码</span><span class="label-desc">加密存储</span></div><input v-model="config.password" type="password" class="input-search" style="width:260px" /></div>
     <div class="setting-item"><div class="setting-label"><span class="label-text">子文件夹</span><span class="label-desc">默认 legado</span></div><input v-model="config.folder" type="text" class="input-search" style="width:260px" placeholder="legado" /></div>
     <div class="setting-item"><div class="setting-label"><span class="label-text">设备名称</span></div><input v-model="config.deviceName" type="text" class="input-search" style="width:260px" placeholder="desktop" /></div>
-    <div class="setting-item"><div class="setting-label"><span class="label-text">启用同步</span></div><label class="toggle-switch"><input v-model="config.enabled" type="checkbox" /><span class="toggle-slider"></span></label></div>
     <div class="webdav-actions">
       <button class="btn-primary" :disabled="testing" @click="testConnection">{{ testing ? '测试中...' : '测试连接' }}</button>
       <button class="btn-primary" :disabled="syncing" @click="uploadBackup">{{ syncing ? '上传中...' : '上传备份' }}</button>
@@ -22,18 +21,17 @@
 import { ref, watch, onMounted } from 'vue'
 import { useMessage, useDialog } from 'naive-ui'
 import { store } from '@/services'
+import { isRecord } from '@/services/store.js'
 import { useBookshelfStore } from '@/stores'
 import { DEFAULT_WEBDAV_CONFIG, webdavRequest, listBackups, getLatestBackup, restoreBackup, fullSync, encryptConfig, decryptConfig, getDeviceName } from '@/services/webdav.js'
 import BackButton from '@/components/common/BackButton.vue'
-import { useNaiveTheme } from '@/composables/useNaiveTheme.js'
 
 const SAVE_DEBOUNCE_MS = 800
 
 const msg = useMessage()
 const dialog = useDialog()
-const { naiveTheme, themeOverrides } = useNaiveTheme()
 const bookshelfStore = useBookshelfStore()
-const config = ref({ ...DEFAULT_WEBDAV_CONFIG })
+const config = ref<Record<string, unknown>>({ ...DEFAULT_WEBDAV_CONFIG })
 const status = ref<{ type: string; message: string } | null>(null)
 const backupList = ref<{ filename: string; date: string; deviceName: string }[]>([])
 const testing = ref(false)
@@ -44,7 +42,10 @@ let saveTimer: ReturnType<typeof setTimeout> | null = null
 async function loadConfig(): Promise<void> {
   try {
     const saved = await store.get('webdavConfig')
-    if (saved) config.value = { ...DEFAULT_WEBDAV_CONFIG, ...(await decryptConfig(saved)) }
+    if (isRecord(saved)) {
+      const decrypted = await decryptConfig(saved)
+      config.value = { ...DEFAULT_WEBDAV_CONFIG, ...decrypted }
+    }
     if (!config.value.deviceName) config.value.deviceName = await getDeviceName()
   } catch {
     config.value.deviceName = await getDeviceName()
@@ -79,8 +80,9 @@ async function testConnection(): Promise<void> {
     } else if (res.status === 401) status.value = { type: 'error', message: '认证失败' }
     else if (res.status === 404) status.value = { type: 'warning', message: '文件夹不存在，上传时会自动创建' }
     else status.value = { type: 'error', message: `HTTP ${res.status}` }
-  } catch (err: any) {
-    status.value = { type: 'error', message: err.message }
+  } catch (err: unknown) {
+    const e = err as Error
+    status.value = { type: 'error', message: e.message }
   } finally {
     testing.value = false
   }
@@ -92,8 +94,9 @@ async function loadBackupList(): Promise<void> {
     backupList.value = Array.isArray(result) ? result : []
     if (backupList.value.length === 0) msg.info('没有找到备份文件')
     else msg.success(`找到 ${backupList.value.length} 个备份`)
-  } catch (err: any) {
-    msg.error('加载备份列表失败: ' + err.message)
+  } catch (err: unknown) {
+    const e = err as Error
+    msg.error('加载备份列表失败: ' + e.message)
   }
 }
 
@@ -101,14 +104,15 @@ async function uploadBackup(): Promise<void> {
   syncing.value = true
   status.value = null
   try {
-    const allKeys: any = await store.getAll()
-    const localData: any = {}
-    for (const key of Object.keys(allKeys || {})) localData[key] = allKeys[key]
+    const allKeys = await store.getAll()
+    const localData: Record<string, unknown> = {}
+    for (const key of Object.keys(allKeys)) localData[key] = allKeys[key]
     const result = await fullSync(config.value, localData)
     status.value = { type: result.success ? 'success' : 'error', message: result.message }
     if (result.success) await loadBackupList()
-  } catch (err: any) {
-    status.value = { type: 'error', message: err.message }
+  } catch (err: unknown) {
+    const e = err as Error
+    status.value = { type: 'error', message: e.message }
   } finally {
     syncing.value = false
   }
@@ -147,8 +151,9 @@ async function restoreBackupFile(filename: string): Promise<void> {
     } else {
       status.value = { type: 'error', message: result.message }
     }
-  } catch (err: any) {
-    status.value = { type: 'error', message: err.message }
+  } catch (err: unknown) {
+    const e = err as Error
+    status.value = { type: 'error', message: e.message }
   } finally {
     syncing.value = false
   }

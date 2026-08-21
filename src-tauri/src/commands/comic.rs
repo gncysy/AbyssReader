@@ -10,6 +10,15 @@ use tokio::sync::Mutex;
 static DOWNLOAD_MUTEXES: LazyLock<Mutex<HashMap<String, Arc<Mutex<()>>>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 
+// 修复：复用全局 reqwest::Client，避免每次请求都创建新 Client
+static IMAGE_CLIENT: LazyLock<reqwest::Client> = LazyLock::new(|| {
+    reqwest::Client::builder()
+        .danger_accept_invalid_certs(true)
+        .timeout(std::time::Duration::from_secs(30))
+        .build()
+        .unwrap_or_else(|_| reqwest::Client::new())
+});
+
 const PREFETCH_CONCURRENCY: usize = 3;
 const MIN_IMAGE_BYTES: usize = 100;
 
@@ -31,7 +40,6 @@ pub async fn comic_fetch_image(url: String, source_json: String, comic_id: Strin
     };
     let _guard = mtx.lock().await;
 
-    // 双重检查
     if let Some(cached) = cache::cache_get(CacheCategory::Comic, &cache_key) {
         let ct = detect_image_type(&cached);
         let b64 = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &cached);
@@ -46,7 +54,6 @@ pub async fn comic_fetch_image(url: String, source_json: String, comic_id: Strin
             let img_type = detect_image_type(&bytes);
             cache::cache_put(CacheCategory::Comic, &cache_key, &bytes)?;
             let b64 = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &bytes);
-            crate::js_runtime::ops::emit_log("info", "[comic] 策略1(裸请求)成功");
             Ok(serde_json::json!({ "url": url, "cached": false, "data": format!("data:{};base64,{}", img_type, b64) }))
         }
         Err(_e1) => {
@@ -67,9 +74,7 @@ pub async fn comic_fetch_image(url: String, source_json: String, comic_id: Strin
                             let b64 = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &bytes);
                             Ok(serde_json::json!({ "url": url, "cached": false, "data": format!("data:{};base64,{}", img_type, b64) }))
                         }
-                        Err(e3) => {
-                            let placeholder = format!("ERROR:{}", e3);
-                            let _ = cache::cache_put(CacheCategory::Comic, &cache_key, placeholder.as_bytes());
+                        Err(_e3) => {
                             Ok(serde_json::json!({ "url": url, "cached": false, "direct": true, "src": url }))
                         }
                     }
@@ -87,12 +92,8 @@ pub async fn comic_fetch_image(url: String, source_json: String, comic_id: Strin
 }
 
 async fn download_image_bare(url: &str) -> std::result::Result<Vec<u8>, String> {
-    let client = reqwest::Client::builder()
-        .danger_accept_invalid_certs(true)
-        .timeout(std::time::Duration::from_secs(30))
-        .build()
-        .map_err(|e| format!("builder error: {}", e))?;
-    let response = client.get(url).send().await.map_err(|e| format!("request: {}", e))?;
+    // 修复：复用全局 Client
+    let response = IMAGE_CLIENT.get(url).send().await.map_err(|e| format!("request: {}", e))?;
     if !response.status().is_success() {
         return Err(format!("HTTP {}", response.status().as_u16()));
     }
@@ -104,12 +105,8 @@ async fn download_image_bare(url: &str) -> std::result::Result<Vec<u8>, String> 
 }
 
 async fn download_image(url: &str, headers: &[(String, String)]) -> std::result::Result<Vec<u8>, String> {
-    let client = reqwest::Client::builder()
-        .danger_accept_invalid_certs(true)
-        .timeout(std::time::Duration::from_secs(30))
-        .build()
-        .map_err(|e| format!("builder error: {}", e))?;
-    let mut req = client.get(url);
+    // 修复：复用全局 Client
+    let mut req = IMAGE_CLIENT.get(url);
     for (k, v) in headers {
         req = req.header(k.as_str(), v.as_str());
     }
@@ -129,11 +126,8 @@ pub async fn comic_prefetch_images(urls: Vec<String>, source_json: String, comic
     let source: serde_json::Value = serde_json::from_str(&source_json)
         .map_err(|e| crate::error::AbyssError::ParseError(format!("书源 JSON 解析失败: {}", e)))?;
     let headers = build_headers(&source, false);
-    let client = reqwest::Client::builder()
-        .danger_accept_invalid_certs(true)
-        .timeout(std::time::Duration::from_secs(30))
-        .build()
-        .map_err(|e| crate::error::AbyssError::NetworkError(e.to_string()))?;
+    // 修复：复用全局 Client
+    let client = IMAGE_CLIENT.clone();
 
     let mut count = 0;
     let semaphore = Arc::new(tokio::sync::Semaphore::new(PREFETCH_CONCURRENCY));

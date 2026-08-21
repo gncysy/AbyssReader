@@ -9,13 +9,12 @@
     </div>
     <div v-if="categories.length > 0" class="explore-categories">
       <template v-for="(cat, idx) in categories" :key="idx">
-        <div v-if="!cat.url && cat.title && cat.title.trim()" class="category-divider" :class="{ 'category-divider-first': isFirstDivider(idx) }">{{ cat.title }}</div>
+        <div v-if="!cat.url && cat.title && cat.title.trim()" class="category-divider">{{ cat.title }}</div>
         <button v-else-if="cat.type === 'url' && cat.url" class="category-tag" :class="{ active: currentCategory?.title === cat.title }" @click="handleCategoryClick(cat)">{{ cat.title }}</button>
         <div v-else-if="cat.type === 'text'" class="category-text-wrapper"><span class="category-label">{{ cat.title }}</span><input :value="getInfoMapValue(cat)" type="text" class="category-text-input" :placeholder="getViewName(cat) || cat.title" @input="onTextInput(cat, ($event.target as HTMLInputElement).value)" /></div>
         <button v-else-if="cat.type === 'button'" class="category-action-btn" @click="onActionClick(cat)">{{ getViewName(cat) || cat.title }}</button>
         <button v-else-if="cat.type === 'toggle'" class="category-toggle-btn" @click="onToggleClick(cat)"><span class="toggle-char">{{ getToggleChar(cat) }}</span><span>{{ getViewName(cat) || cat.title }}</span></button>
-        <div v-else-if="cat.type === 'select'" class="category-select-wrapper"><span class="category-label">{{ getViewName(cat) || cat.title }}</span><CustomDropdown :model-value="getInfoMapValue(cat) || cat.default || (cat.chars?.[0] || '')" :options="(cat.chars || []).map(c => ({ label: c, value: c }))" placeholder="请选择" @update:modelValue="(v: string | number) => onSelectChange(cat, String(v))" style="min-width:100px" /></div>
-        <span v-else-if="cat.title === '※'" class="category-placeholder"></span>
+        <div v-else-if="cat.type === 'select'" class="category-select-wrapper"><span class="category-label">{{ getViewName(cat) || cat.title }}</span><CustomDropdown :model-value="String(getInfoMapValue(cat) || cat.default || (cat.chars && cat.chars.length > 0 ? cat.chars[0] : '') || '')" :options="(cat.chars || []).map(c => ({ label: c, value: c }))" placeholder="请选择" @update:modelValue="(v: string | number) => onSelectChange(cat, String(v))" style="min-width:100px" /></div>
       </template>
     </div>
     <EmptyState v-else-if="!loadingCategories && selectedIndex >= 0" title="暂无分类" />
@@ -23,8 +22,8 @@
     <div v-if="loadingBooks && books.length > 0" style="display:flex;justify-content:center;padding:20px 0"><LoadingSpinner /><span style="margin-left:12px;color:var(--text-muted);font-size:14px">加载中...</span></div>
     <div v-if="!loadingBooks && books.length > 0 && !hasMore" style="text-align:center;padding:16px 0;color:var(--text-muted);font-size:13px">— 已加载全部 —</div>
     <div ref="booksGridRef"></div>
-    <BookDetail v-if="bookshelfStore.showDetail" :book="bookshelfStore.detailBook ? JSON.parse(JSON.stringify(bookshelfStore.detailBook)) : null" :source="bookshelfStore.detailSource ? JSON.parse(JSON.stringify(bookshelfStore.detailSource)) : null" @close="bookshelfStore.closeDetail()" />
-    <Reader v-if="bookshelfStore.showReader" :book="bookshelfStore.readerBook ? JSON.parse(JSON.stringify(bookshelfStore.readerBook)) : null" :source="bookshelfStore.readerSource ? JSON.parse(JSON.stringify(bookshelfStore.readerSource)) : null" :initial-chapters="bookshelfStore.readerChapters" @close="bookshelfStore.closeReader()" />
+    <BookDetail v-if="bookshelfStore.showDetail" :book="bookshelfStore.detailBook" :source="bookshelfStore.detailSource" @close="bookshelfStore.closeDetail()" />
+    <Reader v-if="bookshelfStore.showReader" :book="bookshelfStore.readerBook" :source="bookshelfStore.readerSource" :initial-chapters="bookshelfStore.readerChapters as Chapter[]" @close="bookshelfStore.closeReader()" />
     <n-modal v-model:show="showLogModal" preset="card" title="发现页日志" style="max-width:800px;max-height:70vh" :bordered="false">
       <div class="log-modal-body"><div class="log-header"><span>共 {{ exploreLogs.length }} 条</span><button class="btn-secondary" style="padding:2px 10px;font-size:11px" @click="clearExploreLogs">清空</button></div>
         <div class="log-list" ref="logListRef"><div v-for="(log, idx) in exploreLogs" :key="idx" class="log-entry" :class="'log-' + log.level"><span class="log-time">{{ log.time }}</span><span class="log-module">{{ log.module }}</span><span class="log-source">{{ log.source }}</span><span class="log-message">{{ log.message }}</span></div></div>
@@ -48,14 +47,14 @@ import Reader from '@/components/reader/Reader.vue'
 import EmptyState from '@/components/common/EmptyState.vue'
 import LoadingSpinner from '@/components/common/LoadingSpinner.vue'
 import { onLog, logHistory, type LogEntry } from '@engine/log/index.js'
-import type { Book, BookSource } from '@/types'
+import type { Book, BookSource, Chapter } from '@/types'
 import type { ExploreKind } from '@engine/business/explore/index.js'
 
 const MAX_EXPLORE_LOGS = 1000
 
 const bookshelfStore = useBookshelfStore()
 const infoMapStore = useInfoMapStore()
-const { categories, loadingCategories, currentCategory, books, loadingBooks, currentPage, hasMore, booksGridRef, loadCategories, exploreCategory, loadBooks, reset, cleanupObserver } = useExplore()
+const { categories, loadingCategories, currentCategory, books, loadingBooks, currentPage, hasMore, booksGridRef, loadCategories, exploreCategory, loadBooks, cleanupObserver } = useExplore()
 const { handleAndNotify } = useErrorHandler()
 
 const sources = ref<BookSource[]>([])
@@ -65,16 +64,19 @@ const showLogModal = ref(false)
 const exploreLogs = ref<LogEntry[]>([])
 const logListRef = ref<HTMLElement | null>(null)
 
-const currentSourceUrl = computed(() => selectedIndex.value < 0 ? '' : (Array.isArray(sources.value) ? sources.value[selectedIndex.value]?.bookSourceUrl || '' : ''))
-const sourceName = computed(() => selectedIndex.value < 0 ? '选择书源' : (Array.isArray(sources.value) ? sources.value[selectedIndex.value]?.bookSourceName || '书源' : '书源'))
+function isBookSourceArray(value: unknown): value is BookSource[] {
+  return Array.isArray(value)
+}
+
+const currentSourceUrl = computed(() => selectedIndex.value < 0 ? '' : (sources.value[selectedIndex.value]?.bookSourceUrl || ''))
+const sourceName = computed(() => selectedIndex.value < 0 ? '选择书源' : (sources.value[selectedIndex.value]?.bookSourceName || '书源'))
 const hasFilters = computed(() => categories.value.some((c) => c.type === 'select' || c.type === 'toggle' || c.type === 'text'))
 const filteredSources = computed(() => {
   const result: { source: BookSource; originalIndex: number }[] = []
   const filter = sourceFilter.value.trim().toLowerCase()
-  const arr = Array.isArray(sources.value) ? sources.value : []
-  arr.forEach((source, i) => {
+  sources.value.forEach((source, i) => {
     if (!source.exploreUrl?.trim()) return
-    if (filter && !(source.bookSourceName || source.name || '').toLowerCase().includes(filter)) return
+    if (filter && !source.bookSourceName.toLowerCase().includes(filter)) return
     result.push({ source, originalIndex: i })
   })
   return result
@@ -82,19 +84,10 @@ const filteredSources = computed(() => {
 const sourceOptions = computed(() => {
   const opts: { label: string; value: number }[] = [{ label: '选择书源...', value: -1 }]
   for (const item of filteredSources.value) {
-    opts.push({ label: item.source.bookSourceName || item.source.name || '未命名', value: item.originalIndex })
+    opts.push({ label: item.source.bookSourceName, value: item.originalIndex })
   }
   return opts
 })
-
-function isFirstDivider(idx: number): boolean {
-  for (let i = idx - 1; i >= 0; i--) {
-    const prev = categories.value[i]
-    if (prev && prev.title && prev.title.trim() && !prev.url) return false
-    if (prev && prev.type === 'url' && prev.url) return true
-  }
-  return true
-}
 
 function getInfoMapValue(cat: ExploreKind): string { return infoMapStore.get(currentSourceUrl.value, cat.title) }
 function setInfoMapValue(cat: ExploreKind, value: string): void { infoMapStore.set(currentSourceUrl.value, cat.title, value) }
@@ -107,15 +100,15 @@ function getViewName(cat: ExploreKind): string {
 }
 
 function getToggleChar(cat: ExploreKind): string {
-  const chars = cat.chars || ['↓ ', '↑ ']
-  const current = getInfoMapValue(cat) || cat.default || chars[0]
+  const chars = cat.chars && cat.chars.length > 0 ? cat.chars : ['↓ ', '↑ ']
+  const current = getInfoMapValue(cat) || cat.default || (chars[0] !== undefined ? chars[0] : '')
   return current
 }
 
 async function loadSources(): Promise<void> {
   try {
     const raw = await store.get('bookSource')
-    sources.value = Array.isArray(raw) ? raw : []
+    sources.value = isBookSourceArray(raw) ? raw : []
     const first = filteredSources.value[0]
     if (first) { selectedIndex.value = first.originalIndex; await loadCategoriesForSource(first.source) }
   } catch (err) {
@@ -129,12 +122,7 @@ async function loadCategoriesForSource(source: BookSource): Promise<void> {
     const first = categories.value.find((c) => c.type === 'url' && c.url)
     if (first) await exploreCategory(source, first)
   } catch (err) {
-    handleAndNotify(err, {
-      module: 'explore',
-      operation: 'loadCategories',
-      sourceUrl: source.bookSourceUrl,
-      userMessage: '加载分类失败，请检查书源',
-    })
+    handleAndNotify(err, { module: 'explore', operation: 'loadCategories', sourceUrl: source.bookSourceUrl, userMessage: '加载分类失败，请检查书源' })
   }
 }
 
@@ -164,12 +152,12 @@ async function onSelectChange(cat: ExploreKind, value: string): Promise<void> {
 }
 
 async function onToggleClick(cat: ExploreKind): Promise<void> {
-  const chars = cat.chars || ['↓ ', '↑ ']
-  const current = getInfoMapValue(cat) || cat.default || chars[0]
-  const next = chars[(chars.indexOf(current) + 1) % chars.length] || chars[0]
+  const chars = cat.chars && cat.chars.length > 0 ? cat.chars : ['↓ ', '↑ ']
+  const current = getInfoMapValue(cat) || cat.default || (chars[0] !== undefined ? chars[0] : '')
+  const idx = chars.indexOf(current)
+  const next = chars[(idx + 1) % chars.length] || (chars[0] !== undefined ? chars[0] : '')
   setInfoMapValue(cat, next)
   if (cat.action) await executeAction(cat.action)
-  // 只刷新当前分类的书籍，不重置整个分类
   if (currentCategory.value) {
     currentPage.value = 1
     books.value = []
@@ -186,7 +174,7 @@ async function onTextInput(cat: ExploreKind, value: string): Promise<void> {
   if (cat.action) {
     if (textInputTimer) clearTimeout(textInputTimer)
     textInputTimer = setTimeout(async () => {
-      await executeAction(cat.action)
+      await executeAction(cat.action!)
       textInputTimer = null
     }, 600)
   }
@@ -199,26 +187,13 @@ async function onActionClick(cat: ExploreKind): Promise<void> {
 async function executeAction(action: string): Promise<void> {
   try {
     let processed = action
-    processed = processed.replace(/Map\(['"]([^'"]+)['"]\)/g, (_, key) => JSON.stringify(infoMapStore.get(currentSourceUrl.value, key) || ''))
-
-    const result = await engine.executeJs(processed, {
+    processed = processed.replace(/Map\(['"]([^'"]+)['"]\)/g, (_, key: string) => JSON.stringify(infoMapStore.get(currentSourceUrl.value, key) || ''))
+    await engine.executeJs(processed, {
       source: sources.value[selectedIndex.value] || {},
       baseUrl: currentSourceUrl.value || '',
       result: '',
       book: {},
     })
-
-    if (result && typeof result === 'string') {
-      try {
-        const parsed = JSON.parse(result)
-        if (parsed?.refresh) {
-          const src = sources.value[selectedIndex.value]
-          if (src) loadCategoriesForSource(src)
-        }
-      } catch {
-        // 不是 JSON，忽略
-      }
-    }
   } catch (err) {
     handleAndNotify(err, { module: 'explore', operation: 'executeAction', userMessage: '执行操作失败' })
   }
@@ -238,7 +213,7 @@ function resetFilters(): void {
 function openBookDetail(book: Book): void {
   const source = sources.value[selectedIndex.value]
   if (!source) return
-  bookshelfStore.openDetail({ ...book, origin: source.bookSourceUrl || '', originName: source.bookSourceName || source.name || '' }, source)
+  bookshelfStore.openDetail({ ...book, origin: source.bookSourceUrl || '', originName: source.bookSourceName }, source)
 }
 
 function clearExploreLogs(): void { exploreLogs.value = [] }
@@ -273,7 +248,6 @@ onUnmounted(() => {
 .explore-page { position: relative; z-index: 1; }
 .explore-categories { display: flex; flex-wrap: wrap; gap: 6px 12px; align-items: center; padding: 8px 0 16px 0; min-height: 40px; }
 .category-divider { width: 100%; text-align: center; font-size: 15px; font-weight: 600; color: var(--text-primary); padding: 10px 0 4px 0; margin-top: 6px; border-top: 1px solid var(--border-color); opacity: 0.7; letter-spacing: 0.06em; }
-.category-divider-first { border-top: none; margin-top: 0; padding-top: 2px; }
 .category-tag { padding: 6px 14px; font-size: 13px; color: var(--text-secondary); background: transparent; border: none; border-bottom: 2px solid transparent; cursor: pointer; font-weight: 500; transition: color 0.2s, border-color 0.2s; }
 .category-tag:hover { color: var(--text-primary); }
 .category-tag.active { color: var(--brand); border-bottom-color: var(--brand); }
@@ -287,7 +261,6 @@ onUnmounted(() => {
 .category-toggle-btn:hover { color: var(--text-primary); background: var(--bg-hover); border-color: var(--brand); }
 .toggle-char { font-size: 12px; color: var(--text-muted); }
 .category-select-wrapper { display: flex; align-items: center; gap: 6px; padding: 4px 0; }
-.category-placeholder { display: none; }
 .log-modal-body { display: flex; flex-direction: column; max-height: 60vh; }
 .log-header { display: flex; justify-content: space-between; align-items: center; font-size: 12px; color: var(--text-muted); padding-bottom: 4px; border-bottom: 1px solid var(--border-color); flex-shrink: 0; }
 .log-list { flex: 1; overflow-y: auto; font-size: 11px; display: flex; flex-direction: column; padding-top: 4px; }

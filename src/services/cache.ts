@@ -5,8 +5,6 @@
 import { invoke } from '@tauri-apps/api/core'
 import type { Book } from '@/types'
 
-// ─── LRU 缓存 ───
-
 class LRUCache<K, V> {
   private maxSize: number
   private cache: Map<K, V>
@@ -54,18 +52,32 @@ class LRUCache<K, V> {
   }
 }
 
-// ─── 内存缓存实例 ───
+// ─── 统一内容缓存 ───
+// 使用单一缓存存储所有章节内容（原始+净化后），减少内存浪费
 
 const MAX_CACHED_CHAPTERS = 100
-const preloadedContents = new LRUCache<string, string>(MAX_CACHED_CHAPTERS)
-const rawContents = new LRUCache<string, string>(MAX_CACHED_CHAPTERS)
+const chapterContents = new LRUCache<string, string>(MAX_CACHED_CHAPTERS)
+
+interface CacheInfo {
+  path: string
+  totalSize: number
+  totalSizeFormatted: string
+  totalFiles: number
+  maxTotalBytes: number
+  maxTotalFormatted: string
+  categories: Array<{ key: string; name: string; size: number; sizeFormatted: string; count: number }>
+}
+
+interface ClearResult {
+  removed: number
+}
 
 export const cache = {
-  getInfo: (): Promise<any> => invoke('cache_get_info'),
+  getInfo: (): Promise<CacheInfo> => invoke('cache_get_info'),
 
-  clearAll: (): Promise<any> => invoke('cache_clear'),
+  clearAll: (): Promise<ClearResult> => invoke('cache_clear'),
 
-  clearCategory: (category: string): Promise<any> =>
+  clearCategory: (category: string): Promise<ClearResult> =>
     invoke('cache_clear_category', { category }),
 
   getCover: (url: string): Promise<string | null> =>
@@ -89,10 +101,10 @@ export const cache = {
   putContent: (bookUrl: string, dataJson: string): Promise<string> =>
     invoke('cache_put_content', { bookUrl, dataJson }),
 
-  setMaxSize: (maxMb: number): Promise<any> =>
+  setMaxSize: (maxMb: number): Promise<{ maxTotalBytes: number; maxTotalFormatted: string }> =>
     invoke('cache_set_max_size', { maxMb }),
 
-  migrate: (newPath: string): Promise<any> =>
+  migrate: (newPath: string): Promise<{ path: string }> =>
     invoke('cache_migrate', { newPath }),
 
   putCovers: (items: Array<{ url: string; data: string }>): Promise<number> =>
@@ -101,7 +113,6 @@ export const cache = {
 
 // ─── 章节缓存辅助 ───
 
-// 使用 encodeURIComponent 避免键碰撞
 function getBookCacheKey(book: Book): string {
   const key = book.tocUrl || book.bookUrl
   return encodeURIComponent(key)
@@ -112,27 +123,27 @@ function getChapterCacheKey(book: Book, chapterIndex: number): string {
 }
 
 export function getPreloadedContent(book: Book, chapterIndex: number): string | undefined {
-  return preloadedContents.get(getChapterCacheKey(book, chapterIndex))
+  return chapterContents.get(getChapterCacheKey(book, chapterIndex))
 }
 
 export function setPreloadedContent(book: Book, chapterIndex: number, content: string): void {
-  preloadedContents.set(getChapterCacheKey(book, chapterIndex), content)
+  chapterContents.set(getChapterCacheKey(book, chapterIndex), content)
 }
 
 export function clearPreloadedContents(): void {
-  preloadedContents.clear()
+  chapterContents.clear()
 }
 
 export function getRawContent(book: Book, chapterIndex: number): string | undefined {
-  return rawContents.get(getChapterCacheKey(book, chapterIndex))
+  return chapterContents.get(getChapterCacheKey(book, chapterIndex) + '::raw')
 }
 
 export function setRawContent(book: Book, chapterIndex: number, content: string): void {
-  rawContents.set(getChapterCacheKey(book, chapterIndex), content)
+  chapterContents.set(getChapterCacheKey(book, chapterIndex) + '::raw', content)
 }
 
 export function hasPreloadedContent(book: Book, chapterIndex: number): boolean {
-  return preloadedContents.has(getChapterCacheKey(book, chapterIndex))
+  return chapterContents.has(getChapterCacheKey(book, chapterIndex))
 }
 
 export async function getCachedContent(
@@ -143,7 +154,7 @@ export async function getCachedContent(
     const bookKey = getBookCacheKey(book)
     const key = bookKey + '/' + chapterId
     const raw = await invoke('cache_get_content', { bookUrl: key })
-    if (raw) return raw as string
+    if (typeof raw === 'string') return raw
   } catch {
     // ignore
   }

@@ -11,7 +11,7 @@
       @contextmenu="$emit('contextmenu-book', book, $event)"
     />
   </div>
-  <EmptyState v-else :title="emptyTitle" :description="emptyDescription" />
+  <EmptyState v-else :title="emptyTitle || '空空如也'" :description="emptyDescription" />
 </template>
 
 <script setup lang="ts">
@@ -20,7 +20,7 @@ import BookCard from './BookCard.vue'
 import SkeletonCard from '@/components/common/SkeletonCard.vue'
 import EmptyState from '@/components/common/EmptyState.vue'
 
-withDefaults(defineProps<{
+const props = withDefaults(defineProps<{
   books: Book[]; loading?: boolean; skeletonCount?: number; emptyTitle?: string; emptyDescription?: string
 }>(), { loading: false, skeletonCount: 8, emptyTitle: '空空如也', emptyDescription: '' })
 

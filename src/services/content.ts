@@ -2,11 +2,7 @@
 // 正文获取编排服务 — 对齐 Legado BookContent
 // ============================================
 
-import { getString, getElements } from '@engine/parser/index.js'
-import { resolveUrl } from '@engine/url/index.js'
-import { getGlobalHttpClient } from '@engine/network/client.js'
 import { analyzeUrl } from '@engine/url/index.js'
-import { parseSourceHeader } from '@engine/business/source/helper.js'
 import { logInfo, logError } from '@engine/log/index.js'
 import { parseContentPage, injectImageStyle } from '@engine/business/content/fetcher-parser.js'
 import { shouldExecuteInDeno, evaluateRule } from './rule-evaluator.js'
@@ -14,6 +10,7 @@ import { fetchWithWebviewFallback } from './fetch.js'
 import CryptoJS from 'crypto-js'
 import { engine } from './engine.js'
 import type { BookSource } from '@/types'
+import type { EngineBookSource, EngineBook, EngineChapter } from '@engine/types.js'
 import { NETWORK } from '@/constants/index.js'
 
 const MAX_CONTENT_PAGES = 20
@@ -25,14 +22,16 @@ const HEX_MIN_NEWLINE_COUNT = 1
 const AES_KEY_LENGTH = 16
 const INVALID_RESULT_MIN_LENGTH = 100
 
-// ─── 章节 URL 按需解密 ───
+function toEngineBookSource(source: BookSource): EngineBookSource {
+  return source as unknown as EngineBookSource
+}
 
 async function resolveChapterUrl(
   url: string,
   deferredJs: string | undefined,
-  deferredResult: any,
+  deferredResult: unknown,
   source: BookSource,
-  book: any,
+  book: Record<string, unknown>,
 ): Promise<string> {
   if (!deferredJs) return url
 
@@ -57,28 +56,33 @@ async function resolveChapterUrl(
       logInfo('reader', 'frontend', '[正文] 章节 URL 解密成功')
       return result.trim()
     }
-  } catch (e: any) {
-    logError('reader', 'frontend', '[正文] 章节 URL 解密失败: ' + (e?.message || e))
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : String(e)
+    logError('reader', 'frontend', '[正文] 章节 URL 解密失败: ' + msg)
   }
 
   return url
 }
-
-// ─── 正文解密辅助 ───
 
 function isValidHtmlContent(html: string): boolean {
   return html.trim().length > 0 &&
     (html.includes('<') || html.includes('\n') || html.length > 20)
 }
 
-/**
- * 从原始 HTML 中提取 params 并解密 JSON，提取 chapter_images 构造 <img> 标签列表
- * 用于书源 JS 因 V8/Rhino 正则差异产生异常结果时的 fallback
- */
-async function decryptJsonFromHtml(
-  html: string,
-  source: BookSource,
-): Promise<string> {
+function getDecryptKey(source: BookSource): string | null {
+  const rule = source.ruleContent
+  if (!rule) return null
+  const key = (rule as unknown as Record<string, unknown>).decryptKey
+  return typeof key === 'string' && key.length > 0 ? key : null
+}
+
+async function decryptJsonFromHtml(html: string, source: BookSource): Promise<string> {
+  const decryptKey = getDecryptKey(source)
+  if (!decryptKey) {
+    logError('reader', 'frontend', '[正文] fallback: 书源未配置 decryptKey')
+    return ''
+  }
+
   try {
     const paramsMatch = html.match(/params = '([^']+)'/)
     if (!paramsMatch || !paramsMatch[1]) {
@@ -91,9 +95,9 @@ async function decryptJsonFromHtml(
     const iv = CryptoJS.lib.WordArray.create(encryptedDataWithIV.words.slice(0, 16))
     const encryptedBytes = encryptedDataWithIV.words.slice(4)
     const encryptedHex = CryptoJS.enc.Hex.stringify(CryptoJS.lib.WordArray.create(encryptedBytes))
-    const keyUtf8 = CryptoJS.enc.Utf8.parse("5V&RoR%Jf@pJPydF")
+    const keyUtf8 = CryptoJS.enc.Utf8.parse(decryptKey)
     const decrypted = CryptoJS.AES.decrypt(
-      { ciphertext: CryptoJS.enc.Hex.parse(encryptedHex) },
+      { ciphertext: CryptoJS.enc.Hex.parse(encryptedHex) } as unknown as CryptoJS.lib.CipherParams,
       keyUtf8,
       { iv: iv }
     )
@@ -105,174 +109,31 @@ async function decryptJsonFromHtml(
     }
 
     try {
-      const parsed = JSON.parse(decryptedText)
-      if (parsed.chapter_images && Array.isArray(parsed.chapter_images) && parsed.chapter_images.length > 0) {
-        const imagesHtml = parsed.chapter_images
-          .map((imgUrl: string) => `<img src="${imgUrl.replace(/\\/g, '')}">`)
-          .join('\n')
-        logInfo('reader', 'frontend', `[正文] fallback JSON 解密成功: ${parsed.chapter_images.length} 张图片`)
-        return imagesHtml
+      const parsed = JSON.parse(decryptedText) as Record<string, unknown>
+      if (Array.isArray(parsed.chapter_images) && parsed.chapter_images.length > 0) {
+        const images = (parsed.chapter_images as string[]).map((imgUrl) => `<img src="${imgUrl.replace(/\\/g, '')}">`).join('\n')
+        logInfo('reader', 'frontend', `[正文] fallback JSON 解密成功: ${(parsed.chapter_images as string[]).length} 张图片`)
+        return images
       }
     } catch {
       // 不是合法 JSON，继续尝试其他方式
     }
 
-    const step2 = decryptedText.replace(/\\|\"/g,'')
-    const step3 = step2.replace(/.*?\[(.*?)\].*?/g,'$1')
-    if (step3 && step3.length > 10) {
-      const step4 = step3.replace(/\,/g,'\n')
-      if (step4.split('\n').length > 1) {
-        logInfo('reader', 'frontend', `[正文] fallback 非贪婪正则提取成功: ${step4.length} 字符`)
-        return step4
-      }
-    }
-
     logError('reader', 'frontend', '[正文] fallback: 无法从解密结果中提取图片列表')
     return ''
-  } catch (e: any) {
-    logError('reader', 'frontend', `[正文] fallback 解密失败: ${e?.message || e}`)
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : String(e)
+    logError('reader', 'frontend', '[正文] fallback 解密失败: ' + msg)
     return ''
   }
 }
-
-async function tryDecryptContent(
-  html: string,
-  source: BookSource,
-  contentRule: NonNullable<BookSource['ruleContent']>,
-  book: any,
-  ctx: any,
-): Promise<{ html: string; jsExecuted: boolean }> {
-  let decryptedHtml = html
-  let jsExecuted = false
-
-  const contentRuleStr = contentRule.content || ''
-  if (shouldExecuteInDeno(contentRuleStr)) {
-    try {
-      const result = await evaluateRule(
-        contentRuleStr,
-        html,
-        { ...ctx, baseUrl: source.bookSourceUrl || '', book, result: html },
-        { forceDeno: true }
-      )
-      if (result && typeof result === 'string') {
-        const trimmed = result.trim()
-
-        decryptedHtml = trimmed
-        jsExecuted = true
-
-        if (trimmed.startsWith('<img src="') && trimmed.length < INVALID_RESULT_MIN_LENGTH) {
-          logError('reader', 'frontend', `[正文] JS 解密结果异常(${trimmed.length}字符)，触发 fallback`)
-          const fallbackHtml = await decryptJsonFromHtml(html, source)
-          if (fallbackHtml) {
-            decryptedHtml = fallbackHtml
-          }
-        } else if (trimmed.length > 10 && trimmed.includes('<img')) {
-          logInfo('reader', 'frontend', `[正文] @js 解密成功: ${decryptedHtml.length} 字符`)
-        } else if (trimmed.startsWith('{')) {
-          try {
-            const parsed = JSON.parse(trimmed)
-            if (parsed.chapter_images && Array.isArray(parsed.chapter_images) && parsed.chapter_images.length > 0) {
-              const imagesHtml = parsed.chapter_images
-                .map((imgUrl: string) => `<img src="${imgUrl.replace(/\\/g, '')}">`)
-                .join('\n')
-              decryptedHtml = imagesHtml
-              logInfo('reader', 'frontend', `[正文] JSON 解密成功: ${parsed.chapter_images.length} 张图片`)
-            }
-          } catch {
-            // 不是合法 JSON
-          }
-        }
-      }
-    } catch (e: any) {
-      logError('reader', 'frontend', '[正文] @js 解密失败: ' + (e?.message || e))
-    }
-  }
-
-  if (contentRule.sourceRegex) {
-    try {
-      const regex = new RegExp(contentRule.sourceRegex, 's')
-      const match = decryptedHtml.match(regex)
-      if (match && match[1]) {
-        decryptedHtml = match[1]
-        logInfo('reader', 'frontend', '[正文] sourceRegex 提取成功')
-      }
-    } catch (e: any) {
-      logError('reader', 'frontend', '[正文] sourceRegex 失败: ' + (e?.message || e))
-    }
-  }
-
-  if (contentRule.imageDecode) {
-    try {
-      const { getJsRuntime } = await import('@engine/parser/js-executor.js')
-      const runtime = getJsRuntime()
-      if (runtime) {
-        const decodeResult = await runtime.execute(contentRule.imageDecode, {
-          result: decryptedHtml,
-          src: decryptedHtml,
-          source,
-          baseUrl: source.bookSourceUrl || '',
-          book,
-        })
-        if (decodeResult && decodeResult.length > decryptedHtml.length * 0.5) {
-          decryptedHtml = decodeResult
-          logInfo('reader', 'frontend', '[正文] imageDecode 解密成功')
-        }
-      }
-    } catch (e: any) {
-      logError('reader', 'frontend', '[正文] imageDecode 失败: ' + (e?.message || e))
-    }
-  }
-
-  // AES/ECB 自动检测
-  if (decryptedHtml.length < BASE64_LENGTH_THRESHOLD && /^[A-Za-z0-9+/=\s]+$/.test(decryptedHtml.trim())) {
-    try {
-      const keyStr = (source.bookSourceUrl || '').padEnd(AES_KEY_LENGTH, '0').substring(0, AES_KEY_LENGTH)
-      const key = CryptoJS.enc.Utf8.parse(keyStr)
-      const decrypted = CryptoJS.AES.decrypt(decryptedHtml.trim(), key, {
-        mode: CryptoJS.mode.ECB,
-        padding: CryptoJS.pad.Pkcs7,
-      })
-      const decryptedStr = decrypted.toString(CryptoJS.enc.Utf8)
-      if (decryptedStr && decryptedStr.length > decryptedHtml.length * AES_MIN_LENGTH_RATIO) {
-        decryptedHtml = decryptedStr
-        logInfo('reader', 'frontend', '[正文] AES/ECB 解密成功')
-      }
-    } catch {
-      // ignore
-    }
-  }
-
-  // Hex 自动检测
-  if (decryptedHtml.length < HEX_MAX_LENGTH && /^[0-9a-fA-F\s]+$/.test(decryptedHtml.trim())) {
-    try {
-      const hex = decryptedHtml.replace(/\s/g, '')
-      const bytes = new Uint8Array(hex.length / 2)
-      for (let i = 0; i < hex.length; i += 2) bytes[i / 2] = parseInt(hex.substring(i, i + 2), 16)
-      const decoded = new TextDecoder().decode(bytes)
-      if (decoded.length > 10 && decoded.split('\n').length > HEX_MIN_NEWLINE_COUNT) {
-        decryptedHtml = decoded
-        logInfo('reader', 'frontend', '[正文] Hex 解密成功')
-      }
-    } catch {
-      // ignore
-    }
-  }
-
-  if (!isValidHtmlContent(decryptedHtml) && isValidHtmlContent(html)) {
-    decryptedHtml = html
-  }
-
-  return { html: decryptedHtml, jsExecuted }
-}
-
-// ─── 执行 bodyJs ───
 
 async function executeBodyJs(
   bodyJs: string,
   responseBody: string,
   source: BookSource,
-  book: any,
-  chapter: any,
+  book: Record<string, unknown>,
+  chapter: Record<string, unknown>,
   nextChapterUrl: string | null | undefined,
 ): Promise<string> {
   try {
@@ -294,20 +155,19 @@ async function executeBodyJs(
       chapter: chapter || {},
       nextChapterUrl: nextChapterUrl || '',
     })
-    if (result && typeof result === 'string' && result.length > 0) {
+    if (typeof result === 'string' && result.length > 0) {
       logInfo('reader', 'frontend', '[正文] bodyJs 执行成功')
       return result
     }
     return responseBody
-  } catch (e: any) {
-    logError('reader', 'frontend', '[正文] bodyJs 执行失败: ' + (e?.message || e))
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : String(e)
+    logError('reader', 'frontend', '[正文] bodyJs 执行失败: ' + msg)
     return responseBody
   }
 }
 
-// ─── 执行 header 规则 ───
-
-async function executeHeaderRule(source: BookSource, baseUrl: string): Promise<Record<string, string>> {
+async function executeHeaderRule(source: BookSource): Promise<Record<string, string>> {
   const headers: Record<string, string> = {}
   if (!source.header) return headers
 
@@ -318,54 +178,35 @@ async function executeHeaderRule(source: BookSource, baseUrl: string): Promise<R
       const runtime = getJsRuntime()
       if (runtime) {
         const result = await runtime.execute(headerStr, {
-          source,
-          baseUrl,
+          source: toEngineBookSource(source),
+          baseUrl: source.bookSourceUrl || '',
           result: '',
           book: {},
         })
-        if (result && typeof result === 'string') {
-          let parsed: any = null
+        if (typeof result === 'string') {
           try {
-            parsed = JSON.parse(result)
-          } catch {
-            try {
-              parsed = JSON.parse(result.replace(/'/g, '"'))
-            } catch {
-              // ignore
-            }
-          }
-          if (parsed && typeof parsed === 'object') {
+            const parsed = JSON.parse(result) as Record<string, unknown>
             for (const [key, value] of Object.entries(parsed)) {
-              if (value !== null && value !== undefined) {
-                headers[key] = String(value)
-              }
+              if (value !== null && value !== undefined) headers[key] = String(value)
             }
+          } catch {
+            // ignore
           }
         }
       }
     } else {
       try {
-        const parsed = JSON.parse(headerStr)
+        const parsed = JSON.parse(headerStr) as Record<string, unknown>
         for (const [key, value] of Object.entries(parsed)) {
-          if (value !== null && value !== undefined) {
-            headers[key] = String(value)
-          }
+          if (value !== null && value !== undefined) headers[key] = String(value)
         }
       } catch {
-        try {
-          const parsed = JSON.parse(headerStr.replace(/'/g, '"'))
-          for (const [key, value] of Object.entries(parsed)) {
-            if (value !== null && value !== undefined) {
-              headers[key] = String(value)
-            }
-          }
-        } catch {
-          // ignore
-        }
+        // ignore
       }
     }
-  } catch (e: any) {
-    logError('reader', 'frontend', '[正文] header 规则执行失败: ' + (e?.message || e))
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : String(e)
+    logError('reader', 'frontend', '[正文] header 规则执行失败: ' + msg)
   }
 
   if (!headers['User-Agent'] && !headers['user-agent']) {
@@ -375,18 +216,22 @@ async function executeHeaderRule(source: BookSource, baseUrl: string): Promise<R
   return headers
 }
 
-// ─── 单页获取 + 解密 ───
+interface FetchAndDecryptResult {
+  html: string
+  redirectUrl: string
+  jsExecuted: boolean
+}
 
 async function fetchAndDecryptPage(
   source: BookSource,
   url: string,
   headers: Record<string, string>,
-  book: any,
-  contentRule: NonNullable<BookSource['ruleContent']>,
-  ctx: any,
-  chapter?: any,
+  book: Record<string, unknown>,
+  contentRule: Record<string, unknown>,
+  ctx: Record<string, unknown>,
+  chapter?: Record<string, unknown>,
   nextChapterUrl?: string | null,
-): Promise<{ html: string; redirectUrl: string; jsExecuted: boolean } | null> {
+): Promise<FetchAndDecryptResult | null> {
   try {
     const needsAnalyze = url.includes('@js:') || url.includes('<js>') || url.includes('{{') || url.includes(',{')
     let reqUrl = url
@@ -397,11 +242,11 @@ async function fetchAndDecryptPage(
 
     if (needsAnalyze) {
       const analysis = await analyzeUrl(url, {
-        source,
-        book: { ...book, kind: book.kind },
+        source: toEngineBookSource(source),
+        book: book as Partial<EngineBook>,
         baseUrl: source.bookSourceUrl || '',
         headerMap: headers,
-        chapter: chapter || { url },
+        chapter: chapter as Partial<EngineChapter>,
       })
       reqUrl = analysis.url
       method = analysis.method
@@ -428,15 +273,95 @@ async function fetchAndDecryptPage(
     }
 
     const redirectUrl = reqUrl
-    const { html: decrypted, jsExecuted } = await tryDecryptContent(processedHtml, source, contentRule, book, ctx)
+    let decrypted = processedHtml
+    let jsExecuted = false
+
+    const contentRuleStr = typeof contentRule.content === 'string' ? contentRule.content : ''
+    if (shouldExecuteInDeno(contentRuleStr)) {
+      try {
+        const result = await evaluateRule(
+          contentRuleStr,
+          processedHtml,
+          { ...ctx, baseUrl: source.bookSourceUrl || '', book, result: processedHtml },
+          { forceDeno: true }
+        )
+        if (typeof result === 'string' && result.trim()) {
+          decrypted = result.trim()
+          jsExecuted = true
+
+          if (decrypted.startsWith('<img src="') && decrypted.length < INVALID_RESULT_MIN_LENGTH) {
+            logError('reader', 'frontend', `[正文] JS 解密结果异常(${decrypted.length}字符)，触发 fallback`)
+            const fallbackHtml = await decryptJsonFromHtml(processedHtml, source)
+            if (fallbackHtml) decrypted = fallbackHtml
+          } else if (decrypted.length > 10 && decrypted.includes('<img')) {
+            logInfo('reader', 'frontend', `[正文] @js 解密成功: ${decrypted.length} 字符`)
+          }
+        }
+      } catch (e: unknown) {
+        const msg = e instanceof Error ? e.message : String(e)
+        logError('reader', 'frontend', '[正文] @js 解密失败: ' + msg)
+      }
+    }
+
+    const sourceRegex = typeof contentRule.sourceRegex === 'string' ? contentRule.sourceRegex : ''
+    if (sourceRegex) {
+      try {
+        const regex = new RegExp(sourceRegex, 's')
+        const match = decrypted.match(regex)
+        if (match && match[1]) {
+          decrypted = match[1]
+          logInfo('reader', 'frontend', '[正文] sourceRegex 提取成功')
+        }
+      } catch (e: unknown) {
+        const msg = e instanceof Error ? e.message : String(e)
+        logError('reader', 'frontend', '[正文] sourceRegex 失败: ' + msg)
+      }
+    }
+
+    if (decrypted.length < BASE64_LENGTH_THRESHOLD && /^[A-Za-z0-9+/=\s]+$/.test(decrypted.trim())) {
+      try {
+        const keyStr = (source.bookSourceUrl || '').padEnd(AES_KEY_LENGTH, '0').substring(0, AES_KEY_LENGTH)
+        const key = CryptoJS.enc.Utf8.parse(keyStr)
+        const aesDecrypted = CryptoJS.AES.decrypt(decrypted.trim(), key, {
+          mode: CryptoJS.mode.ECB,
+          padding: CryptoJS.pad.Pkcs7,
+        })
+        const decryptedStr = aesDecrypted.toString(CryptoJS.enc.Utf8)
+        if (decryptedStr && decryptedStr.length > decrypted.length * AES_MIN_LENGTH_RATIO) {
+          decrypted = decryptedStr
+          logInfo('reader', 'frontend', '[正文] AES/ECB 解密成功')
+        }
+      } catch {
+        // ignore
+      }
+    }
+
+    if (decrypted.length < HEX_MAX_LENGTH && /^[0-9a-fA-F\s]+$/.test(decrypted.trim())) {
+      try {
+        const hex = decrypted.replace(/\s/g, '')
+        const bytes = new Uint8Array(hex.length / 2)
+        for (let i = 0; i < hex.length; i += 2) bytes[i / 2] = parseInt(hex.substring(i, i + 2), 16)
+        const decoded = new TextDecoder().decode(bytes)
+        if (decoded.length > 10 && decoded.split('\n').length > HEX_MIN_NEWLINE_COUNT) {
+          decrypted = decoded
+          logInfo('reader', 'frontend', '[正文] Hex 解密成功')
+        }
+      } catch {
+        // ignore
+      }
+    }
+
+    if (!isValidHtmlContent(decrypted) && isValidHtmlContent(processedHtml)) {
+      decrypted = processedHtml
+    }
+
     return { html: decrypted, redirectUrl, jsExecuted }
-  } catch (e: any) {
-    logError('reader', 'frontend', `[正文] 获取失败: ${e?.message || e}`)
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : String(e)
+    logError('reader', 'frontend', `[正文] 获取失败: ${msg}`)
     return null
   }
 }
-
-// ─── 并发控制 ───
 
 async function concurrentMap<T, R>(
   items: T[],
@@ -463,76 +388,19 @@ async function concurrentMap<T, R>(
   return results
 }
 
-// ─── 获取副文（subContent） ───
-
-async function fetchSubContent(
-  source: BookSource,
-  body: string,
-  subContentRule: string,
-  book: any,
-  baseUrl: string,
-): Promise<string> {
-  try {
-    const rawContent = await getString(body, subContentRule, {
-      source,
-      baseUrl,
-      book,
-      result: body,
-    })
-
-    if (!rawContent || !rawContent.trim()) return ''
-
-    const trimmed = rawContent.trim()
-
-    if (trimmed.startsWith('http://') || trimmed.startsWith('https://')) {
-      const subHtml = await fetchWithWebviewFallback(trimmed, {
-        source,
-        timeout: NETWORK.DEFAULT_TIMEOUT,
-      })
-      return subHtml || ''
-    }
-
-    return trimmed
-  } catch (e: any) {
-    logError('reader', 'frontend', `[正文] 副文获取失败: ${e?.message || e}`)
-    return ''
-  }
+export interface GetContentOptions {
+  bookKind?: string | undefined
+  book?: Record<string, unknown>
+  nextChapterUrl?: string
+  cachedHtml?: string
+  redirectUrl?: string
+  chapter?: Record<string, unknown>
+  skipCache?: boolean
 }
-
-async function parseContentWithFlag(
-  book: any,
-  resolvedUrl: string,
-  redirectUrl: string,
-  htmlContent: string,
-  contentRule: any,
-  chapter: any,
-  source: BookSource,
-  nextChapterUrl: string | null | undefined,
-  getNextPageUrl: boolean,
-  jsExecuted: boolean,
-): Promise<{ content: string; nextUrls: string[] }> {
-  const effectiveRule = jsExecuted
-    ? { ...contentRule, content: undefined }
-    : contentRule
-
-  return parseContentPage(
-    book,
-    resolvedUrl,
-    redirectUrl,
-    htmlContent,
-    effectiveRule,
-    chapter,
-    source,
-    nextChapterUrl,
-    getNextPageUrl,
-  )
-}
-
-// ─── getContent ───
 
 export async function getContent(
   source: BookSource, chapterUrl: string,
-  options: { bookKind?: string; book?: any; nextChapterUrl?: string; cachedHtml?: string; redirectUrl?: string; chapter?: any; skipCache?: boolean } = {}
+  options: GetContentOptions = {}
 ): Promise<string> {
   if (!chapterUrl) {
     logError('reader', 'frontend', '[正文] chapterUrl 为空')
@@ -546,39 +414,46 @@ export async function getContent(
 
   logInfo('reader', 'frontend', `[正文] 开始 url=${chapterUrl.substring(0, 100)}`)
 
-  const headers = await executeHeaderRule(source, source.bookSourceUrl || '')
+  const headers = await executeHeaderRule(source)
   const book = options.book || {}
-  const chapter: any = options.chapter || { url: chapterUrl }
+  const chapter = options.chapter || { url: chapterUrl }
   const nextChapterUrl = options.nextChapterUrl || ''
   const isComic = source.bookSourceType === 2
 
   let resolvedUrl = chapterUrl
-  if (chapter._deferredJs) {
-    resolvedUrl = await resolveChapterUrl(chapterUrl, chapter._deferredJs, chapter._deferredResult, source, book)
+  const chRecord = chapter as Record<string, unknown>
+  if (typeof chRecord._deferredJs === 'string') {
+    resolvedUrl = await resolveChapterUrl(chapterUrl, chRecord._deferredJs, chRecord._deferredResult, source, book)
     chapter.url = resolvedUrl
   }
 
   const contentList: string[] = []
   const nextUrlSet = new Set<string>()
-  const ctx = { source, baseUrl: source.bookSourceUrl || '', book, chapter, nextChapterUrl, result: '' }
+  const ctx = { source: toEngineBookSource(source), baseUrl: source.bookSourceUrl || '', book, chapter, nextChapterUrl, result: '' }
 
   try {
-    const firstPage = await fetchAndDecryptPage(source, resolvedUrl, headers, book, contentRule, ctx, chapter, nextChapterUrl)
+    const ruleObj = contentRule as unknown as Record<string, unknown>
+    const firstPage = await fetchAndDecryptPage(source, resolvedUrl, headers, book, ruleObj, ctx, chapter, nextChapterUrl)
     if (!firstPage) return '正文获取失败'
 
-    // 修复：漫画模式 + JS 已执行 + 结果是 <img> 标签列表 → 直接返回
     if (isComic && firstPage.jsExecuted && firstPage.html.includes('<img src="')) {
       let contentStr = firstPage.html
-      if (contentRule.imageStyle) {
-        contentStr = injectImageStyle(contentStr, contentRule.imageStyle)
-      }
+      if (contentRule.imageStyle) contentStr = injectImageStyle(contentStr, contentRule.imageStyle)
       logInfo('reader', 'frontend', `[正文] 漫画直接返回 ${contentStr.length} 字符`)
       return contentStr
     }
 
-    const { content: pageContent, nextUrls } = await parseContentWithFlag(
-      book, resolvedUrl, firstPage.redirectUrl, firstPage.html,
-      contentRule, chapter, source, nextChapterUrl, true, firstPage.jsExecuted
+    const engineSource = toEngineBookSource(source)
+    const { content: pageContent, nextUrls } = await parseContentPage(
+      book as Partial<EngineBook>,
+      resolvedUrl,
+      firstPage.redirectUrl,
+      firstPage.html,
+      ruleObj as Parameters<typeof parseContentPage>[4],
+      chapter as Partial<EngineChapter>,
+      engineSource,
+      nextChapterUrl,
+      true
     )
     if (pageContent && pageContent.trim()) contentList.push(pageContent.trim())
     nextUrlSet.add(firstPage.redirectUrl)
@@ -586,7 +461,6 @@ export async function getContent(
     const pageUrls: string[] = []
     for (const u of nextUrls) {
       if (!u || nextUrlSet.has(u)) continue
-      if (nextChapterUrl && resolveUrl(u, firstPage.redirectUrl) === resolveUrl(nextChapterUrl, firstPage.redirectUrl)) continue
       pageUrls.push(u)
     }
 
@@ -596,11 +470,12 @@ export async function getContent(
         async (nextUrl) => {
           if (nextUrlSet.has(nextUrl)) return null
           nextUrlSet.add(nextUrl)
-          const nextPage = await fetchAndDecryptPage(source, nextUrl, headers, book, contentRule, ctx, chapter, nextChapterUrl)
+          const nextPage = await fetchAndDecryptPage(source, nextUrl, headers, book, ruleObj, ctx, chapter, nextChapterUrl)
           if (!nextPage) return null
-          const { content: npc } = await parseContentWithFlag(
-            book, nextUrl, nextPage.redirectUrl, nextPage.html,
-            contentRule, chapter, source, nextChapterUrl, nextUrls.length > 1, nextPage.jsExecuted
+          const { content: npc } = await parseContentPage(
+            book as Partial<EngineBook>, nextUrl, nextPage.redirectUrl, nextPage.html,
+            ruleObj as Parameters<typeof parseContentPage>[4],
+            chapter as Partial<EngineChapter>, engineSource, nextChapterUrl, nextUrls.length > 1
           )
           return npc && npc.trim() ? npc.trim() : null
         },
@@ -609,17 +484,8 @@ export async function getContent(
       for (const r of pageResults) { if (r) contentList.push(r) }
     }
 
-    // 副文规则
-    if (contentRule.subContent) {
-      const subContent = await fetchSubContent(source, firstPage.html, contentRule.subContent, book, firstPage.redirectUrl)
-      if (subContent) {
-        contentList.push(subContent)
-      }
-    }
-
     let contentStr = contentList.join('\n')
 
-    // replaceRegex 支持三段格式 pattern##replacement##replaceFirst
     if (contentRule.replaceRegex) {
       try {
         const parts = contentRule.replaceRegex.split('##')
@@ -629,11 +495,9 @@ export async function getContent(
         if (pattern) {
           try {
             if (replaceFirst) {
-              const regex = new RegExp(pattern)
-              contentStr = contentStr.replace(regex, replacement)
+              contentStr = contentStr.replace(new RegExp(pattern), replacement)
             } else {
-              const regex = new RegExp(pattern, 'g')
-              contentStr = contentStr.replace(regex, replacement)
+              contentStr = contentStr.replace(new RegExp(pattern, 'g'), replacement)
             }
           } catch {
             // ignore
@@ -644,7 +508,6 @@ export async function getContent(
       }
     }
 
-    // imageStyle 仅在非漫画模式生效
     if (!isComic) {
       contentStr = contentStr.split('\n').map(l => l.trim() ? '\u3000\u3000' + l.trim() : '').join('\n')
       if (!contentStr.startsWith('\u3000\u3000')) contentStr = '\u3000\u3000' + contentStr
@@ -652,8 +515,9 @@ export async function getContent(
 
     logInfo('reader', 'frontend', `[正文] 完成 ${contentStr.length} 字符`)
     return contentStr
-  } catch (e: any) {
-    logError('reader', 'frontend', `[正文] 异常: ${e?.message || e}`)
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : String(e)
+    logError('reader', 'frontend', `[正文] 异常: ${msg}`)
     return '正文获取失败'
   }
 }

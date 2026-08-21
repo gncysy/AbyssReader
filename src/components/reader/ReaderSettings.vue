@@ -60,13 +60,6 @@
               <span class="setting-label">图片样式</span>
               <CustomDropdown v-model="localImageStyle" :options="imageStyleOptions" placeholder="默认" style="min-width:120px" />
             </div>
-            <div class="setting-row">
-              <span class="setting-label">去除标签</span>
-              <div class="setting-checks">
-                <label class="setting-check"><input type="checkbox" :checked="hasTag(2)" @change="toggleTag(2)" /><span>ruby</span></label>
-                <label class="setting-check"><input type="checkbox" :checked="hasTag(4)" @change="toggleTag(4)" /><span>h</span></label>
-              </div>
-            </div>
           </div>
         </div>
       </div>
@@ -114,13 +107,8 @@ const imageStyleOptions = [
 
 let saveTimer: ReturnType<typeof setTimeout> | null = null
 
-function hasTag(tag: number): boolean {
-  return (localDelTag.value & tag) === tag
-}
-
-function toggleTag(tag: number): void {
-  localDelTag.value = (localDelTag.value & tag) === tag ? localDelTag.value & ~tag : localDelTag.value | tag
-  scheduleApplyToStore()
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
 }
 
 function setLocalTheme(val: string): void {
@@ -147,7 +135,7 @@ function scheduleApplyToStore(): void {
 }
 
 function applyToStore(): void {
-  const settings: Record<string, any> = {
+  const settings: Record<string, unknown> = {
     useReplaceRule: localUseReplaceRule.value,
     _useGlobal: useGlobal.value,
   }
@@ -172,7 +160,6 @@ function applyToStore(): void {
 
   readerStore.saveBookSettings(_bookUrl.value, settings)
 
-  // 同步更新书籍对象的 readConfig
   const book = bookshelfStore.books.find((b) => b.bookUrl === _bookUrl.value)
   if (book) {
     book.readConfig = {
@@ -188,32 +175,32 @@ function loadGlobalSettings(): void {
   localReSegment.value = readerStore.reSegment
   localConverterType.value = readerStore.chineseConverterType
   const saved = readerStore.getBookSettings(_bookUrl.value)
-  localUseReplaceRule.value = saved.useReplaceRule ?? true
-  localReverseToc.value = saved.reverseToc ?? false
-  localSplitLongChapter.value = saved.splitLongChapter ?? true
-  localImageStyle.value = saved.imageStyle || 'DEFAULT'
-  localDelTag.value = saved.delTag || 0
+  localUseReplaceRule.value = typeof saved.useReplaceRule === 'boolean' ? saved.useReplaceRule : true
+  localReverseToc.value = typeof saved.reverseToc === 'boolean' ? saved.reverseToc : false
+  localSplitLongChapter.value = typeof saved.splitLongChapter === 'boolean' ? saved.splitLongChapter : true
+  localImageStyle.value = typeof saved.imageStyle === 'string' ? saved.imageStyle : 'DEFAULT'
+  localDelTag.value = typeof saved.delTag === 'number' ? saved.delTag : 0
 }
 
 function loadLocalSettings(): void {
   const settings = readerStore.getBookSettings(_bookUrl.value)
-  localTheme.value = settings._theme || readerStore.readerTheme
-  localFontSize.value = settings._fontSize || readerStore.fontSize
-  localConverterType.value = settings._converterType ?? readerStore.chineseConverterType
-  localUseReplaceRule.value = settings.useReplaceRule ?? true
-  localReSegment.value = settings.reSegment ?? readerStore.reSegment
-  localReverseToc.value = settings.reverseToc ?? false
-  localSplitLongChapter.value = settings.splitLongChapter ?? true
-  localImageStyle.value = settings.imageStyle || 'DEFAULT'
-  localDelTag.value = settings.delTag || 0
+  localTheme.value = typeof settings._theme === 'string' ? settings._theme : readerStore.readerTheme
+  localFontSize.value = typeof settings._fontSize === 'number' ? settings._fontSize : readerStore.fontSize
+  localConverterType.value = typeof settings._converterType === 'number' ? settings._converterType : readerStore.chineseConverterType
+  localUseReplaceRule.value = typeof settings.useReplaceRule === 'boolean' ? settings.useReplaceRule : true
+  localReSegment.value = typeof settings.reSegment === 'boolean' ? settings.reSegment : readerStore.reSegment
+  localReverseToc.value = typeof settings.reverseToc === 'boolean' ? settings.reverseToc : false
+  localSplitLongChapter.value = typeof settings.splitLongChapter === 'boolean' ? settings.splitLongChapter : true
+  localImageStyle.value = typeof settings.imageStyle === 'string' ? settings.imageStyle : 'DEFAULT'
+  localDelTag.value = typeof settings.delTag === 'number' ? settings.delTag : 0
 }
 
-function open(_readConfig: any | null, bookUrl: string): void {
+function open(_readConfig: unknown, bookUrl: string): void {
   _bookUrl.value = bookUrl
 
   const saved = readerStore.getBookSettings(bookUrl)
-  // 修复：从保存的设置中读取 _useGlobal，没有则根据是否有独立设置判断
-  useGlobal.value = saved._useGlobal ?? !readerStore.hasBookSettings(bookUrl)
+  const savedUseGlobal = saved._useGlobal
+  useGlobal.value = typeof savedUseGlobal === 'boolean' ? savedUseGlobal : !readerStore.hasBookSettings(bookUrl)
 
   if (useGlobal.value) {
     loadGlobalSettings()
@@ -266,9 +253,6 @@ defineExpose({ open, close })
 .setting-label { font-size: 14px; color: var(--text-primary); font-weight: 500; }
 .setting-hint { font-size: 12px; color: var(--text-muted); margin: 4px 0 8px; }
 .settings-section { margin-top: 4px; }
-.setting-checks { display: flex; gap: 16px; }
-.setting-check { display: flex; align-items: center; gap: 4px; font-size: 13px; color: var(--text-secondary); cursor: pointer; }
-.setting-check input { accent-color: var(--brand); }
 .theme-btns { display: flex; gap: 4px; }
 .theme-btn { padding: 4px 10px; font-size: 12px; color: var(--text-muted); background: transparent; border: 1px solid var(--border-color); border-radius: var(--radius-sm); cursor: pointer; transition: color 0.15s, border-color 0.15s; }
 .theme-btn:hover { color: var(--text-primary); border-color: var(--brand); }

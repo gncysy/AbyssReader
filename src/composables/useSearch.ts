@@ -3,9 +3,17 @@
 // ============================================
 
 import { ref } from 'vue'
-import { search, batchSearch } from '@/services/search.js'
+import { search } from '@/services/search.js'
 import type { Book, BookSource } from '@/types'
 import { NETWORK } from '@/constants/index.js'
+
+interface DoSearchOptions {
+  page?: number | undefined
+  filter?: ((name: string, author: string, kind: string | null) => boolean) | null | undefined
+  shouldBreak?: ((size: number) => boolean) | null | undefined
+  concurrency?: number | undefined
+  onProgress?: ((done: number, total: number) => void) | undefined
+}
 
 export function useSearch() {
   const loading = ref(false)
@@ -24,12 +32,7 @@ export function useSearch() {
   async function doSearch(
     sources: BookSource[],
     keyword: string,
-    options: {
-      page?: number
-      filter?: ((name: string, author: string, kind: string | null) => boolean) | null
-      shouldBreak?: ((size: number) => boolean) | null
-      concurrency?: number
-    } = {},
+    options: DoSearchOptions = {},
   ): Promise<Book[]> {
     const concurrency = options.concurrency || NETWORK.CONCURRENCY
     const signal = abortController.signal
@@ -53,44 +56,41 @@ export function useSearch() {
 
         try {
           if (signal.aborted) break
-          books = await search(source, keyword, {
-            page: options.page,
-            signal,
-            filter: options.filter,
-            shouldBreak: options.shouldBreak,
-          })
+          const searchOptions: Parameters<typeof search>[2] = {}
+          if (signal !== undefined) searchOptions.signal = signal
+          if (options.page !== undefined) searchOptions.page = options.page
+          if (options.filter !== undefined && options.filter !== null) searchOptions.filter = options.filter
+          if (options.shouldBreak !== undefined && options.shouldBreak !== null) searchOptions.shouldBreak = options.shouldBreak
+          books = await search(source, keyword, searchOptions)
         } catch {
           // 单个书源失败，静默跳过
         }
 
         if (!signal.aborted) {
           if (books.length > 0) {
-            const displayName = source.bookSourceName || source.name || source.bookSourceUrl || '未知书源'
+            const displayName = source.bookSourceName || source.bookSourceUrl || '未知书源'
 
-            if (searchResults.value[displayName]) {
-              const existing = searchResults.value[displayName] || []
-              const existingUrls = new Set(existing.map(b => b.bookUrl))
-              const newBooks = books.filter(b => !existingUrls.has(b.bookUrl))
-              searchResults.value = {
-                ...searchResults.value,
-                [displayName]: [...existing, ...newBooks],
-              }
-            } else {
-              searchResults.value = {
-                ...searchResults.value,
-                [displayName]: books,
-              }
+            const existing = searchResults.value[displayName] || []
+            const existingUrls = new Set(existing.map(b => b.bookUrl))
+            const newBooks = books.filter(b => !existingUrls.has(b.bookUrl))
+            searchResults.value = {
+              ...searchResults.value,
+              [displayName]: [...existing, ...newBooks],
             }
 
-            // 附加 sourceKey 供换源使用
             for (const b of books) {
-              ;(b as any)._sourceKey = sourceKey
+              ;(b as unknown as Record<string, unknown>)._sourceKey = sourceKey
             }
 
             allBooks.push(...books)
           }
 
           completedCount.value++
+
+          // 修复：实时回调进度
+          if (options.onProgress) {
+            options.onProgress(completedCount.value, enabledSources.length)
+          }
         }
       }
     }

@@ -46,7 +46,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { NConfigProvider, NMessageProvider, NNotificationProvider, NDialogProvider, NIcon, zhCN, dateZhCN } from 'naive-ui'
 import { BookOutline, SearchOutline, CompassOutline, ShareSocialOutline, SettingsOutline, AppsOutline } from '@vicons/ionicons5'
 import { useBookshelfStore, useReadingStore, useReaderStore } from '@/stores'
-import { ROUTES, APP_VERSION } from '@/constants/index.js'
+import { ROUTES, APP_VERSION, UI } from '@/constants/index.js'
 import { initLogBridge } from '@engine/log/index.js'
 import { useNaiveTheme } from '@/composables/useNaiveTheme.js'
 import SidebarCharacters from '@/components/characters/SidebarCharacters.vue'
@@ -55,6 +55,7 @@ import VerificationCodeDialog from '@/components/common/VerificationCodeDialog.v
 import PhotoViewer from '@/components/photo/PhotoViewer.vue'
 import { windowApi } from '@/services/window.js'
 import { useErrorHandler } from '@/composables/useErrorHandler.js'
+import type { Book } from '@/types'
 
 const route = useRoute()
 const router = useRouter()
@@ -102,7 +103,16 @@ const navItems = [
   { route: ROUTES.SOURCES, icon: AppsOutline, label: '书源管理' }, { route: ROUTES.SETTINGS, icon: SettingsOutline, label: '设置' },
 ]
 
-function openRandomBook(): void { const books = bookshelfStore.books; if (books.length > 0) { const idx = Math.floor(Math.random() * books.length); bookshelfStore.openDetail(books[idx], null) } }
+function openRandomBook(): void {
+  const books = bookshelfStore.books
+  if (books.length > 0) {
+    const idx = Math.floor(Math.random() * books.length)
+    const book = books[idx]
+    if (book) {
+      bookshelfStore.openDetail(book as Book, null)
+    }
+  }
+}
 function navigate(routeName: string): void { if (routeName !== currentRoute.value) router.push({ name: routeName }).catch(() => {}) }
 function minimizeWindow(): void { windowApi.minimize() }
 async function toggleMaximize(): Promise<void> { isMaximized.value = await windowApi.toggleMaximize() }
@@ -127,34 +137,31 @@ onMounted(async () => {
   await updateMaximizedState(); window.addEventListener('resize', updateMaximizedState)
 
   unlistenRss = await windowApi.listenRssDownload((payload) => {
-    if (payload.error) downloadConfirm.value?.show({ resourceType: 'error', message: payload.message })
-    else downloadConfirm.value?.show(payload)
+    if (payload.error) {
+      downloadConfirm.value?.show({ url: '', resourceType: 'error', message: payload.message } as Parameters<typeof downloadConfirm.value.show>[0])
+    } else {
+      downloadConfirm.value?.show(payload as unknown as Parameters<typeof downloadConfirm.value.show>[0])
+    }
   })
 
   unlistenVerification = await windowApi.listenVerificationCodeRequest((svg) => {
     verificationDialog.value?.open(svg)
   })
 
-  // show-photo：显示图片查看器
   unlistenShowPhoto = await windowApi.listenShowPhoto((src) => {
     photoViewer.value?.open(src)
   })
 
-  // refresh-explore：通知发现页刷新
   unlistenRefreshExplore = await windowApi.listenRefreshExplore(() => {
     if (currentRoute.value === ROUTES.EXPLORE) {
-      // 发出自定义事件，由发现页监听
       window.dispatchEvent(new CustomEvent('refresh-explore-event'))
     }
   })
 
-  // refresh-book-info：通知详情页刷新
   unlistenRefreshBookInfo = await windowApi.listenRefreshBookInfo(() => {
-    // 发出自定义事件，由详情页监听
     window.dispatchEvent(new CustomEvent('refresh-book-info-event'))
   })
 
-  // js-search-book：跳转搜索页
   unlistenJsSearchBook = await windowApi.listenJsSearchBook((payload) => {
     if (payload?.keyword) {
       router.push({ name: ROUTES.SEARCH, query: { keyword: payload.keyword } }).catch(() => {})
@@ -186,7 +193,6 @@ watch(() => readingStore.theme, (val) => applyThemeToDOM(val))
 .titlebar-btn { width: 46px; height: 100%; border: none; background: transparent; color: var(--text-muted); cursor: pointer; display: flex; align-items: center; justify-content: center; transition: background 0.15s, color 0.15s; }
 .titlebar-btn svg { opacity: 0.7; }
 .titlebar-btn:hover { background: var(--bg-hover); color: var(--text-primary); }
-.titlebar-btn:hover svg { opacity: 1; }
 .titlebar-btn-close:hover { background: #c0392b; color: #fff; }
 .app-body { display: flex; flex: 1; height: calc(100vh - 40px); overflow: hidden; }
 .app-sidebar { display: flex; flex-direction: column; width: 200px; min-width: 200px; padding: 4px 16px 20px 16px; background: var(--bg-card); border-right: 1px solid var(--border-color); flex-shrink: 0; height: 100%; box-sizing: border-box; }
@@ -194,7 +200,6 @@ watch(() => readingStore.theme, (val) => applyThemeToDOM(val))
 .nav-item { display: flex; align-items: center; gap: 12px; padding: 12px 12px; border-radius: var(--radius-md); cursor: pointer; min-height: 48px; transition: background 0.2s, color 0.2s; color: var(--text-muted); }
 .nav-item:hover { background: var(--bg-hover); color: var(--text-secondary); }
 .nav-item.active { background: var(--bg-active); color: var(--brand); font-weight: 500; }
-.nav-item.active .nav-icon { color: var(--brand); }
 .nav-icon { flex-shrink: 0; }
 .nav-label { font-size: 14px; font-weight: 500; }
 .sidebar-spacer { flex: 1; }
