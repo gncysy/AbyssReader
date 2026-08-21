@@ -48,6 +48,7 @@ jobs:
         with:
           name: AbyssReader-Windows
           path: src-tauri/target/release/bundle/nsis/*.exe
+          if-no-files-found: error
 
   build-macos:
     runs-on: macos-latest
@@ -84,6 +85,7 @@ jobs:
           path: |
             src-tauri/target/release/bundle/dmg/*.dmg
             src-tauri/target/release/bundle/macos/*.app
+          if-no-files-found: error
 
   build-linux:
     runs-on: ubuntu-22.04
@@ -128,11 +130,14 @@ jobs:
             src-tauri/target/release/bundle/deb/*.deb
             src-tauri/target/release/bundle/rpm/*.rpm
             src-tauri/target/release/bundle/appimage/*.AppImage
+          if-no-files-found: error
 
   publish:
     needs: [build-windows, build-macos, build-linux]
     if: github.event_name == 'release' && github.event.action == 'published'
     runs-on: ubuntu-22.04
+    permissions:
+      contents: write
     steps:
       - name: Download Windows artifact
         uses: actions/download-artifact@v4
@@ -152,22 +157,26 @@ jobs:
           name: AbyssReader-Linux
           path: dist/linux
 
+      - name: Flatten artifacts
+        run: |
+          find dist -type f \( -name "*.exe" -o -name "*.dmg" -o -name "*.app" -o -name "*.deb" -o -name "*.rpm" -o -name "*.AppImage" \) -exec sh -c 'for f; do cp "$f" dist/$(basename "$f"); done' sh {} +
+
       - name: Generate SHA256SUMS
         run: |
           cd dist
-          find . -type f \( -name "*.exe" -o -name "*.dmg" -o -name "*.app" -o -name "*.deb" -o -name "*.rpm" -o -name "*.AppImage" \) -exec sha256sum {} \; | sed 's|\./||' > SHA256SUMS.txt
+          find . -maxdepth 1 -type f ! -name "SHA256SUMS.txt" -exec sha256sum {} \; | sed 's|\./||' > SHA256SUMS.txt
           cat SHA256SUMS.txt
 
       - name: Upload Release Assets
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            dist/windows/*.exe
-            dist/macos/*.dmg
-            dist/macos/*.app
-            dist/linux/*.deb
-            dist/linux/*.rpm
-            dist/linux/*.AppImage
+            dist/*.exe
+            dist/*.dmg
+            dist/*.app
+            dist/*.deb
+            dist/*.rpm
+            dist/*.AppImage
             dist/SHA256SUMS.txt
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
