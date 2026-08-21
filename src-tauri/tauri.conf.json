@@ -1,5 +1,5 @@
 {
-  "productName": "墨阅",
+  "productName": "AbyssReader",
   "version": "0.1.0",
   "identifier": "com.abyss.reader",
   "build": {
@@ -30,7 +30,8 @@
     "windows": {
       "nsis": {
         "installMode": "currentUser",
-        "languages": ["SimpChinese"]
+        "languages": ["SimpChinese"],
+        "template": "installer/installer.nsi"
       }
     },
     "linux": {
@@ -40,5 +41,3 @@
     }
   }
 }
-
-
