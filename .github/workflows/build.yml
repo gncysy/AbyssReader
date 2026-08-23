@@ -131,6 +131,28 @@ jobs:
         run: npm install
       - name: Build Tauri
         run: npm run tauri build
+      - name: Debug linuxdeploy failure
+        if: failure()
+        run: |
+          set -x
+          echo "=== Residual AppDir ==="
+          find src-tauri/target/release/bundle -maxdepth 3 -type d -name "*.AppDir" 2>/dev/null || true
+
+          APPDIR=$(find src-tauri/target/release/bundle -maxdepth 3 -type d -name "*.AppDir" | head -n 1)
+          echo "APPDIR=$APPDIR"
+
+          echo "=== linuxdeploy cache location ==="
+          find ~/.cache -name "linuxdeploy-*.AppImage" 2>/dev/null || true
+
+          LINUXDEPLOY=$(find ~/.cache -name "linuxdeploy-x86_64.AppImage" 2>/dev/null | head -n 1)
+          echo "LINUXDEPLOY=$LINUXDEPLOY"
+
+          echo "=== Manually rerun linuxdeploy ==="
+          if [ -n "$APPDIR" ] && [ -n "$LINUXDEPLOY" ]; then
+            APPIMAGE_EXTRACT_AND_RUN=1 "$LINUXDEPLOY" --appimage-extract-and-run --verbosity 0 --appdir "$APPDIR" --plugin gtk --output appimage 2>&1 || true
+          else
+            echo "APPDIR or LINUXDEPLOY not found"
+          fi
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
