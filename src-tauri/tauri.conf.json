@@ -16,7 +16,13 @@
   },
   "bundle": {
     "active": true,
-    "targets": ["nsis", "dmg", "deb", "rpm", "appimage"],
+    "targets": [
+      "nsis",
+      "dmg",
+      "deb",
+      "rpm",
+      "appimage"
+    ],
     "icon": [
       "icons/512x512.png",
       "icons/128x128.png",
@@ -30,14 +36,28 @@
     "windows": {
       "nsis": {
         "installMode": "currentUser",
-        "languages": ["SimpChinese"],
+        "languages": [
+          "SimpChinese"
+        ],
         "template": "installer/installer.nsi"
       }
     },
     "linux": {
-      "deb": {},
-      "rpm": {},
-      "appimage": {}
+      "deb": {
+        "files": {
+          "/usr/share/applications/AbyssReader.desktop": "packaging/AbyssReader.desktop"
+        }
+      },
+      "rpm": {
+        "files": {
+          "/usr/share/applications/AbyssReader.desktop": "packaging/AbyssReader.desktop"
+        }
+      },
+      "appimage": {
+        "files": {
+          "/usr/share/applications/AbyssReader.desktop": "packaging/AbyssReader.desktop"
+        }
+      }
     }
   }
 }

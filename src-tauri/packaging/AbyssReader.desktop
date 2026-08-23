@@ -1,0 +1,9 @@
+[Desktop Entry]
+Categories=
+Comment=桌面端小说阅读器，兼容开源阅读书源
+Exec=AbyssReader
+StartupWMClass=AbyssReader
+Icon=AbyssReader
+Name=墨阅
+Terminal=false
+Type=Application
