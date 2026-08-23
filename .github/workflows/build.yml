@@ -80,6 +80,16 @@ jobs:
         run: npm run tauri build
         env:
           APPLE_SIGNING_IDENTITY: '-'
+      - name: Set Chinese display name for macOS
+        run: |
+          APP="src-tauri/target/release/bundle/macos/AbyssReader.app"
+          if [ -d "$APP" ]; then
+            /usr/libexec/PlistBuddy -c "Delete :CFBundleDisplayName" "$APP/Contents/Info.plist" 2>/dev/null || true
+            /usr/libexec/PlistBuddy -c "Add :CFBundleDisplayName string 墨阅" "$APP/Contents/Info.plist"
+          else
+            echo "App bundle not found at $APP"
+            find src-tauri/target/release/bundle -maxdepth 2 -name "*.app" -type d
+          fi
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
