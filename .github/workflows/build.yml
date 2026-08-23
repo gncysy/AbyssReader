@@ -129,6 +129,8 @@ jobs:
           key: ${{ runner.os }}-node-${{ hashFiles('package-lock.json') }}
       - name: Install dependencies
         run: npm install
+      - name: Clean bundle directory
+        run: rm -rf src-tauri/target/release/bundle
       - name: Build Tauri
         run: npm run tauri build
       - name: Debug linuxdeploy failure
