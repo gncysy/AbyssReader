@@ -8,7 +8,7 @@ name = "abyss_reader_lib"
 crate-type = ["cdylib", "rlib"]
 
 [[bin]]
-name = "abyss-reader"
+name = "AbyssReader"
 path = "src/main.rs"
 
 [dependencies]
