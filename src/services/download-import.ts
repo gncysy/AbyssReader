@@ -6,6 +6,7 @@ import type { DownloadInfo } from '@engine/business/source/download.js'
 import { network } from './network.js'
 import { store } from './store.js'
 import { source } from './source.js'
+import { logError } from '@engine/log/index.js'
 
 interface RssSourceLike {
   sourceUrl: string
@@ -31,8 +32,9 @@ export async function executeDownloadImport(info: DownloadInfo): Promise<string>
     case 'rssSource': {
       const rawSources = await store.get('rssSources')
       const existingSources = asArray(rawSources) as RssSourceLike[]
-      const count = await installRssSources(info.url, existingSources)
-      await store.set('rssSources', existingSources)
+      // 修复：installRssSources 返回合并后的新数组，不再原地修改入参
+      const { merged, count } = await installRssSources(info.url, existingSources)
+      await store.set('rssSources', merged)
       return `已安装 ${count} 个订阅源`
     }
     case 'replaceRule': {
@@ -73,10 +75,13 @@ async function installBookSources(url: string): Promise<number> {
   return items.length
 }
 
+/**
+ * 修复：返回新的合并数组，不再原地修改传入的 existingSources。
+ */
 async function installRssSources(
   url: string,
   existingSources: RssSourceLike[],
-): Promise<number> {
+): Promise<{ merged: RssSourceLike[]; count: number }> {
   const text = await fetchText(url)
   let data: unknown
   try {
@@ -86,17 +91,18 @@ async function installRssSources(
     throw new Error('订阅源 JSON 解析失败: ' + msg)
   }
   const items = Array.isArray(data) ? data : [data]
-  let count = 0
+  const merged = [...existingSources]
   const existing = new Set(existingSources.map((s) => s.sourceUrl))
+  let count = 0
   for (const item of items) {
     const obj = item as RssSourceLike
     if (obj.sourceUrl && !existing.has(obj.sourceUrl)) {
-      existingSources.push(obj)
+      merged.push(obj)
       existing.add(obj.sourceUrl)
       count++
     }
   }
-  return count
+  return { merged, count }
 }
 
 async function installReplaceRules(url: string): Promise<number> {
@@ -111,15 +117,17 @@ async function installReplaceRules(url: string): Promise<number> {
   const rawExisting = await store.get('replaceRule')
   const existing = asArray(rawExisting) as ReplaceRuleLike[]
   const incoming = Array.isArray(rules) ? rules : [rules]
+  // 修复：用副本，不修改原数组
+  const merged = [...existing]
   let count = 0
   for (const rule of incoming) {
     const r = rule as ReplaceRuleLike
-    if (!existing.find((er) => er.name === r.name && er.pattern === r.pattern)) {
-      existing.push(r)
+    if (!merged.find((er) => er.name === r.name && er.pattern === r.pattern)) {
+      merged.push(r)
       count++
     }
   }
-  if (count > 0) await store.set('replaceRule', existing)
+  if (count > 0) await store.set('replaceRule', merged)
   return count
 }
 
@@ -142,7 +150,7 @@ async function installPurifyRule(url: string): Promise<void> {
   try {
     JSON.parse(text)
   } catch {
-    // 不是 JSON，作为纯文本保存
+    logError('storage', 'frontend', '[导入] 净化规则不是 JSON，作为纯文本保存')
   }
   await store.set('purifyRule', text)
 }

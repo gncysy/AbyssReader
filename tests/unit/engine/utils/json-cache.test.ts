@@ -3,7 +3,7 @@
 // ============================================
 
 import { describe, it, expect } from 'vitest'
-import { cachedStringify, clearJsonCache } from '../../../../engine/utils/json-cache.js'
+import { cachedStringify, clearJsonCache as _clearJsonCache } from '../../../../engine/utils/json-cache.js'
 
 describe('cachedStringify', () => {
   it('字符串原样返回', () => {

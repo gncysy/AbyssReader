@@ -10,7 +10,7 @@
     </header>
     <div class="group-tabs">
       <button v-for="group in displayGroups" :key="group.groupId" class="group-tab" :class="{ active: bookshelfStore.activeGroup === group.groupId }" @click="switchGroup(group.groupId)" @contextmenu.prevent.stop="editGroupMenu(group)">{{ group.groupName }}</button>
-      <button class="group-tab group-tab-add" @click="addGroup" title="添加分组">+</button>
+      <button class="group-tab group-tab-add" title="添加分组" @click="addGroup">+</button>
     </div>
     <input ref="fileInput" type="file" accept=".txt" class="hidden" @change="onImport" />
     <n-modal v-model:show="showAddUrlModal" preset="dialog" title="添加网址" positive-text="添加" @positive-click="addUrlBook">
@@ -48,15 +48,13 @@ import { ref, computed, watch, onMounted } from 'vue'
 import { NModal, NInput, useMessage, useDialog } from 'naive-ui'
 import { useBookshelfStore } from '@/stores/bookshelf.js'
 import { store, reader as readerApi } from '@/services'
-import { parseBookInfo } from '@engine/business/book/index.js'
-import { fetchWithWebviewFallback } from '@/services/fetch.js'
+import { fetchBookInfoForAdd } from '@/services/book-info.js'
 import SearchInput from '@/components/common/SearchInput.vue'
 import BookGrid from '@/components/book/BookGrid.vue'
 import BookDetail from '@/components/book/BookDetail.vue'
 import Reader from '@/components/reader/Reader.vue'
 import { ContextMenu, ContextMenuItem } from '@/components/common/ContextMenu/index.js'
 import type { BookSource, Book, Chapter } from '@/types'
-import type { EngineBookSource } from '@engine/types.js'
 
 interface GroupItem {
   groupId: number
@@ -79,10 +77,6 @@ const groups = ref<GroupItem[]>([])
 const showGroupDialog = ref(false)
 const editingGroup = ref<GroupItem | null>(null)
 const groupForm = ref({ groupName: '' })
-
-function toEngineBookSource(source: BookSource): EngineBookSource {
-  return source as unknown as EngineBookSource
-}
 
 function isBookSourceArray(value: unknown): value is BookSource[] {
   return Array.isArray(value)
@@ -235,11 +229,8 @@ async function addUrlBook(): Promise<void> {
   if (!source) { msg.error('未找到匹配的书源，请确认链接格式'); return }
 
   try {
-    const html = await fetchWithWebviewFallback(url, { source, timeout: 30000 })
-    if (!html) throw new Error('获取页面失败')
-    const info = await parseBookInfo(toEngineBookSource(source), html, url)
-    if (!info || !info.name) throw new Error('解析书籍信息失败')
-    const newBook = { ...info, bookUrl: url, origin: source.bookSourceUrl || '', originName: source.bookSourceName || '' }
+    const newBook = await fetchBookInfoForAdd(url, source)
+    if (!newBook) throw new Error('解析书籍信息失败')
     const rawBooks = await store.get('bookshelf')
     const bookList = Array.isArray(rawBooks) ? [...rawBooks] : []
     bookList.unshift(newBook)

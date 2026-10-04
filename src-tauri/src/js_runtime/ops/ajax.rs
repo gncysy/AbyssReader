@@ -59,7 +59,6 @@ fn parse_concurrent_rate(rate: &str) -> Option<(i32, i64)> {
     }
 }
 
-/// 计算需要等待的毫秒数，由调用方异步 sleep
 fn calculate_rate_limit_wait(url: &str, concurrent_rate: Option<&str>) -> u64 {
     let host = url::Url::parse(url)
         .ok()
@@ -183,10 +182,26 @@ fn parse_ajax_url(raw: &str) -> (String, Option<String>, Option<HashMap<String, 
     }
 }
 
-// 修复：async fn 自动被 op2 宏推断为异步，不需要 #[op2(async)]
+/// 判断 headers 里是否已有 Content-Type（大小写不敏感）。
+fn has_content_type(headers: &Option<HashMap<String, String>>) -> bool {
+    match headers {
+        Some(h) => h.keys().any(|k| k.eq_ignore_ascii_case("content-type")),
+        None => false,
+    }
+}
+
+/// 同步 ajax op。
+/// 修复：原实现是 async fn，Deno 的 async op 在 JS 侧返回 Promise，
+/// 导致 `var x = java.ajax(...)` 拿到的是 Promise 而不是字符串，
+/// 上游 JSON.parse 报 `[object Promise]` 错误。
+/// 改为同步 fn，内部用 std::thread::sleep 阻塞（对齐 Legado 同步语义）。
+///
+/// 修复（本轮）：POST + body 且无 Content-Type 时，自动补
+/// `Content-Type: application/json; charset=utf-8`。
+/// 对齐 Legado AnalyzeUrl.executeStrRequest 的 postJson 默认行为。
 #[op2]
 #[string]
-pub async fn op_java_ajax(#[string] url: String) -> String {
+pub fn op_java_ajax(#[string] url: String) -> String {
     let (req_url, method, headers, body, concurrent_rate) = parse_ajax_url(&url);
 
     if let Ok(parsed) = url::Url::parse(&req_url) {
@@ -210,10 +225,9 @@ pub async fn op_java_ajax(#[string] url: String) -> String {
         }).to_string();
     }
 
-    // 异步 sleep 替代同步 std::thread::sleep
     let wait_ms = calculate_rate_limit_wait(&req_url, concurrent_rate.as_deref());
     if wait_ms > 0 {
-        tokio::time::sleep(std::time::Duration::from_millis(wait_ms)).await;
+        std::thread::sleep(std::time::Duration::from_millis(wait_ms));
     }
 
     let url_clone = req_url.clone();
@@ -228,6 +242,8 @@ pub async fn op_java_ajax(#[string] url: String) -> String {
             client.get(&url_clone)
         };
 
+        let content_type_present = has_content_type(&headers_clone);
+
         if let Some(h) = headers_clone {
             for (k, v) in h {
                 req = req.header(k, v);
@@ -235,6 +251,10 @@ pub async fn op_java_ajax(#[string] url: String) -> String {
         }
 
         if let Some(b) = body_clone {
+            // 对齐 Legado：POST 有 body 且无 Content-Type 时，默认 application/json
+            if !content_type_present {
+                req = req.header("Content-Type", "application/json; charset=utf-8");
+            }
             req = req.body(b);
         }
 
@@ -317,7 +337,6 @@ pub fn op_java_web_js(#[string] html: String, #[string] js: String) -> String {
 
     let (tx, rx) = mpsc::channel();
 
-    // 第一阶段：document.write，不需要 sleep
     let html_clone = html.clone();
     let w1 = window.clone();
     let _ = app_handle.run_on_main_thread(move || {
@@ -327,7 +346,6 @@ pub fn op_java_web_js(#[string] html: String, #[string] js: String) -> String {
         ));
     });
 
-    // 第二阶段：异步 sleep 后执行 JS，再轮询结果
     let w2 = window.clone();
     let js2 = js.clone();
     let tx2 = tx.clone();

@@ -2,10 +2,10 @@
   <Teleport to="body">
     <n-config-provider :theme="naiveTheme" :theme-overrides="themeOverrides">
       <Transition name="detail">
-        <div v-if="book" class="detail-overlay" @click.self="handleClose" role="dialog" aria-modal="true">
+        <div v-if="book" v-no-drag class="detail-overlay" role="dialog" aria-modal="true" @click.self="handleClose">
           <div class="detail-container" tabindex="-1">
             <header class="detail-header">
-              <button class="btn-back" @click="handleClose" aria-label="关闭详情">
+              <button class="btn-back" aria-label="关闭详情" @click="handleClose">
                 <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 12H5M12 19l-7-7 7-7"/></svg>
               </button>
               <h2 class="detail-title">{{ book.name || '加载中...' }}</h2>
@@ -30,7 +30,7 @@
                 <h1 class="book-title">{{ book.name }}</h1>
                 <p class="book-author">{{ displayAuthor }}</p>
                 <div class="book-meta-row">
-                  <span v-if="loadedKind" class="meta-chip meta-kind clickable" @click="handleSearchKind" title="点击搜索此分类">
+                  <span v-if="loadedKind" class="meta-chip meta-kind clickable" title="点击搜索此分类" @click="handleSearchKind">
                     <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/><line x1="7" y1="7" x2="7.01" y2="7"/></svg>
                     {{ loadedKind }}
                   </span>
@@ -50,16 +50,16 @@
               <ChapterList :chapters="chapters" :current-chapter-id="currentChapterId" :loading="loadingToc" @select="handleChapterClick" />
             </div>
             <footer class="detail-footer">
-              <button class="btn-icon-footer btn-icon-danger" @click="showRemoveConfirm = true" title="移出书架">
+              <button class="btn-icon-footer btn-icon-danger" title="移出书架" @click="showRemoveConfirm = true">
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
               </button>
-              <button class="btn-icon-footer btn-icon-footer-with-label" @click="handleChangeSource" title="换源">
+              <button class="btn-icon-footer btn-icon-footer-with-label" title="换源" @click="handleChangeSource">
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="1 4 1 10 7 10"/><polyline points="23 20 23 14 17 14"/><path d="M20.49 9A9 9 0 0 0 5.64 5.64L1 10m22 4l-4.64 4.36A9 9 0 0 1 3.51 15"/></svg>
                 <span class="btn-footer-label">换源</span>
               </button>
               <div style="flex:1"></div>
               <div style="position:relative">
-                <button class="btn-icon-footer" @click.stop="toggleMoreMenu" title="更多">
+                <button class="btn-icon-footer" title="更多" @click.stop="toggleMoreMenu">
                   <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="5" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="12" cy="19" r="1.5"/></svg>
                 </button>
                 <Transition name="menu-drop">
@@ -71,16 +71,16 @@
                   </div>
                 </Transition>
               </div>
-              <button class="btn-secondary" @click="handleAddToShelf" :disabled="isInShelf" style="font-size:13px;padding:0 18px;white-space:nowrap;flex-shrink:0">{{ isInShelf ? '已在书架' : '加书架' }}</button>
-              <button class="btn-primary" @click="handleRead" style="font-size:13px;padding:0 18px;white-space:nowrap;flex-shrink:0">
+              <button class="btn-secondary" :disabled="isInShelf" style="font-size:13px;padding:0 18px;white-space:nowrap;flex-shrink:0" @click="handleAddToShelf">{{ isInShelf ? '已在书架' : '加书架' }}</button>
+              <button class="btn-primary" style="font-size:13px;padding:0 18px;white-space:nowrap;flex-shrink:0" @click="handleRead">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/></svg>
                 {{ hasReadingProgress ? '继续阅读' : '开始阅读' }}
               </button>
             </footer>
           </div>
-          <n-modal v-model:show="showChangeSource" preset="card" title="换源" style="max-width:650px" :bordered="false">
+          <AppModal v-model:visible="showChangeSource" title="换源" size="md">
             <div class="cs-wrapper">
-              <button class="btn-primary" @click="handleSearchForChange" :disabled="changingSource" style="padding:10px 18px;font-size:14px;width:100%;flex-shrink:0">{{ changingSource ? '搜索中... (' + searchDone + '/' + searchTotal + ')' : '开始换源搜索' }}</button>
+              <button class="btn-primary" :disabled="changingSource" style="padding:10px 18px;font-size:14px;width:100%;flex-shrink:0" @click="handleSearchForChange">{{ changingSource ? '搜索中... (' + searchDone + '/' + searchTotal + ')' : '开始换源搜索' }}</button>
               <div v-if="changeSourceResults.length > 0" class="change-source-list">
                 <div v-for="item in changeSourceResults" :key="String(item.bookUrl) + String(item._sourceName)" class="change-source-item" @click="handleConfirmChangeSource(item)">
                   <div class="cs-item-main"><span class="cs-item-name">{{ item.name }}</span><span class="cs-item-author">{{ item.author }}</span></div>
@@ -90,8 +90,8 @@
               <div v-else-if="changingSource" style="display:flex;justify-content:center;padding:40px;flex-shrink:0"><LoadingSpinner /></div>
               <div v-else style="color:var(--text-muted);text-align:center;padding:20px;flex-shrink:0">点击按钮并发搜索所有书源</div>
             </div>
-          </n-modal>
-          <n-modal v-model:show="showCoverPicker" preset="card" title="选择封面" style="max-width:650px;max-height:80vh" :bordered="false">
+          </AppModal>
+          <AppModal v-model:visible="showCoverPicker" title="选择封面" size="md" max-height="80vh">
             <div class="cover-picker-wrapper">
               <div v-if="coverPickerLoading" style="display:flex;justify-content:center;padding:40px"><LoadingSpinner /></div>
               <div v-else-if="coverOptions.length === 0" style="color:var(--text-muted);text-align:center;padding:30px">未找到同名书籍，请检查书源</div>
@@ -103,15 +103,15 @@
                 </div>
               </div>
             </div>
-          </n-modal>
-          <n-modal v-model:show="showSourceVarModal" preset="dialog" title="设置源变量" positive-text="保存" @positive-click="saveSourceVar">
-            <n-input v-model:value="sourceVarInput" type="textarea" placeholder='输入源变量值（书源 JS 中通过 java.get("key") 获取）' :autosize="{ minRows: 3, maxRows: 8 }" />
-          </n-modal>
-          <n-modal v-model:show="showBookVarModal" preset="dialog" title="设置书籍变量" positive-text="保存" @positive-click="saveBookVar">
-            <n-input v-model:value="bookVarInput" type="textarea" placeholder='输入书籍变量值（书源 JS 中通过 java.get("custom") 获取）' :autosize="{ minRows: 3, maxRows: 8 }" />
-          </n-modal>
+          </AppModal>
         </div>
       </Transition>
+      <n-modal v-model:show="showSourceVarModal" preset="dialog" title="设置源变量" positive-text="保存" @positive-click="saveSourceVar">
+        <n-input v-model:value="sourceVarInput" type="textarea" placeholder='输入源变量值（书源 JS 中通过 java.get("key") 获取）' :autosize="{ minRows: 3, maxRows: 8 }" />
+      </n-modal>
+      <n-modal v-model:show="showBookVarModal" preset="dialog" title="设置书籍变量" positive-text="保存" @positive-click="saveBookVar">
+        <n-input v-model:value="bookVarInput" type="textarea" placeholder='输入书籍变量值（书源 JS 中通过 java.get("custom") 获取）' :autosize="{ minRows: 3, maxRows: 8 }" />
+      </n-modal>
       <ConfirmDialog v-model:visible="showRemoveConfirm" title="确认移出" :content="`确定将《${book?.name ?? ''}》移出书架？`" confirm-text="移出" @confirm="handleRemoveFromShelf" />
     </n-config-provider>
   </Teleport>
@@ -126,6 +126,7 @@ import BookCover from '@/components/book/BookCover.vue'
 import ChapterList from '@/components/chapter/ChapterList.vue'
 import LoadingSpinner from '@/components/common/LoadingSpinner.vue'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
+import AppModal from '@/components/common/AppModal.vue'
 import type { Book, BookSource } from '@/types'
 
 const props = defineProps<{ book: Book | null; source: BookSource | null }>()
@@ -190,8 +191,8 @@ onUnmounted(() => { document.removeEventListener('keydown', handleEscape); docum
 .btn-icon-footer { width: 36px; height: 36px; border: none; background: transparent; color: var(--text-muted); cursor: pointer; border-radius: var(--radius-sm); display: flex; align-items: center; justify-content: center; transition: color 0.18s, background 0.18s; flex-shrink: 0; }
 .btn-icon-footer:hover { color: var(--text-primary); background: var(--bg-hover); }
 .btn-icon-footer-with-label { width: auto; padding: 0 10px; gap: 4px; flex-shrink: 0; }
-.btn-icon-danger { color: #e74c3c; }
-.btn-icon-danger:hover { color: #c0392b; background: rgba(231,76,60,0.1); }
+.btn-icon-danger { color: var(--danger); }
+.btn-icon-danger:hover { color: var(--danger-hover); background: var(--danger-bg); }
 .btn-footer-label { font-size: 13px; margin-left: 2px; }
 .more-menu { position: absolute; bottom: 44px; right: 0; z-index: 100; background: var(--bg-card); border: 1px solid var(--border-color); border-radius: var(--radius-md); box-shadow: var(--shadow-lg); padding: 4px 0; min-width: 140px; }
 .more-menu-item { display: block; width: 100%; padding: 10px 16px; font-size: 13px; color: var(--text-secondary); background: transparent; border: none; cursor: pointer; text-align: left; transition: background 0.15s, color 0.15s; font-family: inherit; }

@@ -28,7 +28,7 @@
         <div class="form-group"><label>作用范围</label><select v-model="scopeMode" class="form-select"><option :value="0">正文</option><option :value="1">标题</option></select></div>
         <div class="form-group"><label>匹配模式</label><n-input v-model:value="form.pattern" placeholder="正则或纯文本" /></div>
         <div class="form-group"><label>替换为</label><n-input v-model:value="form.replacement" placeholder="留空表示删除" /></div>
-        <label class="checkbox-label"><input type="checkbox" v-model="form.isRegex" /><span>正则表达式</span></label>
+        <label class="checkbox-label"><input v-model="form.isRegex" type="checkbox" /><span>正则表达式</span></label>
       </div>
     </n-modal>
     <n-modal v-model:show="showPasteModal" preset="dialog" title="粘贴替换规则 JSON" positive-text="导入" negative-text="取消" @positive-click="importFromJson"><n-input v-model:value="pasteJson" type="textarea" placeholder="粘贴替换规则 JSON 数组..." :autosize="{ minRows: 12, maxRows: 20 }" /></n-modal>
@@ -41,12 +41,10 @@ import { NModal, NInput, useMessage } from 'naive-ui'
 import { useReplaceRuleStore } from '@/stores/replace-rules.js'
 import { network } from '@/services/network.js'
 import BackButton from '@/components/common/BackButton.vue'
-import { useNaiveTheme } from '@/composables/useNaiveTheme.js'
 import EmptyState from '@/components/common/EmptyState.vue'
 import type { ReplaceRule } from '@/types'
 
 const msg = useMessage()
-const { naiveTheme, themeOverrides } = useNaiveTheme()
 const replaceRuleStore = useReplaceRuleStore()
 const showDialog = ref(false)
 const editingRule = ref<ReplaceRule | null>(null)
@@ -115,8 +113,8 @@ async function onImportFile(event: Event): Promise<void> {
     const text = await file.text()
     await importRulesFromJson(text)
     msg.success('导入成功')
-  } catch (err: any) {
-    msg.error('导入失败: ' + err.message)
+  } catch (err: unknown) {
+    msg.error('导入失败: ' + (err as Error).message)
   } finally {
     input.value = ''
   }
@@ -129,8 +127,8 @@ async function importFromJson(): Promise<void> {
     pasteJson.value = ''
     showPasteModal.value = false
     msg.success('导入成功')
-  } catch (err: any) {
-    msg.error('导入失败: ' + err.message)
+  } catch (err: unknown) {
+    msg.error('导入失败: ' + (err as Error).message)
   }
 }
 
@@ -143,13 +141,13 @@ async function importFromUrl(): Promise<void> {
     importUrl.value = ''
     showImportUrlModal.value = false
     msg.success('导入成功')
-  } catch (err: any) {
-    msg.error('导入失败: ' + err.message)
+  } catch (err: unknown) {
+    msg.error('导入失败: ' + (err as Error).message)
   }
 }
 
 async function importRulesFromJson(jsonStr: string): Promise<void> {
-  let data: any
+  let data: unknown
   if (typeof jsonStr === 'string') {
     if (jsonStr.trim() === '[object Object]') throw new Error('无效数据')
     data = JSON.parse(jsonStr)
@@ -157,37 +155,40 @@ async function importRulesFromJson(jsonStr: string): Promise<void> {
     data = jsonStr
   }
 
-  let rules: any[] = []
-  if (Array.isArray(data)) rules = data
-  else if (data.replaceRules && Array.isArray(data.replaceRules)) rules = data.replaceRules
-  else if (data.rules && Array.isArray(data.rules)) rules = data.rules
+  const dataObj = data as Record<string, unknown>
+
+  let rules: Record<string, unknown>[] = []
+  if (Array.isArray(data)) rules = data as Record<string, unknown>[]
+  else if (dataObj.replaceRules && Array.isArray(dataObj.replaceRules)) rules = dataObj.replaceRules as Record<string, unknown>[]
+  else if (dataObj.rules && Array.isArray(dataObj.rules)) rules = dataObj.rules as Record<string, unknown>[]
   else throw new Error('无法识别的格式')
 
   let added = 0
   const existingRules = [...replaceRuleStore.rules]
   const newRules: ReplaceRule[] = []
 
-  for (const item of rules) {
-    const pattern = item.pattern || item.regex || ''
+  for (const item of rules as Record<string, unknown>[]) {
+    const itemObj = item as Record<string, unknown>
+    const pattern = (itemObj.pattern as string) || (itemObj.regex as string) || ''
     if (!pattern) continue
     // 去重
     const exists = existingRules.find((r) => r.name === (item.name || '未命名规则') && r.pattern === pattern)
     if (exists) continue
 
     newRules.push({
-      id: item.id || generateId() + added,
-      name: item.name || item.replaceSummary || item.summary || '未命名规则',
-      group: item.group || null,
+      id: (item.id as number) || generateId() + added,
+      name: (item.name as string) || (item.replaceSummary as string) || (item.summary as string) || '未命名规则',
+      group: (item.group as string | null) || null,
       pattern,
-      replacement: item.replacement || '',
-      scope: item.scope || item.useTo || null,
+      replacement: (item.replacement as string) || '',
+      scope: (item.scope as string | null) || (item.useTo as string | null) || null,
       scopeTitle: item.scopeTitle === true || item.scope === 'title',
       scopeContent: item.scopeContent !== false && item.scope !== 'title',
-      excludeScope: item.excludeScope || null,
+      excludeScope: (item.excludeScope as string | null) || null,
       isEnabled: item.isEnabled !== false,
       isRegex: item.isRegex !== false,
-      timeoutMillisecond: item.timeoutMillisecond || 5000,
-      order: item.order || item.sortOrder || added,
+      timeoutMillisecond: (item.timeoutMillisecond as number) || 5000,
+      order: (item.order as number) || (item.sortOrder as number) || added,
     })
     added++
   }

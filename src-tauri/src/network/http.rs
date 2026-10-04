@@ -4,19 +4,35 @@ use std::collections::HashMap;
 use std::sync::LazyLock;
 use tokio::sync::Mutex;
 use reqwest::Method;
+use serde::Serialize;
 
 struct CachedClient {
     client: Client,
     created_at: std::time::Instant,
 }
 
-// 修复：缓存 key 包含域名+超时时间，不同超时要求使用不同 Client
 static CLIENT_CACHE: LazyLock<Mutex<HashMap<String, CachedClient>>> = LazyLock::new(|| Mutex::new(HashMap::new()));
 
-const CLIENT_CACHE_TTL_SECS: u64 = 600; // 10 分钟
+const CLIENT_CACHE_TTL_SECS: u64 = 600;
+const CLIENT_CACHE_MAX_ENTRIES: usize = 100;
 
 fn get_cache_key(domain: &str, timeout: u64) -> String {
     format!("{}:{}", domain, timeout)
+}
+
+fn prune_cache(cache: &mut HashMap<String, CachedClient>) {
+    cache.retain(|_, c| c.created_at.elapsed().as_secs() < CLIENT_CACHE_TTL_SECS);
+    if cache.len() > CLIENT_CACHE_MAX_ENTRIES {
+        let mut entries: Vec<(String, std::time::Instant)> = cache
+            .iter()
+            .map(|(k, v)| (k.clone(), v.created_at))
+            .collect();
+        entries.sort_by_key(|(_, t)| *t);
+        let remove_count = cache.len() - CLIENT_CACHE_MAX_ENTRIES;
+        for (k, _) in entries.into_iter().take(remove_count) {
+            cache.remove(&k);
+        }
+    }
 }
 
 fn is_blocked_host(hostname: &str) -> bool {
@@ -35,7 +51,6 @@ fn is_blocked_host(hostname: &str) -> bool {
         if octets.iter().all(|&b| b == 0) || (octets[0] == 0 && octets[1] == 0 && octets[15] == 1) {
             return true;
         }
-        // 修复：IPv6 唯一本地地址 fc00::/7 和链路本地 fe80::/10
         if octets[0] & 0xfe == 0xfc || octets[0] & 0xfe == 0xfe && octets[1] & 0xc0 == 0x80 {
             return true;
         }
@@ -67,7 +82,6 @@ fn is_blocked_ipv4(ip: &str) -> bool {
         if octets[0] == 0 {
             return true;
         }
-        // 修复：100.64.0.0/10 运营商级 NAT
         if octets[0] == 100 && octets[1] >= 64 && octets[1] <= 127 {
             return true;
         }
@@ -123,14 +137,24 @@ pub fn save_cookies_from_response(url: &str, response_headers: &HashMap<String, 
     }
 }
 
-pub async fn execute_http_request(
+/// HTTP 请求的完整结果。
+/// 修复：原实现只返回 body，丢失 status/headers，导致前端 adapter 只能硬编码 200。
+#[derive(Debug, Clone, Serialize)]
+pub struct HttpResponse {
+    pub status: u16,
+    pub body: String,
+    pub headers: HashMap<String, String>,
+    pub url: String,
+}
+
+pub async fn execute_http_request_full(
     url: &str,
     method: &str,
     headers: Option<HashMap<String, String>>,
     body: Option<String>,
     charset: Option<String>,
     timeout_secs: u64,
-) -> Result<String> {
+) -> Result<HttpResponse> {
     let cleaned_url = clean_url(url);
     crate::js_runtime::ops::emit_log(
         "info",
@@ -160,20 +184,10 @@ pub async fn execute_http_request(
 
     let client = {
         let mut cache = CLIENT_CACHE.lock().await;
+        prune_cache(&mut cache);
 
-        // 检查是否有有效缓存
         if let Some(cached) = cache.get(&cache_key) {
-            if cached.created_at.elapsed().as_secs() < CLIENT_CACHE_TTL_SECS {
-                cached.client.clone()
-            } else {
-                // 过期，重建
-                let new_client = build_client(ua, timeout);
-                cache.insert(cache_key.clone(), CachedClient {
-                    client: new_client.clone(),
-                    created_at: std::time::Instant::now(),
-                });
-                new_client
-            }
+            cached.client.clone()
         } else {
             let new_client = build_client(ua, timeout);
             cache.insert(cache_key.clone(), CachedClient {
@@ -220,6 +234,7 @@ pub async fn execute_http_request(
 
     let elapsed = start.elapsed().as_millis();
     let status = response.status().as_u16();
+    let final_url = response.url().to_string();
 
     let resp_headers: HashMap<String, String> = response
         .headers()
@@ -227,10 +242,6 @@ pub async fn execute_http_request(
         .map(|(k, v)| (k.as_str().to_string(), v.to_str().unwrap_or("").to_string()))
         .collect();
     save_cookies_from_response(&cleaned_url, &resp_headers);
-
-    if status < 200 || status >= 300 {
-        return Err(AbyssError::NetworkError(format!("HTTP {}", status)));
-    }
 
     let bytes = response.bytes().await.map_err(|e| {
         AbyssError::NetworkError(e.to_string())
@@ -261,13 +272,37 @@ pub async fn execute_http_request(
     crate::js_runtime::ops::emit_log(
         "info",
         &format!(
-            "[http] 完成: {} ({}ms, {} 字节)",
+            "[http] 完成: {} ({}ms, {} 字节, status={})",
             cleaned_url,
             elapsed,
-            content.len()
+            content.len(),
+            status
         ),
     );
-    Ok(content)
+
+    Ok(HttpResponse {
+        status,
+        body: content,
+        headers: resp_headers,
+        url: final_url,
+    })
+}
+
+/// 兼容旧接口：只返回 body，非 2xx 时返回 Err。
+/// 供不需要状态码的调用方使用（如 RSS 抓取、JS 沙箱内 ajax 降级等）。
+pub async fn execute_http_request(
+    url: &str,
+    method: &str,
+    headers: Option<HashMap<String, String>>,
+    body: Option<String>,
+    charset: Option<String>,
+    timeout_secs: u64,
+) -> Result<String> {
+    let result = execute_http_request_full(url, method, headers, body, charset, timeout_secs).await?;
+    if result.status < 200 || result.status >= 300 {
+        return Err(AbyssError::NetworkError(format!("HTTP {}", result.status)));
+    }
+    Ok(result.body)
 }
 
 fn build_client(ua: &str, timeout: u64) -> Client {

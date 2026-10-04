@@ -2,10 +2,11 @@
 // 目录解析 — 对齐 Legado BookChapterList
 // ============================================
 
-import { getString, getElements, resolveUrl } from '../../index.js'
+import { resolveUrl } from '../../index.js'
 import type { EngineBookSource, EngineBook, EngineChapter, ParseContext } from '../../types.js'
+import type { RuleEvaluator } from './info-parser.js'
 
-const WORD_COUNT_REGEX = /(?:^|字数[：:、]?|\s+)([0-9万千百\.]{1,6}字)/
+const WORD_COUNT_REGEX = /(?:^|字数[：:、]?|\s+)([0-9万千百.]{1,6}字)/
 
 function isJsonString(str: string): boolean {
   const t = str.trim()
@@ -15,7 +16,11 @@ function isJsonString(str: string): boolean {
 function safeParseJson(str: string): unknown {
   try {
     return JSON.parse(str)
-  } catch {
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : String(e)
+    if (typeof console !== 'undefined') {
+      console.debug(`[engine:tocParser] JSON 解析失败: ${msg}`)
+    }
     return null
   }
 }
@@ -63,6 +68,7 @@ export async function parseTocPage(
   listRule: string,
   bookSource: EngineBookSource,
   getNextUrl: boolean,
+  evaluator: RuleEvaluator,
 ): Promise<{ chapters: EngineChapter[]; nextUrls: string[] }> {
   const chapters: EngineChapter[] = []
   const nextUrls: string[] = []
@@ -76,12 +82,12 @@ export async function parseTocPage(
 
   const isJson = isJsonString(body)
   const parsedData: unknown = isJson ? safeParseJson(body) : body
-  const elements = await getElements(parsedData, listRule, baseCtx)
+  const elements = await evaluator.getElements(parsedData, listRule, baseCtx)
 
   const nextTocUrlRule = getRuleString(tocRule, 'nextTocUrl')
   if (getNextUrl && nextTocUrlRule) {
     try {
-      const results = await getElements(parsedData, nextTocUrlRule, { ...baseCtx, isUrl: true })
+      const results = await evaluator.getElements(parsedData, nextTocUrlRule, { ...baseCtx, isUrl: true })
       if (Array.isArray(results)) {
         for (const item of results) {
           if (item && typeof item === 'string' && item.trim() && item.trim() !== redirectUrl) {
@@ -92,8 +98,11 @@ export async function parseTocPage(
           }
         }
       }
-    } catch {
-      // ignore
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e)
+      if (typeof console !== 'undefined') {
+        console.debug(`[engine:tocParser] nextTocUrl 规则执行失败: ${msg}`)
+      }
     }
   }
 
@@ -117,7 +126,7 @@ export async function parseTocPage(
 
       const itemCtx: ParseContext = { ...baseCtx, result: item }
 
-      const title = (await getString(item, nameRule, itemCtx)) || ''
+      const title = (await evaluator.getString(item, nameRule, itemCtx)) || ''
       if (!title) continue
 
       let url = ''
@@ -126,16 +135,16 @@ export async function parseTocPage(
 
       if (hasDeferredJs) {
         if (firstRule) {
-          url = (await getString(item, firstRule, itemCtx)) || ''
+          url = (await evaluator.getString(item, firstRule, itemCtx)) || ''
         }
         deferredJs = urlRule
         deferredResult = url
       } else {
-        url = (await getString(item, urlRule, itemCtx)) || ''
+        url = (await evaluator.getString(item, urlRule, itemCtx)) || ''
       }
 
-      const info = upTimeRule ? (await getString(item, upTimeRule, itemCtx)) || '' : ''
-      const isVolumeStr = isVolumeRule ? (await getString(item, isVolumeRule, itemCtx)) || '' : ''
+      const info = upTimeRule ? (await evaluator.getString(item, upTimeRule, itemCtx)) || '' : ''
+      const isVolumeStr = isVolumeRule ? (await evaluator.getString(item, isVolumeRule, itemCtx)) || '' : ''
       const isVolume = isVolumeStr === 'true'
 
       let wordCount: string | undefined
@@ -161,8 +170,8 @@ export async function parseTocPage(
         title: String(title),
         url: resolveUrl(String(url), redirectUrl),
         index: chapters.length,
-        isVip: vipRule ? (await getString(item, vipRule, itemCtx)) === 'true' : false,
-        isPay: payRule ? (await getString(item, payRule, itemCtx)) === 'true' : false,
+        isVip: vipRule ? (await evaluator.getString(item, vipRule, itemCtx)) === 'true' : false,
+        isPay: payRule ? (await evaluator.getString(item, payRule, itemCtx)) === 'true' : false,
         updateTime: tag || undefined,
         wordCount: wordCount,
         _deferredJs: deferredJs,

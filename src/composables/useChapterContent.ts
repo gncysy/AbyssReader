@@ -11,6 +11,7 @@ import type { ComicImage } from '@engine/business/comic/index.js'
 import { loadComicImages } from '@/services/comic.js'
 import { getCachedContent, setCachedContent, getPreloadedContent, setPreloadedContent, getRawContent, setRawContent } from '@/services/cache.js'
 import { useErrorHandler } from '@/composables/useErrorHandler.js'
+import { logWarn } from '@engine/log/index.js'
 import type { Book, BookSource, Chapter } from '@/types'
 import { READER } from '@/constants/reader.js'
 
@@ -24,6 +25,15 @@ function isBookSourceArray(value: unknown): value is BookSource[] {
   return Array.isArray(value)
 }
 
+function escapeHtml(text: string): string {
+  return text
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;')
+}
+
 export function useChapterContent() {
   const message = useMessage()
   const { handleAndNotify } = useErrorHandler()
@@ -35,9 +45,6 @@ export function useChapterContent() {
   const comicImages = ref<ComicImage[]>([])
   const scrollPercent = ref(0)
 
-  // 修复：使用响应式 ref 替代普通变量
-  const preloadQueue = ref<number[]>([])
-  const preloadingSet = ref<Set<number>>(new Set())
   let isChaptersLoaded = false
   let chaptersLoadPromise: Promise<void> | null = null
 
@@ -128,7 +135,7 @@ export function useChapterContent() {
 
     isComic.value = source.bookSourceType === 2
     const getOptions: GetContentOptions = {
-      book,
+      book: book as unknown as Record<string, unknown>,
       nextChapterUrl: chapters.value[chapterIndex.value + 1]?.url || '',
       chapter: ch,
       skipCache: forceRefresh,
@@ -185,37 +192,49 @@ export function useChapterContent() {
         userMessage: '加载章节失败，请检查网络',
       })
       if (result.shouldShowUser) message.warning(result.message)
-      content.value = '<p style="color:var(--text-muted);text-align:center;padding:40px">' + result.message + '</p>'
+      content.value = '<p style="color:var(--text-muted);text-align:center;padding:40px">' + escapeHtml(result.message) + '</p>'
     } finally {
       loadingContent.value = false
     }
   }
 
-  function startPreload(book: Book, source: BookSource, _purifyEnabled: boolean, _reSegmentEnabled: boolean, _bookName: string, _replaceRules: ReplaceRuleLike[]): void {
+  /**
+   * 预加载后续章节。
+   * 修复：用局部数组传递队列，避免 worker 共享响应式 ref 引发的竞态。
+   */
+  function startPreload(
+    book: Book,
+    source: BookSource,
+    _purifyEnabled: boolean,
+    _reSegmentEnabled: boolean,
+    _bookName: string,
+    _replaceRules: ReplaceRuleLike[],
+  ): void {
     if (isComic.value) return
-    // 修复：通过重新赋值触发响应式
-    preloadQueue.value = []
-    preloadingSet.value = new Set()
 
-    const newQueue: number[] = []
-    const newSet = new Set<number>()
-
+    const queue: number[] = []
+    const seen = new Set<number>()
     for (let i = chapterIndex.value + 1; i < Math.min(chapterIndex.value + 1 + READER.PRELOAD_COUNT, chapters.value.length); i++) {
       if (getPreloadedContent(book, i)) continue
-      if (newSet.has(i)) continue
-      newSet.add(i)
-      newQueue.push(i)
+      if (seen.has(i)) continue
+      seen.add(i)
+      queue.push(i)
     }
 
-    preloadQueue.value = newQueue
-    preloadingSet.value = newSet
-    processPreloadQueue(book, source)
+    if (queue.length === 0) return
+    processPreloadQueue(book, source, queue)
   }
 
-  async function processPreloadQueue(book: Book, source: BookSource): Promise<void> {
+  async function processPreloadQueue(
+    book: Book,
+    source: BookSource,
+    queue: number[],
+  ): Promise<void> {
+    // 修复：使用局部 queue，两个 worker 共享同一个 queue 引用
+    // 通过 shift() 原子性取项（JS 单线程保证），不会漏项
     async function preloadOne(): Promise<void> {
-      while (preloadQueue.value.length > 0) {
-        const idx = preloadQueue.value.shift()
+      while (queue.length > 0) {
+        const idx = queue.shift()
         if (idx === undefined) continue
         const ch = chapters.value[idx]
         if (!ch) continue
@@ -226,7 +245,7 @@ export function useChapterContent() {
         }
         try {
           const getOptions: GetContentOptions = {
-            book,
+            book: book as unknown as Record<string, unknown>,
             nextChapterUrl: chapters.value[idx + 1]?.url || '',
             chapter: ch,
           }
@@ -239,12 +258,14 @@ export function useChapterContent() {
             setPreloadedContent(book, idx, raw)
             await setCachedContent(book, ch.id, raw)
           }
-        } catch {
-          // ignore
+        } catch (e: unknown) {
+          const msg = e instanceof Error ? e.message : String(e)
+          // 修复：预加载失败记录日志，便于诊断
+          logWarn('reader', 'frontend', `[预加载] 章节 ${idx} 失败: ${msg}`)
         }
       }
     }
-    preloadOne(); preloadOne()
+    await Promise.all([preloadOne(), preloadOne()])
   }
 
   function prevChapter(): void { if (chapterIndex.value > 0) { chapterIndex.value--; scrollPercent.value = 0 } }

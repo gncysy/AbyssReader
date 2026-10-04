@@ -5,9 +5,86 @@ use parking_lot::Mutex;
 use tauri::Emitter;
 use crate::storage::cache::{self, CacheCategory};
 
-const MAX_UNARCHIVE_TOTAL_BYTES: u64 = 200 * 1024 * 1024; // 200MB
-const MAX_UNARCHIVE_FILE_BYTES: u64 = 50 * 1024 * 1024; // 50MB 单文件
+const MAX_UNARCHIVE_TOTAL_BYTES: u64 = 200 * 1024 * 1024;
+const MAX_UNARCHIVE_FILE_BYTES: u64 = 50 * 1024 * 1024;
 const MAX_UNARCHIVE_FILES: usize = 500;
+
+// ─── HTML 解析缓存 ───
+// 书源规则对同一段 HTML 反复调用 op_jsoup_size / op_jsoup_get / op_jsoup_text 等。
+// 每次 parse 都重新构建 DOM 树，性能差。
+// 用 LRU 缓存 (html, selector, index) → 解析结果。
+
+const HTML_CACHE_MAX: usize = 64;
+
+struct HtmlCache {
+    /// (html + selector + index) → 结果
+    map: HashMap<String, String>,
+    /// 插入顺序（最旧的在前）
+    order: Vec<String>,
+}
+
+static HTML_CACHE: LazyLock<Mutex<HtmlCache>> = LazyLock::new(|| {
+    Mutex::new(HtmlCache {
+        map: HashMap::new(),
+        order: Vec::new(),
+    })
+});
+
+fn cache_key(html: &str, selector: &str, index: Option<u32>) -> String {
+    let mut key = String::with_capacity(html.len() + selector.len() + 16);
+    key.push_str(html);
+    key.push('\x1f');
+    key.push_str(selector);
+    if let Some(i) = index {
+        key.push('\x1f');
+        key.push_str(&i.to_string());
+    }
+    key
+}
+
+fn cache_get(key: &str) -> Option<String> {
+    let cache = HTML_CACHE.lock();
+    cache.map.get(key).cloned()
+}
+
+fn cache_put(key: String, value: String) {
+    let mut cache = HTML_CACHE.lock();
+    if cache.map.contains_key(&key) {
+        // 已存在，更新
+        cache.map.insert(key.clone(), value);
+        if let Some(pos) = cache.order.iter().position(|k| k == &key) {
+            cache.order.remove(pos);
+        }
+        cache.order.push(key);
+        return;
+    }
+    if cache.map.len() >= HTML_CACHE_MAX {
+        if let Some(oldest) = cache.order.first().cloned() {
+            cache.order.remove(0);
+            cache.map.remove(&oldest);
+        }
+    }
+    cache.map.insert(key.clone(), value);
+    cache.order.push(key);
+}
+
+/// 清空 HTML 缓存（供外部触发）。
+pub fn clear_html_cache() {
+    let mut cache = HTML_CACHE.lock();
+    cache.map.clear();
+    cache.order.clear();
+}
+
+fn get_body_first_element(doc: &scraper::Html) -> Option<scraper::ElementRef<'_>> {
+    let body_sel = scraper::Selector::parse("body").ok()?;
+    let body = doc.select(&body_sel).next()?;
+    for child in body.children() {
+        if let Some(el_ref) = scraper::ElementRef::wrap(child) {
+            return Some(el_ref);
+        }
+    }
+    None
+}
 
 #[op2]
 #[string]
@@ -18,33 +95,70 @@ pub fn op_jsoup_parse(#[string] html: String) -> String {
 #[op2]
 #[string]
 pub fn op_jsoup_select(#[string] html: String, #[string] css: String) -> String {
+    let key = cache_key(&html, &css, None);
+    if let Some(cached) = cache_get(&key) {
+        return cached;
+    }
     let doc = scraper::Html::parse_document(&html);
     let selector = match scraper::Selector::parse(&css) {
         Ok(s) => s,
         Err(_) => return "[]".into(),
     };
     let elements: Vec<String> = doc.select(&selector).map(|el| el.html()).collect();
-    serde_json::to_string(&elements).unwrap_or_else(|_| "[]".into())
+    let result = serde_json::to_string(&elements).unwrap_or_else(|_| "[]".into());
+    cache_put(key, result.clone());
+    result
 }
 
 #[op2]
 #[string]
 pub fn op_jsoup_text(#[string] html: String) -> String {
+    let key = cache_key(&html, "__text__", None);
+    if let Some(cached) = cache_get(&key) {
+        return cached;
+    }
     let doc = scraper::Html::parse_document(&html);
-    doc.root_element().text().collect::<Vec<_>>().join("")
+    let result = if let Some(el_ref) = get_body_first_element(&doc) {
+        el_ref.text().collect::<Vec<_>>().join("")
+    } else {
+        String::new()
+    };
+    cache_put(key, result.clone());
+    result
 }
 
 #[op2]
 #[string]
 pub fn op_jsoup_attr(#[string] html: String, #[string] name: String) -> String {
+    let key = cache_key(&html, &format!("__attr__{}", name), None);
+    if let Some(cached) = cache_get(&key) {
+        return cached;
+    }
     let doc = scraper::Html::parse_document(&html);
-    doc.root_element().value().attr(&name).unwrap_or("").to_string()
+    let result = if let Some(el_ref) = get_body_first_element(&doc) {
+        el_ref.value().attr(&name).unwrap_or("").to_string()
+    } else {
+        String::new()
+    };
+    cache_put(key, result.clone());
+    result
 }
 
 #[op2]
 #[string]
 pub fn op_jsoup_html(#[string] html: String) -> String {
-    html
+    let key = cache_key(&html, "__inner_html__", None);
+    if let Some(cached) = cache_get(&key) {
+        return cached;
+    }
+    let doc = scraper::Html::parse_document(&html);
+    let result = if let Some(el_ref) = get_body_first_element(&doc) {
+        el_ref.inner_html()
+    } else {
+        html.clone()
+    };
+    cache_put(key, result.clone());
+    result
 }
 
 #[op2]
@@ -56,6 +170,7 @@ pub fn op_jsoup_outer_html(#[string] html: String) -> String {
 #[op2]
 #[string]
 pub fn op_jsoup_remove(#[string] html: String, #[string] css: String) -> String {
+    // remove 是写操作，不缓存
     let doc = scraper::Html::parse_document(&html);
     let selector = match scraper::Selector::parse(&css) {
         Ok(s) => s,
@@ -73,31 +188,49 @@ pub fn op_jsoup_remove(#[string] html: String, #[string] css: String) -> String 
 
 #[op2(fast)]
 pub fn op_jsoup_size(#[string] html: String, #[string] css: String) -> u32 {
+    let key = cache_key(&html, &format!("__size__{}", css), None);
+    if let Some(cached) = cache_get(&key) {
+        if let Ok(n) = cached.parse::<u32>() {
+            return n;
+        }
+    }
     let doc = scraper::Html::parse_document(&html);
     let selector = match scraper::Selector::parse(&css) {
         Ok(s) => s,
         Err(_) => return 0,
     };
-    doc.select(&selector).count() as u32
+    let count = doc.select(&selector).count() as u32;
+    cache_put(key, count.to_string());
+    count
 }
 
 #[op2]
 #[string]
 pub fn op_jsoup_get(#[string] html: String, #[string] css: String, index: u32) -> String {
+    let key = cache_key(&html, &format!("__get__{}", css), Some(index));
+    if let Some(cached) = cache_get(&key) {
+        return cached;
+    }
     let doc = scraper::Html::parse_document(&html);
     let selector = match scraper::Selector::parse(&css) {
         Ok(s) => s,
         Err(_) => return String::new(),
     };
-    doc.select(&selector)
+    let result = doc.select(&selector)
         .nth(index as usize)
         .map(|el| el.html())
-        .unwrap_or_default()
+        .unwrap_or_default();
+    cache_put(key, result.clone());
+    result
 }
 
 #[op2]
 #[string]
 pub fn op_jsoup_each_text(#[string] html: String, #[string] css: String) -> String {
+    let key = cache_key(&html, &format!("__each_text__{}", css), None);
+    if let Some(cached) = cache_get(&key) {
+        return cached;
+    }
     let doc = scraper::Html::parse_document(&html);
     let selector = match scraper::Selector::parse(&css) {
         Ok(s) => s,
@@ -107,12 +240,18 @@ pub fn op_jsoup_each_text(#[string] html: String, #[string] css: String) -> Stri
         .select(&selector)
         .map(|el| el.text().collect::<Vec<_>>().join(""))
         .collect();
-    serde_json::to_string(&texts).unwrap_or_else(|_| "[]".into())
+    let result = serde_json::to_string(&texts).unwrap_or_else(|_| "[]".into());
+    cache_put(key, result.clone());
+    result
 }
 
 #[op2]
 #[string]
 pub fn op_jsoup_children(#[string] html: String) -> String {
+    let key = cache_key(&html, "__children__", None);
+    if let Some(cached) = cache_get(&key) {
+        return cached;
+    }
     let doc = scraper::Html::parse_document(&html);
     let children: Vec<String> = doc
         .root_element()
@@ -120,29 +259,48 @@ pub fn op_jsoup_children(#[string] html: String) -> String {
         .filter(|child| child.value().is_element())
         .filter_map(|child| scraper::ElementRef::wrap(child).map(|el| el.html()))
         .collect();
-    serde_json::to_string(&children).unwrap_or_else(|_| "[]".into())
+    let result = serde_json::to_string(&children).unwrap_or_else(|_| "[]".into());
+    cache_put(key, result.clone());
+    result
 }
 
 #[op2]
 #[string]
 pub fn op_jsoup_tag_name(#[string] html: String) -> String {
+    let key = cache_key(&html, "__tag_name__", None);
+    if let Some(cached) = cache_get(&key) {
+        return cached;
+    }
     let doc = scraper::Html::parse_document(&html);
-    doc.root_element().value().name().to_string()
+    let result = if let Some(el_ref) = get_body_first_element(&doc) {
+        el_ref.value().name().to_string()
+    } else {
+        String::new()
+    };
+    cache_put(key, result.clone());
+    result
 }
 
 #[op2]
 #[string]
 pub fn op_jsoup_own_text(#[string] html: String) -> String {
+    let key = cache_key(&html, "__own_text__", None);
+    if let Some(cached) = cache_get(&key) {
+        return cached;
+    }
     let doc = scraper::Html::parse_document(&html);
-    let texts: Vec<String> = doc
-        .root_element()
-        .children()
-        .filter(|child| child.value().is_text())
-        .filter_map(|child| {
-            scraper::ElementRef::wrap(child).map(|el| el.text().collect::<Vec<_>>().join(""))
-        })
-        .collect();
-    texts.join("")
+    let result = if let Some(el_ref) = get_body_first_element(&doc) {
+        let texts: Vec<String> = el_ref
+            .children()
+            .filter(|child| child.value().is_text())
+            .filter_map(|child| child.value().as_text().map(|t| t.to_string()))
+            .collect();
+        texts.join("")
+    } else {
+        String::new()
+    };
+    cache_put(key, result.clone());
+    result
 }
 
 #[op2]
@@ -353,7 +511,6 @@ pub fn op_java_unarchive_file(#[string] path: String) -> String {
             let reader = std::io::BufReader::new(file);
             match zip::ZipArchive::new(reader) {
                 Ok(mut archive) => {
-                    // 修复：zip bomb 防护
                     let mut total_bytes: u64 = 0;
                     let mut file_count: usize = 0;
 
@@ -369,12 +526,10 @@ pub fn op_java_unarchive_file(#[string] path: String) -> String {
 
                         let entry_size = entry.size();
 
-                        // 单文件大小限制
                         if entry_size > MAX_UNARCHIVE_FILE_BYTES {
                             return format!("error: 压缩包内文件过大 ({})", entry_size);
                         }
 
-                        // 总大小限制
                         total_bytes += entry_size;
                         if total_bytes > MAX_UNARCHIVE_TOTAL_BYTES {
                             return format!("error: 压缩包解压后总大小超过限制 ({})", MAX_UNARCHIVE_TOTAL_BYTES);
@@ -599,4 +754,30 @@ pub fn op_java_bytes_to_str(#[buffer] input: &[u8], #[string] charset: String) -
         .unwrap_or(encoding_rs::UTF_8);
     let (text, _, _) = enc.decode(input);
     text.into_owned()
+}
+
+// ─── GZIP 解压 ───
+//
+// 修复：番茄书源 jsLib 的 gunzip 用 Java GZIPInputStream。
+// 原实现是 JS 降级（直接透传），不解压。改为 Rust 真解压。
+//
+// 语义对齐 Java：
+// - 输入是 GZIP 字节流（含 10 字节头 + deflate 数据 + 8 字节尾）
+// - 输出是解压后的原始字节
+
+#[op2]
+pub fn op_java_gunzip(#[buffer] data: &[u8]) -> Vec<u8> {
+    use flate2::read::GzDecoder;
+    use std::io::Read;
+
+    if data.is_empty() {
+        return Vec::new();
+    }
+
+    let mut decoder = GzDecoder::new(data);
+    let mut out = Vec::with_capacity(data.len() * 4);
+    match decoder.read_to_end(&mut out) {
+        Ok(_) => out,
+        Err(_) => Vec::new(),
+    }
 }

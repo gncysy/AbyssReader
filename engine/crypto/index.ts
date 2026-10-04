@@ -133,8 +133,13 @@ export function hexEncode(str: string): string {
 }
 
 export function hexDecode(hex: string): string {
+  // 修复：奇数长度 hex 无法完整解码，返回空
+  if (hex.length % 2 !== 0) return ''
+  if (!/^[0-9a-fA-F]*$/.test(hex)) return ''
   const bytes = new Uint8Array(hex.length / 2)
-  for (let i = 0; i < hex.length; i += 2) bytes[i / 2] = parseInt(hex.substring(i, i + 2), 16)
+  for (let i = 0; i < hex.length; i += 2) {
+    bytes[i / 2] = parseInt(hex.substring(i, i + 2), 16)
+  }
   return new TextDecoder().decode(bytes)
 }
 

@@ -10,6 +10,7 @@ import { useChapterContent } from '@/composables/useChapterContent.js'
 import { useDict } from '@/composables/useDict.js'
 import { useReader } from '@/composables/useReader.js'
 import { purifyText, textToHtml } from '@engine/business/content/purify.js'
+import type { JsReplacementFn } from '@engine/business/content/purify.js'
 import { loadSingleImage } from '@/services/comic.js'
 import { engine } from '@/services/engine.js'
 import type { Book, BookSource, Chapter } from '@/types'
@@ -77,6 +78,11 @@ export function useReaderContent(book: Book | null, source: BookSource | null, _
     return readerStore.reSegment
   })
 
+  const jsReplacementFn: JsReplacementFn = (jsCode, matched) => {
+    void jsCode
+    return matched
+  }
+
   async function convertText(text: string): Promise<string> {
     if (readerStore.chineseConverterType === 0 || !text) return text
     const fnName = readerStore.chineseConverterType === 1 ? 'java.t2s' : 'java.s2t'
@@ -93,6 +99,44 @@ export function useReaderContent(book: Book | null, source: BookSource | null, _
     }
   }
 
+  async function applyJsReplacementRules(text: string, rules: typeof replaceRuleStore.rules): Promise<string> {
+    let result = text
+    for (const rule of rules) {
+      if (!rule.isEnabled || !rule.pattern) continue
+      if (!rule.scopeContent && rule.scopeTitle) continue
+      const replacement = rule.replacement || ''
+      const isJsReplace = replacement.startsWith('@js:') || replacement.startsWith('<js>')
+      if (!isJsReplace) continue
+
+      try {
+        if (rule.isRegex) {
+          // 修复：使用 matchAll 获取所有匹配，再逐个替换
+          // 用 replaceAll（ES2021）替代 split/join
+          const regex = new RegExp(rule.pattern, 'g')
+          const matches: string[] = []
+          let m: RegExpExecArray | null
+          while ((m = regex.exec(result)) !== null) {
+            matches.push(m[0])
+            if (regex.lastIndex === 0) break
+          }
+          for (const match of matches) {
+            const replaced = await engine.executeJs(replacement, { result: match })
+            if (replaced && replaced !== match) {
+              // 修复：用 replaceAll 替代 split + join
+              result = result.replaceAll(match, replaced)
+            }
+          }
+        } else {
+          const replaced = await engine.executeJs(replacement, { result })
+          if (replaced) result = replaced
+        }
+      } catch {
+        // ignore
+      }
+    }
+    return result
+  }
+
   async function reprocessCurrentContent(): Promise<void> {
     if (!rawTextContent.value) return
     if (isComic.value) return
@@ -102,12 +146,17 @@ export function useReaderContent(book: Book | null, source: BookSource | null, _
       processed = await convertText(processed)
     }
 
+    if (purifyEnabled.value) {
+      processed = await applyJsReplacementRules(processed, replaceRuleStore.rules)
+    }
+
     const purifyOptions = {
       chapterTitle: currentChapter.value?.title || '',
       bookName: currentBook.value?.name || '',
       reSegmentEnabled: effectiveReSegment.value,
       purifyEnabled: purifyEnabled.value,
-      rules: replaceRuleStore.rules
+      rules: replaceRuleStore.rules,
+      jsReplacementFn,
     }
     const purified = purifyEnabled.value ? purifyText(processed, purifyOptions) : processed
     content.value = textToHtml(purified)
@@ -156,11 +205,17 @@ export function useReaderContent(book: Book | null, source: BookSource | null, _
     if (textSelectPending) return
     const sel = window.getSelection()
     const text = sel?.toString().trim()
-    if (!text || !sel?.rangeCount) { isSelecting.value = false; return }
+    if (!text || !sel || sel.rangeCount === 0) { isSelecting.value = false; return }
     textSelectPending = true
     isSelecting.value = true
     if (selectionTimeout) clearTimeout(selectionTimeout)
     selectionTimeout = setTimeout(() => {
+      if (sel.rangeCount === 0) {
+        isSelecting.value = false
+        textSelectPending = false
+        selectionTimeout = null
+        return
+      }
       const range = sel.getRangeAt(0)
       const rect = range.getBoundingClientRect()
       if (rect.width > 0 && rect.height > 0) {
@@ -234,7 +289,6 @@ export function useReaderContent(book: Book | null, source: BookSource | null, _
 
   async function handleClose(): Promise<void> {
     await saveProgress(currentChapter.value?.id ?? 0, scrollPercent.value, currentChapter.value?.title || '')
-    // 立即 flush pending 的进度保存
     dispose()
     clearSelectionState()
     readerCtxRef.value?.close()

@@ -3,8 +3,11 @@
 // ============================================
 
 import { parseTocPage, parseTocJson, dedupChapters } from '@engine/business/book/index.js'
+import type { RuleEvaluator } from '@engine/business/book/index.js'
 import { analyzeUrl } from '@engine/url/index.js'
 import { parseSourceHeader } from '@engine/business/source/helper.js'
+import { getString, getStringList, getElements } from '@engine/parser/index.js'
+import { getJsRuntime } from '@engine/parser/js-executor.js'
 import { cache as cacheService } from './cache.js'
 import { fetchWithWebviewFallback } from './fetch.js'
 import { logInfo, logError } from '@engine/log/index.js'
@@ -16,6 +19,7 @@ import type { EngineBookSource, EngineChapter } from '@engine/types.js'
 import { NETWORK, READER } from '@/constants/index.js'
 
 const MAX_CONCURRENT_PAGES = 5
+const PAGE_RETRY_COUNT = 1
 
 function toEngineBookSource(source: BookSource): EngineBookSource {
   return source as unknown as EngineBookSource
@@ -23,6 +27,101 @@ function toEngineBookSource(source: BookSource): EngineBookSource {
 
 function toChapter(ch: EngineChapter): Chapter {
   return ch as unknown as Chapter
+}
+
+/**
+ * 归一化 JS 返回的章节对象。
+ * 修复：书源 JS 返回 `{name, url}`，但 Chapter 类型字段是 `title`。
+ * 需要把 `name` 映射到 `title`，同时保留 `url` / `index` / `id`。
+ */
+function normalizeChapter(raw: unknown, idx: number, _redirectUrl: string): Chapter | null {
+  if (raw === null || raw === undefined) return null
+  if (typeof raw !== 'object') return null
+  const obj = raw as Record<string, unknown>
+
+  // 标题：优先 title，其次 name
+  const rawTitle = obj.title ?? obj.name ?? obj.chapterName ?? ''
+  const title = typeof rawTitle === 'string' ? rawTitle.trim() : String(rawTitle || '').trim()
+  if (!title) return null
+
+  // URL：优先 url，其次 href
+  const rawUrl = obj.url ?? obj.href ?? ''
+  const urlStr = typeof rawUrl === 'string' ? rawUrl.trim() : String(rawUrl || '').trim()
+
+  // index / id
+  const rawIndex = obj.index ?? obj.id ?? idx
+  // 归一化索引到 number（未用时也保留，供未来扩展）
+  void (typeof rawIndex === 'number' ? rawIndex : parseInt(String(rawIndex), 10))
+  
+  // VIP / 付费
+  const isVip = !!(obj.isVip ?? obj.is_vip ?? false)
+  const isPay = !!(obj.isPay ?? obj.is_pay ?? false)
+
+  return {
+    id: idx,
+    title,
+    url: urlStr,
+    index: idx,
+    isVip,
+    isPay,
+  }
+}
+
+/**
+ * 把 evaluateRule 返回的任意结果归一化成 Chapter[]。
+ * 覆盖：
+ * - 数组 [{name, url}, ...]
+ * - 数组 [{title, url}, ...]
+ * - 单个对象
+ * - 字符串（原始 JSON）
+ */
+function normalizeChapterList(response: unknown, redirectUrl: string): Chapter[] {
+  let arr: unknown[] = []
+
+  if (Array.isArray(response)) {
+    arr = response
+  } else if (typeof response === 'string') {
+    // 尝试解析 JSON
+    const trimmed = response.trim()
+    if (trimmed.startsWith('[') && trimmed.endsWith(']')) {
+      try {
+        const parsed = JSON.parse(trimmed) as unknown
+        if (Array.isArray(parsed)) arr = parsed
+      } catch {
+        // ignore
+      }
+    } else if (trimmed.startsWith('{') && trimmed.endsWith('}')) {
+      // 可能是 {…},{…} 伪数组，或单个对象
+      try {
+        const parsed = JSON.parse(trimmed) as unknown
+        arr = [parsed]
+      } catch {
+        try {
+          const parsed = JSON.parse('[' + trimmed + ']') as unknown
+          if (Array.isArray(parsed)) arr = parsed
+        } catch {
+          // ignore
+        }
+      }
+    }
+  } else if (response !== null && response !== undefined && typeof response === 'object') {
+    arr = [response]
+  }
+
+  const result: Chapter[] = []
+  for (let i = 0; i < arr.length; i++) {
+    const ch = normalizeChapter(arr[i], i, redirectUrl)
+    if (ch) result.push(ch)
+  }
+  return result
+}
+
+function createRuleEvaluator(): RuleEvaluator {
+  return {
+    getString: (content, rule, ctx) => getString(content, rule, ctx),
+    getStringList: (content, rule, ctx) => getStringList(content, rule, ctx),
+    getElements: (content, rule, ctx) => getElements(content, rule, ctx),
+  }
 }
 
 export async function loadTocFromCache(source: BookSource, book?: Book): Promise<Chapter[] | null> {
@@ -69,27 +168,33 @@ async function runPreUpdateJs(source: BookSource, book: Book): Promise<void> {
 }
 
 async function executeHeaderRule(source: BookSource): Promise<Record<string, string>> {
-  const headers = await parseSourceHeader(toEngineBookSource(source))
+  const runtime = getJsRuntime()
+  const headers = await parseSourceHeader(toEngineBookSource(source), runtime)
   if (!headers['User-Agent'] && !headers['user-agent']) {
     headers['User-Agent'] = 'Mozilla/5.0 (Linux; Android 15; V2304A Build/AP3A.240905.015.A2; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/132.0.6834.163 Mobile Safari/537.36'
   }
   return headers
 }
 
-async function fetchPage(
+interface FetchPageResult {
+  html: string
+  redirectUrl: string
+}
+
+async function fetchPageOnce(
   url: string,
   headers: Record<string, string>,
   source: BookSource,
   book: Book,
   method: 'GET' | 'POST' = 'GET',
   body: string | null = null,
-): Promise<{ html: string; redirectUrl: string } | null> {
+): Promise<FetchPageResult | null> {
   try {
     const needsAnalyze = url.includes('@js:') || url.includes('<js>') || url.includes('{{') || url.includes(',{')
     if (needsAnalyze) {
       const analysis = await analyzeUrl(url, {
         source: toEngineBookSource(source),
-        book: book || {},
+        book: (book || {}) as unknown as Record<string, unknown>,
         baseUrl: source.bookSourceUrl || '',
         headerMap: headers,
       })
@@ -118,6 +223,26 @@ async function fetchPage(
   } catch {
     return null
   }
+}
+
+async function fetchPage(
+  url: string,
+  headers: Record<string, string>,
+  source: BookSource,
+  book: Book,
+  method: 'GET' | 'POST' = 'GET',
+  body: string | null = null,
+): Promise<FetchPageResult | null> {
+  let lastResult: FetchPageResult | null = null
+  for (let attempt = 0; attempt <= PAGE_RETRY_COUNT; attempt++) {
+    const result = await fetchPageOnce(url, headers, source, book, method, body)
+    if (result) return result
+    lastResult = result
+    if (attempt < PAGE_RETRY_COUNT) {
+      await new Promise((r) => setTimeout(r, 300))
+    }
+  }
+  return lastResult
 }
 
 async function concurrentMap<T, R>(
@@ -173,6 +298,7 @@ export async function fetchToc(
 
   const headers = await executeHeaderRule(source)
   const bookData = book || { name: '', author: '', bookUrl: tocUrl }
+  const evaluator = createRuleEvaluator()
 
   let listRule = tocRule.chapterList || ''
   let reverse = false
@@ -200,11 +326,12 @@ export async function fetchToc(
         book: bookData,
         redirectUrl,
       }, { forceDeno: true })
-      pageChapters = Array.isArray(response) ? (response as Chapter[]) : []
+      // 修复：归一化 JS 返回的章节对象（name → title）
+      pageChapters = normalizeChapterList(response, redirectUrl)
     } else {
       const parsed = await parseTocPage(
-        bookData as Record<string, unknown>,
-        tocUrl, redirectUrl, html, tocRuleObj, listRule, engineSource, true
+        bookData as unknown as Record<string, unknown>,
+        tocUrl, redirectUrl, html, tocRuleObj, listRule, engineSource, true, evaluator
       )
       pageChapters = parsed.chapters.map(toChapter)
       nextUrls = parsed.nextUrls
@@ -226,9 +353,12 @@ export async function fetchToc(
     }
 
     if (uniqueNextUrls.length > 0) {
+      const localPageSet = new Set<string>()
       const pageResults = await concurrentMap(
         uniqueNextUrls.slice(0, READER.MAX_TOC_PAGES),
         async (nextUrl) => {
+          if (localPageSet.has(nextUrl)) return [] as Chapter[]
+          localPageSet.add(nextUrl)
           const nextResult = await fetchPage(nextUrl, headers, source, bookData)
           if (!nextResult) return [] as Chapter[]
           if (shouldExecuteInDeno(listRule)) {
@@ -238,12 +368,12 @@ export async function fetchToc(
               book: bookData,
               redirectUrl: nextResult.redirectUrl,
             }, { forceDeno: true })
-            return Array.isArray(response) ? (response as Chapter[]) : []
+            return normalizeChapterList(response, nextResult.redirectUrl)
           }
           const { chapters: np } = await parseTocPage(
-            bookData as Record<string, unknown>,
+            bookData as unknown as Record<string, unknown>,
             nextUrl, nextResult.redirectUrl, nextResult.html, tocRuleObj, listRule, engineSource,
-            uniqueNextUrls.length > 1
+            uniqueNextUrls.length > 1, evaluator
           )
           return np.map(toChapter)
         },
@@ -260,7 +390,6 @@ export async function fetchToc(
     if (chapterList.length > 0) {
       const deduped = dedupChapters(chapterList as unknown as EngineChapter[])
       const finalChapters = deduped.map(toChapter)
-      // 修复：移除无条件的 reverse()。reverse 已在上方按书源规则处理
       finalChapters.forEach((ch, idx) => { ch.index = idx; ch.id = idx })
 
       if (book) {

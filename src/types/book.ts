@@ -16,7 +16,14 @@ export interface ReadConfig {
   closeCredits?: number
   playMode?: number
   playSpeed?: number
-  [key: string]: any
+  /** 内部字段：是否使用全局阅读配置（由 ReaderSettings 写入） */
+  _useGlobal?: boolean
+  /** 内部字段：书籍独立主题 */
+  _theme?: string
+  /** 内部字段：书籍独立字号 */
+  _fontSize?: number
+  /** 内部字段：书籍独立转换类型 */
+  _converterType?: number
 }
 
 export interface Book {
@@ -54,5 +61,15 @@ export interface Book {
   variable?: string
   syncTime?: number
   charset?: string | null
-  [key: string]: any
+
+  /** 内部字段：打开阅读器时强制跳转到的章节索引（从详情页点击章节时使用） */
+  _forceChapterIndex?: number
+  /** 内部字段：搜索结果里标记来源书源（用于换源和详情页） */
+  _sourceKey?: string
+  /** 内部字段：换源候选项的来源书源名 */
+  _sourceName?: string
+  /** 内部字段：换源候选项的来源书源 URL */
+  _sourceUrl?: string
+  /** 内部字段：封面加载失败标记 */
+  _coverFailed?: boolean
 }

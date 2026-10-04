@@ -2,19 +2,19 @@
   <div class="explore-page">
     <header class="page-header"><div><h1 class="page-title">发现</h1><p class="page-subtitle">{{ sourceName }}</p></div><button class="btn-secondary" style="padding:4px 12px;font-size:12px" @click="showLogModal = true">日志</button></header>
     <div style="display:flex;gap:10px;margin-bottom:16px;align-items:center;flex-wrap:wrap">
-      <CustomDropdown v-model="selectedIndex" :options="sourceOptions" placeholder="选择书源..." @update:modelValue="(v: string | number) => onSourceChange(Number(v))" style="min-width:200px" />
+      <CustomDropdown v-model="selectedIndex" :options="sourceOptions" placeholder="选择书源..." style="min-width:200px" @update:model-value="(v: string | number) => onSourceChange(Number(v))" />
       <input v-model="sourceFilter" type="text" placeholder="搜索书源..." class="input-search" style="width:160px" autocomplete="off" />
       <button v-if="hasFilters" class="btn-secondary" style="padding:4px 12px;font-size:12px" @click="resetFilters">重置筛选</button>
       <span v-if="loadingCategories" style="font-size:12px;color:var(--text-muted)">加载中...</span>
     </div>
     <div v-if="categories.length > 0" class="explore-categories">
       <template v-for="(cat, idx) in categories" :key="idx">
-        <div v-if="!cat.url && cat.title && cat.title.trim()" class="category-divider">{{ cat.title }}</div>
+        <div v-if="cat.type === 'text' && !cat.url" class="category-divider">{{ cat.title }}</div>
         <button v-else-if="cat.type === 'url' && cat.url" class="category-tag" :class="{ active: currentCategory?.title === cat.title }" @click="handleCategoryClick(cat)">{{ cat.title }}</button>
-        <div v-else-if="cat.type === 'text'" class="category-text-wrapper"><span class="category-label">{{ cat.title }}</span><input :value="getInfoMapValue(cat)" type="text" class="category-text-input" :placeholder="getViewName(cat) || cat.title" @input="onTextInput(cat, ($event.target as HTMLInputElement).value)" /></div>
         <button v-else-if="cat.type === 'button'" class="category-action-btn" @click="onActionClick(cat)">{{ getViewName(cat) || cat.title }}</button>
         <button v-else-if="cat.type === 'toggle'" class="category-toggle-btn" @click="onToggleClick(cat)"><span class="toggle-char">{{ getToggleChar(cat) }}</span><span>{{ getViewName(cat) || cat.title }}</span></button>
-        <div v-else-if="cat.type === 'select'" class="category-select-wrapper"><span class="category-label">{{ getViewName(cat) || cat.title }}</span><CustomDropdown :model-value="String(getInfoMapValue(cat) || cat.default || (cat.chars && cat.chars.length > 0 ? cat.chars[0] : '') || '')" :options="(cat.chars || []).map(c => ({ label: c, value: c }))" placeholder="请选择" @update:modelValue="(v: string | number) => onSelectChange(cat, String(v))" style="min-width:100px" /></div>
+        <div v-else-if="cat.type === 'select'" class="category-select-wrapper"><span class="category-label">{{ getViewName(cat) || cat.title }}</span><CustomDropdown :model-value="String(getInfoMapValue(cat) || cat.default || (cat.chars && cat.chars.length > 0 ? cat.chars[0] : '') || '')" :options="(cat.chars || []).map(c => ({ label: c, value: c }))" placeholder="请选择" style="min-width:100px" @update:model-value="(v: string | number) => onSelectChange(cat, String(v))" /></div>
+        <div v-else-if="cat.type === 'text'" class="category-text-wrapper"><span class="category-label">{{ cat.title }}</span><input :value="getInfoMapValue(cat)" type="text" class="category-text-input" :placeholder="getViewName(cat) || cat.title" @input="onTextInput(cat, ($event.target as HTMLInputElement).value)" /></div>
       </template>
     </div>
     <EmptyState v-else-if="!loadingCategories && selectedIndex >= 0" title="暂无分类" />
@@ -26,7 +26,7 @@
     <Reader v-if="bookshelfStore.showReader" :book="bookshelfStore.readerBook" :source="bookshelfStore.readerSource" :initial-chapters="bookshelfStore.readerChapters as Chapter[]" @close="bookshelfStore.closeReader()" />
     <n-modal v-model:show="showLogModal" preset="card" title="发现页日志" style="max-width:800px;max-height:70vh" :bordered="false">
       <div class="log-modal-body"><div class="log-header"><span>共 {{ exploreLogs.length }} 条</span><button class="btn-secondary" style="padding:2px 10px;font-size:11px" @click="clearExploreLogs">清空</button></div>
-        <div class="log-list" ref="logListRef"><div v-for="(log, idx) in exploreLogs" :key="idx" class="log-entry" :class="'log-' + log.level"><span class="log-time">{{ log.time }}</span><span class="log-module">{{ log.module }}</span><span class="log-source">{{ log.source }}</span><span class="log-message">{{ log.message }}</span></div></div>
+        <div ref="logListRef" class="log-list"><div v-for="(log, idx) in exploreLogs" :key="idx" class="log-entry" :class="'log-' + log.level"><span class="log-time">{{ log.time }}</span><span class="log-module">{{ log.module }}</span><span class="log-source">{{ log.source }}</span><span class="log-message">{{ log.message }}</span></div></div>
       </div>
     </n-modal>
   </div>
@@ -54,7 +54,7 @@ const MAX_EXPLORE_LOGS = 1000
 
 const bookshelfStore = useBookshelfStore()
 const infoMapStore = useInfoMapStore()
-const { categories, loadingCategories, currentCategory, books, loadingBooks, currentPage, hasMore, booksGridRef, loadCategories, exploreCategory, loadBooks, cleanupObserver } = useExplore()
+const { categories, loadingCategories, currentCategory, books, loadingBooks, currentPage, hasMore, booksGridRef, loadCategories, exploreCategory, executeCategoryAction, loadBooks, cleanupObserver } = useExplore()
 const { handleAndNotify } = useErrorHandler()
 
 const sources = ref<BookSource[]>([])
@@ -134,14 +134,18 @@ async function onSourceChange(val: number): Promise<void> {
 }
 
 function handleCategoryClick(cat: ExploreKind): void {
-  if (!cat || !cat.url) return
   const src = sources.value[selectedIndex.value]
-  if (src) exploreCategory(src, cat)
+  if (!src) return
+  // exploreCategory 内部已区分 button/url/text
+  exploreCategory(src, cat)
 }
 
 async function onSelectChange(cat: ExploreKind, value: string): Promise<void> {
   setInfoMapValue(cat, value)
-  if (cat.action) await executeAction(cat.action)
+  if (cat.action) {
+    const src = sources.value[selectedIndex.value]
+    if (src) await executeCategoryAction(cat.action, src)
+  }
   if (currentCategory.value) {
     currentPage.value = 1
     books.value = []
@@ -157,7 +161,10 @@ async function onToggleClick(cat: ExploreKind): Promise<void> {
   const idx = chars.indexOf(current)
   const next = chars[(idx + 1) % chars.length] || (chars[0] !== undefined ? chars[0] : '')
   setInfoMapValue(cat, next)
-  if (cat.action) await executeAction(cat.action)
+  if (cat.action) {
+    const src = sources.value[selectedIndex.value]
+    if (src) await executeCategoryAction(cat.action, src)
+  }
   if (currentCategory.value) {
     currentPage.value = 1
     books.value = []
@@ -174,28 +181,18 @@ async function onTextInput(cat: ExploreKind, value: string): Promise<void> {
   if (cat.action) {
     if (textInputTimer) clearTimeout(textInputTimer)
     textInputTimer = setTimeout(async () => {
-      await executeAction(cat.action!)
+      const src = sources.value[selectedIndex.value]
+      if (src) await executeCategoryAction(cat.action!, src)
       textInputTimer = null
     }, 600)
   }
 }
 
 async function onActionClick(cat: ExploreKind): Promise<void> {
-  if (cat.action) await executeAction(cat.action)
-}
-
-async function executeAction(action: string): Promise<void> {
-  try {
-    let processed = action
-    processed = processed.replace(/Map\(['"]([^'"]+)['"]\)/g, (_, key: string) => JSON.stringify(infoMapStore.get(currentSourceUrl.value, key) || ''))
-    await engine.executeJs(processed, {
-      source: sources.value[selectedIndex.value] || {},
-      baseUrl: currentSourceUrl.value || '',
-      result: '',
-      book: {},
-    })
-  } catch (err) {
-    handleAndNotify(err, { module: 'explore', operation: 'executeAction', userMessage: '执行操作失败' })
+  const src = sources.value[selectedIndex.value]
+  if (!src) return
+  if (cat.action) {
+    await executeCategoryAction(cat.action, src)
   }
 }
 
@@ -219,9 +216,14 @@ function openBookDetail(book: Book): void {
 function clearExploreLogs(): void { exploreLogs.value = [] }
 
 function pushExploreLog(entry: LogEntry): void {
-  exploreLogs.value = [...exploreLogs.value, entry]
+  exploreLogs.value.push(entry)
   if (exploreLogs.value.length > MAX_EXPLORE_LOGS) {
-    exploreLogs.value.splice(0, exploreLogs.value.length - MAX_EXPLORE_LOGS)
+    const excess = exploreLogs.value.length - MAX_EXPLORE_LOGS
+    if (excess > 100) {
+      exploreLogs.value.splice(0, excess)
+    } else {
+      for (let i = 0; i < excess; i++) exploreLogs.value.shift()
+    }
   }
 }
 
@@ -242,6 +244,8 @@ onUnmounted(() => {
   infoMapStore.saveAll()
   if (unsubscribe) { unsubscribe(); unsubscribe = null }
 })
+
+void engine
 </script>
 
 <style scoped>

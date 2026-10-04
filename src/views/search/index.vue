@@ -2,7 +2,7 @@
   <div class="search-page">
     <header class="page-header"><h1 class="page-title">搜索</h1><p class="page-subtitle">多书源并发搜索</p></header>
     <div class="search-bar">
-      <SearchInput ref="searchInput" v-model="keyword" placeholder="输入书名或作者..." name="main-search" @search="handleSearch" style="flex:1;min-width:150px" />
+      <SearchInput ref="searchInput" v-model="keyword" placeholder="输入书名或作者..." name="main-search" style="flex:1;min-width:150px" @search="handleSearch" />
       <button class="btn-primary" :disabled="loading || !keyword.trim()" @click="handleSearch">{{ loading ? '搜索中...' : '搜索' }}</button>
       <button v-if="loading" class="btn-secondary" @click="cancelSearch">取消</button>
     </div>
@@ -45,7 +45,7 @@ const sources = ref<BookSource[]>([])
 const keyword = ref('')
 const searchInput = ref<InstanceType<typeof SearchInput> | null>(null)
 const searched = ref(false)
-const { loading, completedCount, totalSources, searchResults, doSearch, cancelSearch, clearResults: clearSearchResults } = useSearch()
+const { loading, searchResults, doSearch, cancelSearch } = useSearch()
 
 // 修复：建立 displayName → BookSource 映射，避免同名书源匹配错误
 const sourceByDisplayName = ref<Map<string, BookSource>>(new Map())
@@ -74,11 +74,6 @@ async function loadSources(): Promise<void> {
   }
 }
 
-function clearResults(): void {
-  if (loading.value) return
-  clearSearchResults()
-  searched.value = false
-}
 
 async function handleSearch(): Promise<void> {
   const kw = keyword.value.trim()

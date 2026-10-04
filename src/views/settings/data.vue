@@ -12,7 +12,7 @@
           <div class="cache-stat"><span class="cache-stat-label">缓存上限</span><div class="cache-limit-row"><input v-model.number="cacheLimitMB" type="number" min="10" max="10000" step="10" class="cache-limit-input" /><span class="cache-stat-value">MB</span><button class="btn-secondary" style="padding:2px 10px;font-size:11px" :disabled="savingLimit" @click="saveCacheLimit">{{ savingLimit ? '保存中' : '保存' }}</button></div></div>
           <div class="cache-stat"><span class="cache-stat-label">迁移目录</span><button class="btn-secondary" style="padding:4px 12px;font-size:12px" :disabled="migrating" @click="openMigrateDialog">{{ migrating ? '迁移中...' : '选择新目录' }}</button></div>
         </div>
-        <div class="cache-categories" v-if="cacheInfo.categories && cacheInfo.categories.length > 0"><div v-for="cat in cacheInfo.categories" :key="cat.key" class="cache-category-row"><div class="cache-cat-info"><span class="cache-cat-name">{{ cat.name }}</span><span class="cache-cat-detail">{{ cat.count }} 个文件 · {{ cat.sizeFormatted }}</span></div><button class="btn-secondary" style="padding:4px 12px;font-size:12px" :disabled="clearingCategory === cat.key" @click="clearCategory(cat.key)">{{ clearingCategory === cat.key ? '清理中...' : '清理' }}</button></div></div>
+        <div v-if="cacheInfo.categories && cacheInfo.categories.length > 0" class="cache-categories"><div v-for="cat in cacheInfo.categories" :key="cat.key" class="cache-category-row"><div class="cache-cat-info"><span class="cache-cat-name">{{ cat.name }}</span><span class="cache-cat-detail">{{ cat.count }} 个文件 · {{ cat.sizeFormatted }}</span></div><button class="btn-secondary" style="padding:4px 12px;font-size:12px" :disabled="clearingCategory === cat.key" @click="clearCategory(cat.key)">{{ clearingCategory === cat.key ? '清理中...' : '清理' }}</button></div></div>
         <div class="cache-actions"><button class="btn-danger" :disabled="clearingAll" @click="clearAllCache">{{ clearingAll ? '清空中...' : '清空所有缓存' }}</button></div>
       </div>
     </div>
@@ -26,7 +26,7 @@
         </label>
         <div class="export-list">
           <label v-for="item in exportItems" :key="item.key" class="export-item" @click.stop>
-            <input type="checkbox" v-model="item.checked" />
+            <input v-model="item.checked" type="checkbox" />
             <span>{{ item.label }}</span>
           </label>
         </div>
@@ -47,7 +47,7 @@
         </label>
         <div class="export-list">
           <label v-for="item in importItems" :key="item.key" class="export-item" @click.stop>
-            <input type="checkbox" v-model="item.checked" />
+            <input v-model="item.checked" type="checkbox" />
             <span>{{ item.label }}</span>
           </label>
         </div>
@@ -76,6 +76,23 @@ import { getDeviceName } from '@/services/webdav.js'
 import BackButton from '@/components/common/BackButton.vue'
 import { useNaiveTheme } from '@/composables/useNaiveTheme.js'
 import { useCacheManager } from '@/composables/useCacheManager.js'
+
+// 修复：模块级 Promise 缓存 jszip 动态导入，避免重复 import
+type JSZipConstructor = typeof import('jszip')
+
+let jszipPromise: Promise<JSZipConstructor> | null = null
+
+function loadJSZip(): Promise<JSZipConstructor> {
+  if (!jszipPromise) {
+    jszipPromise = import('jszip').then((m) => {
+      // jszip 使用 CommonJS 的 `export = JSZip`
+      // 动态 import 时模块可能包了一层 default
+      const mod = m as unknown as { default?: JSZipConstructor }
+      return mod.default ?? (m as unknown as JSZipConstructor)
+    })
+  }
+  return jszipPromise
+}
 
 const msg = useMessage()
 const dialog = useDialog()
@@ -108,7 +125,6 @@ const {
 
 const SYNC_KEYS = ['bookshelf', 'bookSource', 'readingProgress', 'replaceRule', 'bookGroup', 'txtTocRule', 'dictRule', 'keyboardAssists', 'rssSources']
 
-// 修复：为每个 key 定义正确的空值类型
 const EMPTY_VALUES: Record<string, unknown> = {
   bookshelf: [],
   bookSource: [],
@@ -153,7 +169,7 @@ function openExportDialog(): void {
 async function doExport(): Promise<void> {
   exporting.value = true
   try {
-    const JSZip = (await import('jszip')).default
+    const JSZip = await loadJSZip()
     const zip = new JSZip()
     const allData = await store.getAll()
     let count = 0
@@ -191,7 +207,7 @@ async function onImportData(event: Event): Promise<void> {
   const file = input.files?.[0]
   if (!file) return
   try {
-    const JSZip = (await import('jszip')).default
+    const JSZip = await loadJSZip()
     importZipData = await JSZip.loadAsync(file)
     const items: { key: string; label: string; checked: boolean }[] = []
     const zipObj = importZipData as { file: (name: string | RegExp) => unknown | null }
@@ -266,7 +282,6 @@ async function clearAllData(): Promise<void> {
     negativeText: '取消',
     onPositiveClick: async () => {
       try {
-        // 修复：使用每个 key 对应的正确空值类型
         for (const key of SYNC_KEYS) {
           const emptyValue = EMPTY_VALUES[key]
           await store.set(key, emptyValue !== undefined ? emptyValue : [])

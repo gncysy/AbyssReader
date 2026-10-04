@@ -52,9 +52,6 @@ class LRUCache<K, V> {
   }
 }
 
-// ─── 统一内容缓存 ───
-// 使用单一缓存存储所有章节内容（原始+净化后），减少内存浪费
-
 const MAX_CACHED_CHAPTERS = 100
 const chapterContents = new LRUCache<string, string>(MAX_CACHED_CHAPTERS)
 
@@ -113,9 +110,25 @@ export const cache = {
 
 // ─── 章节缓存辅助 ───
 
+/**
+ * 计算稳定的书缓存 key。
+ * 修复：原实现用 encodeURIComponent，不编码 `/`，含 `/` 的 URL 会生成
+ * 形如 `a/b` 的 key，与嵌套章节 key 冲突。
+ * 改为 FNV-1a 哈希（32 位，碰撞率极低）。
+ */
+function fnv1aHash(str: string): string {
+  let hash = 2166136261
+  for (let i = 0; i < str.length; i++) {
+    hash ^= str.charCodeAt(i)
+    hash = Math.imul(hash, 16777619)
+    hash = hash >>> 0
+  }
+  return hash.toString(36)
+}
+
 function getBookCacheKey(book: Book): string {
   const key = book.tocUrl || book.bookUrl
-  return encodeURIComponent(key)
+  return fnv1aHash(key)
 }
 
 function getChapterCacheKey(book: Book, chapterIndex: number): string {

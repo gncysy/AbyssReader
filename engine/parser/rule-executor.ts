@@ -34,6 +34,40 @@ function unescapeHtmlEntities(str: string): string {
 
 type WebJsExecutor = (html: string, jsCode: string, baseUrl: string) => Promise<string>
 
+/**
+ * 尝试将字符串结果解析为数组。
+ * 用于 getElements 路径：JS 返回的字符串可能是 JSON 数组（Rust 侧已 stringify）。
+ *
+ * - "[{...}, {...}]"  →  [{...}, {...}]
+ * - "{...},{...}"     →  [{...}, {...}]（伪数组兜底）
+ * - 其他字符串         →  原样返回
+ */
+function tryParseJsArray(result: unknown): unknown {
+  if (typeof result !== 'string') return result
+  const trimmed = result.trim()
+  if (!trimmed) return result
+
+  // 标准 JSON 数组
+  if (trimmed.startsWith('[') && trimmed.endsWith(']')) {
+    try {
+      return JSON.parse(trimmed)
+    } catch {
+      return result
+    }
+  }
+
+  // 伪数组：{...},{...}
+  if (trimmed.startsWith('{') && trimmed.endsWith('}') && trimmed.includes('},{')) {
+    try {
+      return JSON.parse('[' + trimmed + ']')
+    } catch {
+      return result
+    }
+  }
+
+  return result
+}
+
 export class RuleExecutor {
   private cache: RuleCache
   private parser: RuleParser
@@ -223,7 +257,6 @@ export class RuleExecutor {
     const lastIndex = rs.lastIndexOf('@')
     if (lastIndex > 0) {
       const list = cssAnalyzer.getStringList(rs)
-      // 修复：@属性提取只取第一个结果（避免多个匹配元素导致多行）
       if (list && list.length > 0) {
         const first = list[0]
         return first !== undefined ? [first] : null
@@ -345,9 +378,13 @@ export class RuleExecutor {
         case 'webjs':
           result = JSON.parse((await this.getWebJsResultAsync(sr.rule)) || '[]')
           break
-        case 'js':
-          result = await this.evalJS(sr.rule, result, context)
+        case 'js': {
+          // 修复：JS 返回的字符串可能是 JSON 数组（Rust 侧 stringify 过），
+          // 需要在这里 parse 回数组，否则后续 $.name / $.url 无法取值。
+          const jsResult = await this.evalJS(sr.rule, result, context)
+          result = tryParseJsArray(jsResult)
           break
+        }
         case 'json':
           result = this.cache.getJSONPathAnalyzer(result).getList(sr.rule)
           break
@@ -387,13 +424,14 @@ export class RuleExecutor {
       }
       return books
     }
-    let combined = ''
+    const parts: string[] = []
     pattern.lastIndex = 0
     let m: RegExpExecArray | null
     while ((m = pattern.exec(res)) !== null) {
-      combined += m[0]
+      parts.push(m[0])
       if (pattern.lastIndex === 0) break
     }
+    const combined = parts.join('')
     return this.executeRegexGetElements(combined, regs, index + 1)
   }
 

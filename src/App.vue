@@ -3,16 +3,17 @@
     <n-message-provider>
       <n-notification-provider>
         <n-dialog-provider>
+          <JavaToastListener />
           <div class="app-shell" :data-theme="effectiveTheme">
             <div class="titlebar" :data-theme="effectiveTheme" @dblclick="toggleMaximize">
               <div class="titlebar-drag"><div class="titlebar-brand"><img src="/icons/icon.svg" alt="墨阅" class="titlebar-logo" /><span class="titlebar-name">墨阅</span></div></div>
               <div class="titlebar-controls">
-                <button class="titlebar-btn" @click="minimizeWindow" title="最小化"><svg width="14" height="14" viewBox="0 0 14 14"><line x1="3" y1="7" x2="11" y2="7" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg></button>
-                <button class="titlebar-btn" @click="toggleMaximize" :title="isMaximized ? '还原' : '最大化'">
+                <button class="titlebar-btn" title="最小化" @click="minimizeWindow"><svg width="14" height="14" viewBox="0 0 14 14"><line x1="3" y1="7" x2="11" y2="7" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg></button>
+                <button class="titlebar-btn" :title="isMaximized ? '还原' : '最大化'" @click="toggleMaximize">
                   <svg v-if="!isMaximized" width="14" height="14" viewBox="0 0 14 14"><rect x="3" y="3" width="8" height="8" rx="1.5" stroke="currentColor" stroke-width="1.3" fill="none"/></svg>
                   <svg v-else width="14" height="14" viewBox="0 0 14 14"><rect x="4.5" y="2" width="7.5" height="7.5" rx="1.5" stroke="currentColor" stroke-width="1.3" fill="var(--bg-card)"/><rect x="2" y="4.5" width="7.5" height="7.5" rx="1.5" stroke="currentColor" stroke-width="1.3" fill="var(--bg-card)"/></svg>
                 </button>
-                <button class="titlebar-btn titlebar-btn-close" @click="closeWindow" title="关闭"><svg width="14" height="14" viewBox="0 0 14 14"><line x1="3.5" y1="3.5" x2="10.5" y2="10.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/><line x1="10.5" y1="3.5" x2="3.5" y2="10.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg></button>
+                <button class="titlebar-btn titlebar-btn-close" title="关闭" @click="closeWindow"><svg width="14" height="14" viewBox="0 0 14 14"><line x1="3.5" y1="3.5" x2="10.5" y2="10.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/><line x1="10.5" y1="3.5" x2="3.5" y2="10.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg></button>
               </div>
             </div>
             <div class="app-body">
@@ -33,6 +34,7 @@
             </div>
             <VerificationCodeDialog ref="verificationDialog" />
             <PhotoViewer ref="photoViewer" />
+            <SourceLoginDialog ref="sourceLoginDialog" />
           </div>
         </n-dialog-provider>
       </n-notification-provider>
@@ -41,18 +43,21 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch, onMounted, onUnmounted, onErrorCaptured } from 'vue'
+import { ref, computed, watch, onMounted, onUnmounted, onErrorCaptured, nextTick } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { NConfigProvider, NMessageProvider, NNotificationProvider, NDialogProvider, NIcon, zhCN, dateZhCN } from 'naive-ui'
 import { BookOutline, SearchOutline, CompassOutline, ShareSocialOutline, SettingsOutline, AppsOutline } from '@vicons/ionicons5'
 import { useBookshelfStore, useReadingStore, useReaderStore } from '@/stores'
-import { ROUTES, APP_VERSION, UI } from '@/constants/index.js'
+import { ROUTES, APP_VERSION } from '@/constants/index.js'
 import { initLogBridge } from '@engine/log/index.js'
 import { useNaiveTheme } from '@/composables/useNaiveTheme.js'
+import { registerLoginDialog } from '@/composables/useSourceLogin.js'
 import SidebarCharacters from '@/components/characters/SidebarCharacters.vue'
 import DownloadConfirm from '@/components/rss/DownloadConfirm.vue'
 import VerificationCodeDialog from '@/components/common/VerificationCodeDialog.vue'
+import JavaToastListener from '@/components/common/JavaToastListener.vue'
 import PhotoViewer from '@/components/photo/PhotoViewer.vue'
+import SourceLoginDialog from '@/components/book/SourceLoginDialog.vue'
 import { windowApi } from '@/services/window.js'
 import { useErrorHandler } from '@/composables/useErrorHandler.js'
 import type { Book } from '@/types'
@@ -90,6 +95,7 @@ const isMaximized = ref(false)
 const downloadConfirm = ref<InstanceType<typeof DownloadConfirm> | null>(null)
 const verificationDialog = ref<InstanceType<typeof VerificationCodeDialog> | null>(null)
 const photoViewer = ref<InstanceType<typeof PhotoViewer> | null>(null)
+const sourceLoginDialog = ref<InstanceType<typeof SourceLoginDialog> | null>(null)
 
 function applyThemeToDOM(theme: string): void {
   const resolved = resolveEffectiveTheme(theme)
@@ -127,6 +133,12 @@ let unlistenShowPhoto: (() => void) | null = null
 let unlistenRefreshExplore: (() => void) | null = null
 let unlistenRefreshBookInfo: (() => void) | null = null
 let unlistenJsSearchBook: (() => void) | null = null
+let unlistenJavaToast: (() => void) | null = null
+
+function safeUnlisten(fn: (() => void) | null): void {
+  if (!fn) return
+  try { fn() } catch { /* ignore */ }
+}
 
 onMounted(async () => {
   await initLogBridge()
@@ -135,6 +147,11 @@ onMounted(async () => {
   applyThemeToDOM(readingStore.theme)
   mediaQuery = window.matchMedia('(prefers-color-scheme: dark)'); mediaQuery.addEventListener('change', handleSystemThemeChange)
   await updateMaximizedState(); window.addEventListener('resize', updateMaximizedState)
+
+  // 注册全局登录对话框
+  if (sourceLoginDialog.value) {
+    registerLoginDialog(ref(sourceLoginDialog.value))
+  }
 
   unlistenRss = await windowApi.listenRssDownload((payload) => {
     if (payload.error) {
@@ -172,12 +189,13 @@ onMounted(async () => {
 onUnmounted(() => {
   if (mediaQuery) mediaQuery.removeEventListener('change', handleSystemThemeChange)
   window.removeEventListener('resize', updateMaximizedState)
-  if (unlistenRss) unlistenRss()
-  if (unlistenVerification) unlistenVerification()
-  if (unlistenShowPhoto) unlistenShowPhoto()
-  if (unlistenRefreshExplore) unlistenRefreshExplore()
-  if (unlistenRefreshBookInfo) unlistenRefreshBookInfo()
-  if (unlistenJsSearchBook) unlistenJsSearchBook()
+  safeUnlisten(unlistenRss)
+  safeUnlisten(unlistenVerification)
+  safeUnlisten(unlistenShowPhoto)
+  safeUnlisten(unlistenRefreshExplore)
+  safeUnlisten(unlistenRefreshBookInfo)
+  safeUnlisten(unlistenJsSearchBook)
+  safeUnlisten(unlistenJavaToast)
 })
 watch(() => readingStore.theme, (val) => applyThemeToDOM(val))
 </script>
@@ -193,7 +211,7 @@ watch(() => readingStore.theme, (val) => applyThemeToDOM(val))
 .titlebar-btn { width: 46px; height: 100%; border: none; background: transparent; color: var(--text-muted); cursor: pointer; display: flex; align-items: center; justify-content: center; transition: background 0.15s, color 0.15s; }
 .titlebar-btn svg { opacity: 0.7; }
 .titlebar-btn:hover { background: var(--bg-hover); color: var(--text-primary); }
-.titlebar-btn-close:hover { background: #c0392b; color: #fff; }
+.titlebar-btn-close:hover { background: var(--danger); color: #fff; }
 .app-body { display: flex; flex: 1; height: calc(100vh - 40px); overflow: hidden; }
 .app-sidebar { display: flex; flex-direction: column; width: 200px; min-width: 200px; padding: 4px 16px 20px 16px; background: var(--bg-card); border-right: 1px solid var(--border-color); flex-shrink: 0; height: 100%; box-sizing: border-box; }
 .sidebar-menu { flex: 0 0 auto; display: flex; flex-direction: column; gap: 2px; }

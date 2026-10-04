@@ -30,6 +30,7 @@ function handleClick(): void { if (!props.disabled) emit('click') }
   color: var(--text-primary);
 }
 .context-menu-item:disabled { opacity: 0.35; cursor: not-allowed; }
-.context-menu-item.cm-danger { color: #e74c3c; }
-.context-menu-item.cm-danger:hover:not(:disabled) { background: rgba(231, 76, 60, 0.08); }
+/* 修复：危险色统一走 CSS 变量 */
+.context-menu-item.cm-danger { color: var(--danger); }
+.context-menu-item.cm-danger:hover:not(:disabled) { background: var(--danger-bg); color: var(--danger-hover); }
 </style>

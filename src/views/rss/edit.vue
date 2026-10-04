@@ -21,11 +21,11 @@
         </div>
         <div class="form-divider">开关</div>
         <div class="switch-grid">
-          <label class="switch-item"><input type="checkbox" v-model="form.enabled" /> 启用</label>
-          <label class="switch-item"><input type="checkbox" v-model="form.singleUrl" /> 单页源</label>
-          <label class="switch-item"><input type="checkbox" v-model="form.enabledCookieJar" /> 保存 Cookie</label>
-          <label class="switch-item"><input type="checkbox" v-model="form.preload" /> 预加载</label>
-          <label class="switch-item"><input type="checkbox" v-model="form.cacheFirst" /> 优先缓存</label>
+          <label class="switch-item"><input v-model="form.enabled" type="checkbox" /> 启用</label>
+          <label class="switch-item"><input v-model="form.singleUrl" type="checkbox" /> 单页源</label>
+          <label class="switch-item"><input v-model="form.enabledCookieJar" type="checkbox" /> 保存 Cookie</label>
+          <label class="switch-item"><input v-model="form.preload" type="checkbox" /> 预加载</label>
+          <label class="switch-item"><input v-model="form.cacheFirst" type="checkbox" /> 优先缓存</label>
         </div>
         <div class="form-divider">类型 & 样式</div>
         <div class="form-grid">
@@ -41,9 +41,9 @@
           <div class="form-group full"><label>预注入 JS</label><textarea v-model="form.preloadJs" class="form-textarea" rows="3"></textarea></div>
         </div>
         <div class="switch-grid">
-          <label class="switch-item"><input type="checkbox" v-model="form.enableJs" /> 启用 JS</label>
-          <label class="switch-item"><input type="checkbox" v-model="form.loadWithBaseUrl" /> 基于 BaseURL 加载</label>
-          <label class="switch-item"><input type="checkbox" v-model="form.showWebLog" /> 输出 WebView 日志</label>
+          <label class="switch-item"><input v-model="form.enableJs" type="checkbox" /> 启用 JS</label>
+          <label class="switch-item"><input v-model="form.loadWithBaseUrl" type="checkbox" /> 基于 BaseURL 加载</label>
+          <label class="switch-item"><input v-model="form.showWebLog" type="checkbox" /> 输出 WebView 日志</label>
         </div>
       </div>
       <div v-if="activeTab === 'list'" class="tab-content">

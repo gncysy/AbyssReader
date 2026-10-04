@@ -5,8 +5,12 @@
 import { store } from './store.js'
 import { network } from './network.js'
 import { getGlobalHttpClient, HttpClient } from '@engine/network/client.js'
+import { getJsRuntime } from '@engine/parser/js-executor.js'
+import { getString, getStringList, getElements } from '@engine/parser/index.js'
 import { fetchWithWebviewFallback } from './fetch.js'
 import { parseSourceHeader } from '@engine/business/source/helper.js'
+import { parseBookInfo } from '@engine/business/book/index.js'
+import type { RuleEvaluator } from '@engine/business/book/index.js'
 import { NETWORK } from '@/constants/index.js'
 import type { BookSource } from '@/types'
 import type { EngineBookSource } from '@engine/types.js'
@@ -18,6 +22,14 @@ function toEngineBookSource(source: BookSource): EngineBookSource {
 function getHttpClient(): HttpClient {
   const client = getGlobalHttpClient()
   return client
+}
+
+function createRuleEvaluator(): RuleEvaluator {
+  return {
+    getString: (content, rule, ctx) => getString(content, rule, ctx),
+    getStringList: (content, rule, ctx) => getStringList(content, rule, ctx),
+    getElements: (content, rule, ctx) => getElements(content, rule, ctx),
+  }
 }
 
 export const debug = {
@@ -40,15 +52,15 @@ export const debug = {
   },
 
   getBookInfo: async (source: BookSource, bookUrl: string): Promise<unknown> => {
-    const { parseBookInfo } = await import('@engine/business/book/index.js')
-    const headers = await parseSourceHeader(toEngineBookSource(source))
+    const runtime = getJsRuntime()
+    const headers = await parseSourceHeader(toEngineBookSource(source), runtime)
     const html = await fetchWithWebviewFallback(bookUrl, {
       source,
       headers,
       timeout: NETWORK.DEFAULT_TIMEOUT,
     })
     if (!html) return null
-    return parseBookInfo(toEngineBookSource(source), html, bookUrl)
+    return parseBookInfo(toEngineBookSource(source), html, bookUrl, createRuleEvaluator())
   },
 
   getToc: async (source: BookSource, tocUrl: string): Promise<unknown[]> => {
@@ -69,7 +81,8 @@ export const debug = {
 
   httpRequest: async (url: string, source?: BookSource): Promise<{ status: number; headers: Record<string, string>; data: string }> => {
     const httpClient = getHttpClient()
-    const sourceHeaders = source?.header ? await parseSourceHeader(toEngineBookSource(source)) : {}
+    const runtime = getJsRuntime()
+    const sourceHeaders = source?.header ? await parseSourceHeader(toEngineBookSource(source), runtime) : {}
     const response = await httpClient.request({
       url,
       method: 'GET',

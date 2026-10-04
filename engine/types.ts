@@ -18,6 +18,14 @@ export interface EngineBookSource {
   ruleContent?: string | Record<string, unknown> | null
   ruleExplore?: Record<string, unknown> | null
   enabled?: boolean
+  loginUrl?: string | null
+  loginUi?: string | null
+  loginCheckJs?: string | null
+  jsLib?: string | null
+  concurrentRate?: string | null
+  coverDecodeJs?: string | null
+  customOrder?: number
+  weight?: number
   [key: string]: unknown
 }
 
@@ -54,6 +62,7 @@ export interface ParseContext {
   chapter?: Partial<EngineChapter>
   baseUrl?: string
   nextChapterUrl?: string
+  redirectUrl?: string
   page?: number
   key?: string
   isUrl?: boolean

@@ -8,7 +8,14 @@
           <div v-else class="comic-placeholder"><LoadingSpinner /><span>第 {{ i + 1 }} 页加载中...</span></div>
         </div>
       </div>
-      <div v-else class="content-inner" :style="{ fontSize: fontSize + 'px', lineHeight: lineHeight }" v-html="sanitizedContent"></div>
+      <!-- 修复：v-memo 缓存正文渲染，仅当内容/字号/行距变化时重新渲染 -->
+      <div
+        v-else
+        v-memo="[sanitizedContent, fontSize, lineHeight]"
+        class="content-inner"
+        :style="{ fontSize: fontSize + 'px', lineHeight: lineHeight }"
+        v-html="sanitizedContent"
+      ></div>
       <div v-if="!isComic && !loadingContent && totalChapters > 0" class="content-nav">
         <button class="btn-chapter-inline" :disabled="!canPrev" @click.stop="$emit('prev')">
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>

@@ -105,7 +105,7 @@ async function loadLoginUi(source: RssSource): Promise<void> {
     } catch {
       // 不是 JSON，尝试执行 JS
     }
-    const result = await executeRssLoginJs(cleaned, source, { timeoutMs: 10000 })
+    const result = await executeRssLoginJs(cleaned, source as unknown as Parameters<typeof executeRssLoginJs>[1], { timeoutMs: 10000 })
     if (result.success) {
       try {
         const parsed = JSON.parse(result.result) as unknown
@@ -148,7 +148,7 @@ async function executeAction(action?: string): Promise<void> {
     for (const [key, value] of Object.entries(formData.value)) {
       processed = processed.replace(new RegExp(`\\{\\{${key}\\}\\}`, 'g'), value || '')
     }
-    const result = await executeRssLoginJs(processed, props.source, {
+    const result = await executeRssLoginJs(processed, props.source as unknown as Parameters<typeof executeRssLoginJs>[1], {
       result: processed,
       formData: formData.value,
       timeoutMs: 15000,
@@ -193,7 +193,7 @@ async function checkLogin(): Promise<void> {
     const checkJs = props.source.loginCheckJs
     if (checkJs) {
       const cleaned = checkJs.replace(/^@js:\s*/, '').replace(/^<js>/, '').replace(/<\/js>$/, '').trim()
-      const result = await executeRssLoginJs(cleaned, props.source, {
+      const result = await executeRssLoginJs(cleaned, props.source as unknown as Parameters<typeof executeRssLoginJs>[1], {
         formData: formData.value,
         timeoutMs: 10000,
       })

@@ -3,6 +3,7 @@
 // ============================================
 
 import { getGlobalHttpClient } from '@engine/network/client.js'
+import { getJsRuntime } from '@engine/parser/js-executor.js'
 import { logInfo, logError, logWarn } from '@engine/log/index.js'
 import { network } from './network.js'
 import { parseSourceHeader } from '@engine/business/source/helper.js'
@@ -60,6 +61,8 @@ function decodeWebviewHtml(raw: string): string {
 function resolveAbsoluteUrl(url: string, baseUrl?: string): string {
   if (!url) return ''
   if (url.startsWith('http://') || url.startsWith('https://')) return url
+  // data: URL 保持原样，不参与 base 拼接
+  if (url.startsWith('data:')) return url
   if (!baseUrl) return url
   try {
     return new URL(url, baseUrl).href
@@ -72,17 +75,97 @@ function toEngineBookSource(source: BookSource): EngineBookSource {
   return source as unknown as EngineBookSource
 }
 
+/**
+ * base64 字符串 → 字节数组。
+ * 兼容 URL-safe base64（`-` `_`）和标准 base64（`+` `/`）。
+ */
+function base64ToBytes(base64: string): Uint8Array {
+  // 归一化：URL-safe → 标准
+  let normalized = base64.replace(/-/g, '+').replace(/_/g, '/')
+  // 补 padding
+  while (normalized.length % 4 !== 0) {
+    normalized += '='
+  }
+  try {
+    const binary = atob(normalized)
+    const bytes = new Uint8Array(binary.length)
+    for (let i = 0; i < binary.length; i++) {
+      bytes[i] = binary.charCodeAt(i)
+    }
+    return bytes
+  } catch {
+    return new Uint8Array(0)
+  }
+}
+
+/**
+ * 字节数组 → 小写 hex 字符串。
+ * 对齐 Legado 的 `HexUtil.encodeHexStr`。
+ */
+function bytesToHex(bytes: Uint8Array): string {
+  let hex = ''
+  for (let i = 0; i < bytes.length; i++) {
+    hex += ('0' + bytes[i]!.toString(16)).slice(-2)
+  }
+  return hex
+}
+
+/**
+ * 处理 Legado 的 `data:` URL。
+ *
+ * 语义（对齐 Legado AnalyzeUrl.getByteArrayIfDataUri）：
+ * - URL 形如 `data:<声明>;base64,<base64内容>`
+ * - 提取 base64 部分，解码为字节数组
+ * - 再 hex 编码为字符串返回（因为 Legado 的 getStrResponseAwait
+ *   在 type != null 时走 HexUtil.encodeHexStr(getByteArrayAwait())）
+ * - **不发任何 HTTP 请求**
+ *
+ * 书源侧 fqMarkText 会检测 hex 字符串并解码回 UTF-8 文本。
+ *
+ * 返回：
+ * - 匹配 data:base64 格式 → hex 字符串
+ * - 其他（data:text/plain,xxx 等非 base64）→ null，调用方继续走 HTTP（会失败）
+ */
+function handleDataUrl(url: string): string | null {
+  if (!url.startsWith('data:')) return null
+
+  // 只匹配 base64 格式：data:<mime/声明>;base64,<内容>
+  const match = /^data:[^,]*;base64,(.+)$/is.exec(url)
+  if (!match || !match[1]) {
+    return null
+  }
+
+  const base64Content = match[1].trim()
+  const bytes = base64ToBytes(base64Content)
+  if (bytes.length === 0) {
+    logWarn('network', 'frontend', `[fetch] data: URL base64 解码为空，长度=${base64Content.length}`)
+    return ''
+  }
+
+  const hex = bytesToHex(bytes)
+  logInfo('network', 'frontend', `[fetch] data: URL 解码完成: ${bytes.length} 字节 → ${hex.length} 字符 hex`)
+  return hex
+}
+
 export async function fetchWithWebviewFallback(
   url: string,
   options: FetchOptions = {},
 ): Promise<string | null> {
+  // ─── 第一优先级：data: URL ───
+  // 在任何网络操作之前处理，不发 HTTP 请求
+  const dataUrlResult = handleDataUrl(url)
+  if (dataUrlResult !== null) {
+    return dataUrlResult
+  }
+
   const httpClient = getGlobalHttpClient()
+  const runtime = getJsRuntime()
   const source = options.source || null
   const timeout = options.timeout || NETWORK.DEFAULT_TIMEOUT
   const absoluteUrl = resolveAbsoluteUrl(url, options.baseUrl || source?.bookSourceUrl || '')
 
   const sourceHeaders = source?.header
-    ? await parseSourceHeader(toEngineBookSource(source))
+    ? await parseSourceHeader(toEngineBookSource(source), runtime)
     : {}
   const mergedHeaders = { ...sourceHeaders, ...(options.headers || {}) }
 
@@ -98,7 +181,6 @@ export async function fetchWithWebviewFallback(
     if (response.status >= 200 && response.status < 300) {
       return response.data as string
     }
-    // 404 等明确错误不降级 WebView
     if (NO_WEBVIEW_FALLBACK_STATUS.includes(response.status)) {
       logWarn('network', 'frontend', `[fetch] HTTP ${response.status}，跳过 WebView 降级: ${absoluteUrl}`)
       return null

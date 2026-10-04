@@ -1,27 +1,31 @@
 <template>
   <div class="sc-root">
-    <div class="sc-slogan" v-if="sloganText">{{ sloganText }}</div>
-    <div class="sc-area" ref="areaRef" @mousemove="onAreaMouseMove" @mouseup="onAreaMouseUp" @mouseleave="onAreaMouseUp">
-      <div class="sc-chr sc-chr-purple" :ref="el => { if (el) refs.purple = el as HTMLElement }" :style="chrStyle('purple')"
+    <div v-if="sloganText" class="sc-slogan">{{ sloganText }}</div>
+    <div ref="areaRef" class="sc-area" @mousemove="onAreaMouseMove" @mouseup="onAreaMouseUp" @mouseleave="onAreaMouseUp">
+      <div
+:ref="el => { if (el) refs.purple = el as HTMLElement }" class="sc-chr sc-chr-purple" :style="chrStyle('purple')"
         @mousedown.stop="startDrag($event, 'purple')" @click.stop="onClick(0)" @dblclick.stop="resetPos('purple')" @mouseenter="onHover(0)">
         <div class="sc-face sc-face-purple"><div class="sc-eye left"><div class="sc-pupil"></div></div><div class="sc-eye right"><div class="sc-pupil"></div></div></div>
-        <Transition name="bubble"><div v-if="bubbles.purple" class="sc-bubble">{{ bubbles.purple }}</div></Transition>
+        <Transition name="bubble"><div v-if="bubblePurple" class="sc-bubble">{{ bubblePurple }}</div></Transition>
       </div>
-      <div class="sc-chr sc-chr-black" :ref="el => { if (el) refs.black = el as HTMLElement }" :style="chrStyle('black')"
+      <div
+:ref="el => { if (el) refs.black = el as HTMLElement }" class="sc-chr sc-chr-black" :style="chrStyle('black')"
         @mousedown.stop="startDrag($event, 'black')" @click.stop="onClick(1)" @dblclick.stop="resetPos('black')" @mouseenter="onHover(1)">
         <div class="sc-face sc-face-black"><div class="sc-eye left"><div class="sc-pupil"></div></div><div class="sc-eye right"><div class="sc-pupil"></div></div></div>
-        <Transition name="bubble"><div v-if="bubbles.black" class="sc-bubble">{{ bubbles.black }}</div></Transition>
+        <Transition name="bubble"><div v-if="bubbleBlack" class="sc-bubble">{{ bubbleBlack }}</div></Transition>
       </div>
-      <div class="sc-chr sc-chr-orange" :ref="el => { if (el) refs.orange = el as HTMLElement }" :style="chrStyle('orange')"
+      <div
+:ref="el => { if (el) refs.orange = el as HTMLElement }" class="sc-chr sc-chr-orange" :style="chrStyle('orange')"
         @mousedown.stop="startDrag($event, 'orange')" @click.stop="onClick(2)" @dblclick.stop="resetPos('orange')" @mouseenter="onHover(2)">
         <div class="sc-face sc-face-orange"><div class="sc-dot left"></div><div class="sc-dot right"></div></div>
-        <Transition name="bubble"><div v-if="bubbles.orange" class="sc-bubble">{{ bubbles.orange }}</div></Transition>
+        <Transition name="bubble"><div v-if="bubbleOrange" class="sc-bubble">{{ bubbleOrange }}</div></Transition>
       </div>
-      <div class="sc-chr sc-chr-yellow" :ref="el => { if (el) refs.yellow = el as HTMLElement }" :style="chrStyle('yellow')"
+      <div
+:ref="el => { if (el) refs.yellow = el as HTMLElement }" class="sc-chr sc-chr-yellow" :style="chrStyle('yellow')"
         @mousedown.stop="startDrag($event, 'yellow')" @click.stop="onClick(3)" @dblclick.stop="resetPos('yellow')" @mouseenter="onHover(3)">
         <div class="sc-face sc-face-yellow"><div class="sc-dot left"></div><div class="sc-dot right"></div></div>
         <div class="sc-mouth"></div>
-        <Transition name="bubble"><div v-if="bubbles.yellow" class="sc-bubble">{{ bubbles.yellow }}</div></Transition>
+        <Transition name="bubble"><div v-if="bubbleYellow" class="sc-bubble">{{ bubbleYellow }}</div></Transition>
       </div>
     </div>
   </div>
@@ -37,6 +41,28 @@ const emit = defineEmits<{ 'toggle-theme': [val: string]; 'open-book': [bookId: 
 
 const DEFAULT_POS: Record<string, { x: number; y: number }> = { purple: { x: 14, y: 52 }, black: { x: 58, y: 76 }, orange: { x: 0, y: 98 }, yellow: { x: 78, y: 86 } }
 const SAVE_DEBOUNCE_MS = 300
+
+const ORANGE_INDEX = 2
+
+// 修复：bubbles 拆分为独立 ref，避免一个角色更新触发全部角色重渲染
+const bubblePurple = ref('')
+const bubbleBlack = ref('')
+const bubbleOrange = ref('')
+const bubbleYellow = ref('')
+
+function getBubble(id: string): string {
+  if (id === 'purple') return bubblePurple.value
+  if (id === 'black') return bubbleBlack.value
+  if (id === 'orange') return bubbleOrange.value
+  return bubbleYellow.value
+}
+
+function setBubble(id: string, val: string): void {
+  if (id === 'purple') bubblePurple.value = val
+  else if (id === 'black') bubbleBlack.value = val
+  else if (id === 'orange') bubbleOrange.value = val
+  else bubbleYellow.value = val
+}
 
 function clampPosition(pos: { x: number; y: number }): { x: number; y: number } {
   return { x: Math.max(0, Math.min(200, pos.x)), y: Math.max(0, Math.min(150, pos.y)) }
@@ -65,7 +91,6 @@ function loadPositions(): Record<string, { x: number; y: number }> {
 
 const positions = reactive(loadPositions())
 
-// 修复：localStorage 保存使用防抖，避免拖拽过程中频繁同步写入阻塞 UI
 let savePositionsTimer: ReturnType<typeof setTimeout> | null = null
 
 function scheduleSavePositions(): void {
@@ -115,14 +140,13 @@ const characters: CharacterDef[] = [
 ]
 
 watch(() => [props.booksCount, props.todayReadCount], () => {
-  const orange = characters[2]
+  const orange = characters[ORANGE_INDEX]
   if (orange) orange.talks = buildOrangeTalks(props.booksCount, props.todayReadCount)
   if (orangeReportIndex.value >= (orange ? orange.talks.length : 0)) orangeReportIndex.value = 0
 })
 
 const areaRef = ref<HTMLElement | null>(null)
 const refs: Record<string, HTMLElement | null> = { purple: null, black: null, orange: null, yellow: null }
-const bubbles = reactive<Record<string, string>>({ purple: '', black: '', orange: '', yellow: '' })
 const sloganText = ref('今天读书了吗？')
 const slogans = ['今天读书了吗？', '墨阅在等你', '书是人类进步的阶梯', '来翻翻书架吧', '阅读使人充实']
 
@@ -179,8 +203,8 @@ function resetPos(id: string): void {
 }
 
 function showBubble(id: string, msg: string, dur = 2500): void {
-  bubbles[id] = msg
-  setTimeout(() => { if (bubbles[id] === msg) bubbles[id] = '' }, dur)
+  setBubble(id, msg)
+  setTimeout(() => { if (getBubble(id) === msg) setBubble(id, '') }, dur)
 }
 
 let openBookTimer: ReturnType<typeof setTimeout> | null = null
@@ -263,7 +287,7 @@ function scheduleIdle(): void {
     if (!ch) return
     const el = refs[ch.id]
     if (!el) return
-    if (Math.random() < 0.35 && !bubbles[ch.id]) {
+    if (Math.random() < 0.35 && !getBubble(ch.id)) {
       const idle = ch.idle[Math.floor(Math.random() * ch.idle.length)] || '……'
       showBubble(ch.id, idle)
     }
@@ -307,7 +331,6 @@ onUnmounted(() => {
   if (idleTimer) clearInterval(idleTimer)
   if (openBookTimer) clearTimeout(openBookTimer)
   Object.values(clickTimers).forEach(t => { if (t !== null && t !== undefined) clearTimeout(t) })
-  // 确保位置已保存
   flushSavePositions()
 })
 </script>

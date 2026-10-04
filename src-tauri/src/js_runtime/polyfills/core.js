@@ -7,11 +7,10 @@ globalThis.__dictMemoryCache = globalThis.__dictMemoryCache || {};
 
 globalThis.window = globalThis.window || globalThis;
 
-// 添加通用迭代器辅助函数
 function makeIterable(obj) {
     obj[Symbol.iterator] = function() {
-        var self = this;
-        var i = 0;
+        const self = this;
+        let i = 0;
         return {
             next: function() {
                 if (i < self.size()) {
@@ -24,23 +23,20 @@ function makeIterable(obj) {
     return obj;
 }
 
-// 修复：Deno.core.encode 返回 JSON 对象，改用 op_java_str_to_bytes
-// UTF-8 编解码辅助
 function utf8Encode(str) {
     return Deno.core.ops.op_java_str_to_bytes(String(str), 'UTF-8');
 }
 
 function utf8Decode(bytes) {
-    var arr;
+    let arr;
     if (bytes instanceof Uint8Array) {
         arr = bytes;
     } else if (Array.isArray(bytes)) {
         arr = new Uint8Array(bytes);
     } else if (bytes && typeof bytes === 'object') {
-        // JSON 对象（Deno.core.encode 的返回值）
-        var temp = [];
-        for (var i = 0; i < Object.keys(bytes).length; i++) {
-            var val = bytes[i];
+        const temp = [];
+        for (let i = 0; i < Object.keys(bytes).length; i++) {
+            const val = bytes[i];
             if (typeof val === 'number') temp.push(val);
         }
         arr = new Uint8Array(temp);
@@ -50,27 +46,25 @@ function utf8Decode(bytes) {
     return Deno.core.ops.op_java_bytes_to_str(arr, 'UTF-8');
 }
 
-// ISO-8859-1 编解码
 function latin1Encode(str) {
-    var s = String(str);
-    var bytes = new Uint8Array(s.length);
-    for (var i = 0; i < s.length; i++) {
+    const s = String(str);
+    const bytes = new Uint8Array(s.length);
+    for (let i = 0; i < s.length; i++) {
         bytes[i] = s.charCodeAt(i) & 0xFF;
     }
     return bytes;
 }
 
 function latin1Decode(bytes) {
-    var result = "";
-    for (var i = 0; i < bytes.length; i++) {
+    let result = "";
+    for (let i = 0; i < bytes.length; i++) {
         result += String.fromCharCode(bytes[i]);
     }
     return result;
 }
 
-// 根据 charset 选择编码
 function encodeWithCharset(str, charset) {
-    var enc = (charset || 'UTF-8').toLowerCase();
+    const enc = (charset || 'UTF-8').toLowerCase();
     if (enc === 'iso-8859-1' || enc === 'latin1' || enc === 'latin-1') {
         return latin1Encode(str);
     }
@@ -78,37 +72,34 @@ function encodeWithCharset(str, charset) {
 }
 
 function decodeWithCharset(bytes, charset) {
-    var enc = (charset || 'UTF-8').toLowerCase();
+    const enc = (charset || 'UTF-8').toLowerCase();
     if (enc === 'iso-8859-1' || enc === 'latin1' || enc === 'latin-1') {
         return latin1Decode(bytes);
     }
     return utf8Decode(bytes);
 }
 
-// 安全的分块 bytesToBase64（避免栈溢出）
 function bytesToBase64Chunked(bytes) {
-    var binary = '';
-    var chunkSize = 8192;
-    for (var i = 0; i < bytes.length; i += chunkSize) {
-        var chunk = bytes.slice(i, i + chunkSize);
+    let binary = '';
+    const chunkSize = 8192;
+    for (let i = 0; i < bytes.length; i += chunkSize) {
+        const chunk = bytes.slice(i, i + chunkSize);
         binary += String.fromCharCode.apply(null, chunk);
     }
     return Deno.core.ops.op_java_base64_encode(binary);
 }
 
-// 将任意值转换为 Uint8Array（兼容 Uint8Array、普通数组、JSON 对象、字符串）
 function toUint8Array(data) {
     if (data === null || data === undefined) return new Uint8Array(0);
     if (data instanceof Uint8Array) return data;
     if (Array.isArray(data)) return new Uint8Array(data);
     if (data && typeof data === 'object') {
-        // JSON 对象（如 {"0":116,"1":101}）
-        var temp = [];
-        for (var i = 0; i < Object.keys(data).length; i++) {
-            var val = data[i];
+        const temp = [];
+        for (let i = 0; i < Object.keys(data).length; i++) {
+            const val = data[i];
             if (typeof val === 'number') temp.push(val);
             else if (typeof val === 'string') {
-                var num = parseInt(val, 10);
+                const num = parseInt(val, 10);
                 if (!isNaN(num)) temp.push(num);
             }
         }
@@ -124,18 +115,17 @@ Object.assign(globalThis.java, {
     put: function(key, value) { return Deno.core.ops.op_java_put("default", String(key), String(value)); },
     get: function(key) { return Deno.core.ops.op_java_get("default", String(key)); },
 
-    // getString 方法
     getString: function(key) {
-        var srcKey = (globalThis.__sandbox_data && globalThis.__sandbox_data.source && globalThis.__sandbox_data.source.bookSourceUrl) || "default";
+        const srcKey = (globalThis.__sandbox_data && globalThis.__sandbox_data.source && globalThis.__sandbox_data.source.bookSourceUrl) || "default";
         return Deno.core.ops.op_java_get(srcKey, String(key));
     },
     setString: function(key, value) {
-        var srcKey = (globalThis.__sandbox_data && globalThis.__sandbox_data.source && globalThis.__sandbox_data.source.bookSourceUrl) || "default";
+        const srcKey = (globalThis.__sandbox_data && globalThis.__sandbox_data.source && globalThis.__sandbox_data.source.bookSourceUrl) || "default";
         return Deno.core.ops.op_java_put(srcKey, String(key), String(value));
     },
     removeString: function(key) {
-        var srcKey = (globalThis.__sandbox_data && globalThis.__sandbox_data.source && globalThis.__sandbox_data.source.bookSourceUrl) || "default";
-        Deno.core.ops.op_java_put(srcKey, String(key), "");
+        const srcKey = (globalThis.__sandbox_data && globalThis.__sandbox_data.source && globalThis.__sandbox_data.source.bookSourceUrl) || "default";
+        Deno.core.ops.op_java_remove(srcKey, String(key));
     },
 
     encodeURI: function(str, enc) {
@@ -155,30 +145,30 @@ Object.assign(globalThis.java, {
 
     hexEncodeToString: function(str) {
         if (!str) return "";
-        var s = String(str);
-        var bytes = utf8Encode(s);
-        var result = "";
-        for (var i = 0; i < bytes.length; i++) {
+        const s = String(str);
+        const bytes = utf8Encode(s);
+        let result = "";
+        for (let i = 0; i < bytes.length; i++) {
             result += bytes[i].toString(16).padStart(2, '0');
         }
         return result;
     },
     hexDecodeToString: function(hex) {
         if (!/^[0-9a-fA-F]+$/.test(hex)) return hex;
-        var bytes = new Uint8Array(hex.length / 2);
-        for (var i = 0; i < hex.length; i += 2) {
+        const bytes = new Uint8Array(hex.length / 2);
+        for (let i = 0; i < hex.length; i += 2) {
             bytes[i / 2] = parseInt(hex.substring(i, i + 2), 16);
         }
         return utf8Decode(bytes);
     },
 
     md5Encode: function(str) { return Deno.core.ops.op_java_md5_encode(String(str)); },
-    md5Encode16: function(str) { var full = Deno.core.ops.op_java_md5_encode(String(str)); return full.substring(8, 24); },
+    md5Encode16: function(str) { const full = Deno.core.ops.op_java_md5_encode(String(str)); return full.substring(8, 24); },
 
     timeFormat: function(ts) { return Deno.core.ops.op_java_time_format(Number(ts)); },
     timeFormatUTC: function(time, format, sh) {
         try {
-            var d = new Date(time);
+            const d = new Date(time);
             d.setHours(d.getHours() + (sh || 0));
             return d.toISOString();
         } catch(e) { return ""; }
@@ -191,15 +181,15 @@ Object.assign(globalThis.java, {
     },
     bytesToStr: function(bytes, charset) {
         if (!bytes || bytes.length === 0) return "";
-        var arr;
+        let arr;
         if (bytes instanceof Uint8Array) {
             arr = bytes;
         } else if (Array.isArray(bytes)) {
             arr = new Uint8Array(bytes);
         } else if (bytes && typeof bytes === 'object') {
-            var temp = [];
-            for (var i = 0; i < Object.keys(bytes).length; i++) {
-                var val = bytes[i];
+            const temp = [];
+            for (let i = 0; i < Object.keys(bytes).length; i++) {
+                const val = bytes[i];
                 if (typeof val === 'number') temp.push(val);
             }
             arr = new Uint8Array(temp);
@@ -221,13 +211,23 @@ Object.assign(globalThis.java, {
     androidId: function() { return "abyss-reader-android-id"; },
     getWebViewUA: function() { return "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"; },
 
-    log: function(msg) { Deno.core.ops.op_java_emit_log("info", String(msg)); return msg; },
-    toast: function(msg) { Deno.core.ops.op_java_emit_log("warn", String(msg)); return msg; },
-    longToast: function(msg) { Deno.core.ops.op_java_emit_log("error", String(msg)); return msg; },
+    log: function(msg) {
+        Deno.core.ops.op_java_emit_log("info", String(msg));
+        return undefined;
+    },
+    toast: function(msg) {
+        Deno.core.ops.op_java_toast(String(msg), false);
+        return undefined;
+    },
+    longToast: function(msg) {
+        Deno.core.ops.op_java_toast(String(msg), true);
+        return undefined;
+    },
     logType: function(any) {
-        if (any === null) { globalThis.java.log("null"); return; }
-        if (any === undefined) { globalThis.java.log("undefined"); return; }
+        if (any === null) { globalThis.java.log("null"); return undefined; }
+        if (any === undefined) { globalThis.java.log("undefined"); return undefined; }
         globalThis.java.log(typeof any + (any && any.constructor ? " (" + any.constructor.name + ")" : ""));
+        return undefined;
     },
 
     htmlFormat: function(str) {
@@ -266,18 +266,22 @@ Object.assign(globalThis.java, {
         if (url.startsWith("http://") || url.startsWith("https://")) {
             Deno.core.ops.op_java_start_browser(String(url));
         }
+        return undefined;
     },
 
     openVideoPlayer: function(url, title) {
-        return Deno.core.ops.op_java_open_video_player(String(url), String(title || ""));
+        Deno.core.ops.op_java_open_video_player(String(url), String(title || ""));
+        return undefined;
     },
 
     startBrowser: function(url, title) {
         Deno.core.ops.op_java_start_browser(String(url));
+        return undefined;
     },
 
     startBrowserAwait: function(url, title) {
-        return Deno.core.ops.op_java_start_browser_await(String(url), String(title || ""));
+        Deno.core.ops.op_java_start_browser_await(String(url), String(title || ""));
+        return undefined;
     },
 
     getVerificationCode: function(svg) {
@@ -296,23 +300,56 @@ Object.assign(globalThis.java, {
 
     copyText: function(text) {
         Deno.core.ops.op_java_copy_text(String(text));
+        return undefined;
     },
 
     refreshExplore: function() {
         Deno.core.ops.op_java_refresh_explore();
+        return undefined;
     },
 
     refreshBookInfo: function() {
         Deno.core.ops.op_java_refresh_book_info();
+        return undefined;
+    },
+
+    /**
+     * 修复：对齐 Legado 的 java.upLoginData(Map<String, Any?>?)
+     * - data 为 null/undefined → 传空字符串（前端识别为"用 default 重建"）
+     * - data 是对象 → JSON.stringify
+     * 原实现直接 String(i)，对象会变成 "[object Object]"
+     */
+    upLoginData: function(i) {
+        var str;
+        if (i === null || i === undefined) {
+            str = '';
+        } else {
+            try {
+                str = JSON.stringify(i);
+            } catch (e) {
+                str = '';
+            }
+        }
+        Deno.core.ops.op_java_up_login_data(str);
+        return undefined;
+    },
+
+    /**
+     * 新增：对齐 Legado 的 java.reLoginView(Boolean)
+     * 触发前端重建登录界面。
+     */
+    reLoginView: function(deltaUp) {
+        Deno.core.ops.op_java_re_login_view(!!deltaUp);
+        return undefined;
     },
 
     source: {
         setVariable: function(k, v) {
-            var srcKey = (globalThis.__sandbox_data && globalThis.__sandbox_data.source && globalThis.__sandbox_data.source.bookSourceUrl) || "default";
+            const srcKey = (globalThis.__sandbox_data && globalThis.__sandbox_data.source && globalThis.__sandbox_data.source.bookSourceUrl) || "default";
             return Deno.core.ops.op_java_put(srcKey, "source_" + String(k), String(v));
         },
         getVariable: function(k) {
-            var srcKey = (globalThis.__sandbox_data && globalThis.__sandbox_data.source && globalThis.__sandbox_data.source.bookSourceUrl) || "default";
+            const srcKey = (globalThis.__sandbox_data && globalThis.__sandbox_data.source && globalThis.__sandbox_data.source.bookSourceUrl) || "default";
             return Deno.core.ops.op_java_get(srcKey, "source_" + String(k));
         },
         getKey: function() { return Deno.core.ops.op_java_get("default", "bookSourceUrl"); },
@@ -320,7 +357,7 @@ Object.assign(globalThis.java, {
         putLoginHeader: function(h) { Deno.core.ops.op_java_put("default", "loginHeader", String(h)); },
         getLoginHeader: function() { return Deno.core.ops.op_java_get("default", "loginHeader"); },
         getLoginInfoMap: function() {
-            var v = Deno.core.ops.op_java_get("default", "loginHeader");
+            const v = Deno.core.ops.op_java_get("default", "loginHeader");
             if (!v) return {};
             try { return JSON.parse(v.replace(/^#/, "")); } catch(e) { return {}; }
         },
@@ -333,7 +370,7 @@ Object.assign(globalThis.java, {
         put: function(k, v) { this._store[k] = v; },
         delete: function(k) { delete this._store[k]; },
         clear: function() { this._store = {}; },
-        getFromMemory: function(k) { var v = Deno.core.ops.op_java_get("dict", String(k)); return v || null; },
+        getFromMemory: function(k) { const v = Deno.core.ops.op_java_get("dict", String(k)); return v || null; },
         putMemory: function(k, v) { Deno.core.ops.op_java_put("dict", String(k), String(v)); },
         deleteMemory: function(k) { Deno.core.ops.op_java_put("dict", String(k), ""); }
     },
@@ -349,12 +386,12 @@ Object.assign(globalThis.java, {
         return Deno.core.ops.op_java_read_txt_file(String(path));
     },
     readFile: function(path) {
-        var b64 = Deno.core.ops.op_java_read_file_bytes_base64(String(path));
+        const b64 = Deno.core.ops.op_java_read_file_bytes_base64(String(path));
         if (!b64 || b64.startsWith("error:")) return null;
         return b64;
     },
     deleteFile: function(path) {
-        var r = Deno.core.ops.op_java_delete_file(String(path));
+        const r = Deno.core.ops.op_java_delete_file(String(path));
         return r === "true";
     },
     getTxtInFolder: function(path) {
@@ -373,27 +410,27 @@ Object.assign(globalThis.java, {
 
     queryTTF: function(data) {
         try {
-            var raw = Deno.core.ops.op_java_query_ttf(String(data));
-            var parsed = JSON.parse(raw);
+            const raw = Deno.core.ops.op_java_query_ttf(String(data));
+            const parsed = JSON.parse(raw);
             if (!parsed || parsed.cmap === undefined) return null;
-            var unicodeToGlyph = {};
+            const unicodeToGlyph = {};
             for (var i = 0; i < parsed.cmap.length; i++) {
-                var pair = parsed.cmap[i];
+                const pair = parsed.cmap[i];
                 unicodeToGlyph[pair[0]] = pair[1];
             }
-            var glyfToUnicode = {};
+            const glyfToUnicode = {};
             if (parsed.glyfMap) {
                 for (var i = 0; i < parsed.glyfMap.length; i++) {
-                    var entry = parsed.glyfMap[i];
+                    const entry = parsed.glyfMap[i];
                     glyfToUnicode[entry.data] = entry.cp;
                 }
             }
             return {
                 getGlyfIdByUnicode: function(unicode) { return unicodeToGlyph[unicode] || 0; },
                 getGlyfByUnicode: function(unicode) {
-                    var gid = unicodeToGlyph[unicode];
+                    const gid = unicodeToGlyph[unicode];
                     if (gid === undefined) return null;
-                    for (var i = 0; i < parsed.glyfMap.length; i++) {
+                    for (let i = 0; i < parsed.glyfMap.length; i++) {
                         if (parsed.glyfMap[i].gid === gid) return parsed.glyfMap[i].data;
                     }
                     return null;
@@ -412,14 +449,14 @@ Object.assign(globalThis.java, {
 
     replaceFont: function(text, errorQueryTTF, correctQueryTTF, filter) {
         if (!errorQueryTTF || !correctQueryTTF || !text) return text;
-        var result = "";
-        for (var i = 0; i < text.length; i++) {
-            var ch = text.charAt(i);
-            var code = ch.codePointAt(0) || ch.charCodeAt(0);
+        let result = "";
+        for (let i = 0; i < text.length; i++) {
+            const ch = text.charAt(i);
+            const code = ch.codePointAt(0) || ch.charCodeAt(0);
             if (errorQueryTTF.isBlankUnicode(code)) { result += ch; continue; }
-            var glyf = errorQueryTTF.getGlyfByUnicode(code);
+            const glyf = errorQueryTTF.getGlyfByUnicode(code);
             if (filter && !glyf) continue;
-            var newCode = correctQueryTTF.getUnicodeByGlyf(glyf);
+            const newCode = correctQueryTTF.getUnicodeByGlyf(glyf);
             if (newCode !== 0 && newCode !== undefined) {
                 result += String.fromCodePoint(newCode);
             } else if (!filter) {
@@ -430,54 +467,54 @@ Object.assign(globalThis.java, {
     },
 
     createSymmetricCrypto: function(algorithm, key, iv) {
-        var algo = String(algorithm).toUpperCase();
-        var isDes = algo.indexOf("DES") !== -1;
-        var isAes = algo.indexOf("AES") !== -1;
+        const algo = String(algorithm).toUpperCase();
+        const isDes = algo.indexOf("DES") !== -1;
+        const isAes = algo.indexOf("AES") !== -1;
 
         if (isAes || isDes) {
-            var keyArr = toUint8Array(key);
-            var ivArr = iv ? toUint8Array(iv) : new Uint8Array(0);
-            var decryptFn = isDes ? Deno.core.ops.op_java_des_decrypt_bytes : Deno.core.ops.op_java_aes_decrypt_bytes;
-            var encryptFn = isDes ? Deno.core.ops.op_java_des_encrypt_bytes : Deno.core.ops.op_java_aes_encrypt_bytes;
+            const keyArr = toUint8Array(key);
+            const ivArr = iv ? toUint8Array(iv) : new Uint8Array(0);
+            const decryptFn = isDes ? Deno.core.ops.op_java_des_decrypt_bytes : Deno.core.ops.op_java_aes_decrypt_bytes;
+            const encryptFn = isDes ? Deno.core.ops.op_java_des_encrypt_bytes : Deno.core.ops.op_java_aes_encrypt_bytes;
 
             return {
                 decrypt: function(data) {
                     try {
-                        var dataBytes = toUint8Array(data);
+                        const dataBytes = toUint8Array(data);
                         return decryptFn(dataBytes, keyArr, ivArr);
                     } catch(e) { return null; }
                 },
                 encrypt: function(data) {
                     try {
-                        var dataBytes = toUint8Array(data);
+                        const dataBytes = toUint8Array(data);
                         return encryptFn(dataBytes, keyArr, ivArr);
                     } catch(e) { return null; }
                 },
                 decryptStr: function(data) {
                     try {
-                        var dataBytes = toUint8Array(data);
-                        var decrypted = decryptFn(dataBytes, keyArr, ivArr);
+                        const dataBytes = toUint8Array(data);
+                        const decrypted = decryptFn(dataBytes, keyArr, ivArr);
                         return Deno.core.ops.op_java_bytes_to_str(toUint8Array(decrypted), 'UTF-8');
                     } catch(e) { return ""; }
                 },
                 encryptStr: function(data) {
                     try {
-                        var dataBytes = toUint8Array(data);
-                        var encrypted = encryptFn(dataBytes, keyArr, ivArr);
+                        const dataBytes = toUint8Array(data);
+                        const encrypted = encryptFn(dataBytes, keyArr, ivArr);
                         return Deno.core.ops.op_java_bytes_to_str(toUint8Array(encrypted), 'UTF-8');
                     } catch(e) { return ""; }
                 },
                 encryptBase64: function(data) {
                     try {
-                        var dataBytes = toUint8Array(data);
-                        var encrypted = encryptFn(dataBytes, keyArr, ivArr);
+                        const dataBytes = toUint8Array(data);
+                        const encrypted = encryptFn(dataBytes, keyArr, ivArr);
                         return bytesToBase64Chunked(encrypted);
                     } catch(e) { return ""; }
                 },
                 decryptBase64: function(data) {
                     try {
-                        var decoded = Deno.core.ops.op_java_base64_decode_bytes(String(data));
-                        var decrypted = decryptFn(toUint8Array(decoded), keyArr, ivArr);
+                        const decoded = Deno.core.ops.op_java_base64_decode_bytes(String(data));
+                        const decrypted = decryptFn(toUint8Array(decoded), keyArr, ivArr);
                         return Deno.core.ops.op_java_bytes_to_str(toUint8Array(decrypted), 'UTF-8');
                     } catch(e) { return ""; }
                 }
@@ -495,7 +532,7 @@ Object.assign(globalThis.java, {
     },
 
     createSign: function(algorithm) {
-        var key = (globalThis.__sandbox_data && globalThis.__sandbox_data.source && globalThis.__sandbox_data.source.bookSourceUrl) || "default";
+        const key = (globalThis.__sandbox_data && globalThis.__sandbox_data.source && globalThis.__sandbox_data.source.bookSourceUrl) || "default";
         return {
             sign: function(data) {
                 return Deno.core.ops.op_java_sign(String(key), String(data), String(algorithm));
@@ -505,9 +542,9 @@ Object.assign(globalThis.java, {
 
     getStringList: function(rule, isUrl) {
         try {
-            var data = globalThis.__sandbox_data ? (globalThis.__sandbox_data.result || '') : '';
-            var result = Deno.core.ops.op_jsoup_each_text(data, rule || '');
-            var texts = JSON.parse(result);
+            const data = globalThis.__sandbox_data ? (globalThis.__sandbox_data.result || '') : '';
+            const result = Deno.core.ops.op_jsoup_each_text(data, rule || '');
+            const texts = JSON.parse(result);
             return makeIterable({
                 size: function() { return texts.length; },
                 get: function(i) { return texts[i] || ''; },
@@ -520,9 +557,9 @@ Object.assign(globalThis.java, {
 
     getElements: function(rule, isUrl) {
         try {
-            var data = globalThis.__sandbox_data ? (globalThis.__sandbox_data.result || '') : '';
-            var result = Deno.core.ops.op_jsoup_select(data, rule || '');
-            var elements = JSON.parse(result);
+            const data = globalThis.__sandbox_data ? (globalThis.__sandbox_data.result || '') : '';
+            const result = Deno.core.ops.op_jsoup_select(data, rule || '');
+            const elements = JSON.parse(result);
             return makeIterable({
                 size: function() { return elements.length; },
                 get: function(i) { return elements[i] || ''; },
@@ -547,7 +584,25 @@ Object.assign(globalThis.java, {
         globalThis.__sandbox_data.baseUrl = baseUrl || "";
     },
 
-    upLoginData: function(i) { Deno.core.ops.op_java_up_login_data(String(i)); },
+    upLoginData: function(i) {
+        var str;
+        if (i === null || i === undefined) {
+            str = '';
+        } else {
+            try {
+                str = JSON.stringify(i);
+            } catch (e) {
+                str = '';
+            }
+        }
+        Deno.core.ops.op_java_up_login_data(str);
+        return undefined;
+    },
+
+    reLoginView: function(deltaUp) {
+        Deno.core.ops.op_java_re_login_view(!!deltaUp);
+        return undefined;
+    },
 
     eventListener: false,
     on: function() {},

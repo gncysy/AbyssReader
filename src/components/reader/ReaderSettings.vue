@@ -12,12 +12,12 @@
           <div class="setting-row">
             <span class="setting-label">应用全局设置</span>
             <label class="toggle-switch">
-              <input type="checkbox" v-model="useGlobal" />
+              <input v-model="useGlobal" type="checkbox" />
               <span class="toggle-slider"></span>
             </label>
           </div>
-          <p class="setting-hint" v-if="useGlobal">以下设置使用全局配置，修改后所有书生效</p>
-          <p class="setting-hint" v-else>以下设置为本书独立配置</p>
+          <p v-if="useGlobal" class="setting-hint">以下设置使用全局配置，修改后所有书生效</p>
+          <p v-else class="setting-hint">以下设置为本书独立配置</p>
 
           <div class="settings-section">
             <div class="setting-row">
@@ -42,19 +42,19 @@
             </div>
             <div class="setting-row">
               <span class="setting-label">净化替换规则</span>
-              <label class="toggle-switch"><input type="checkbox" v-model="localUseReplaceRule" /><span class="toggle-slider"></span></label>
+              <label class="toggle-switch"><input v-model="localUseReplaceRule" type="checkbox" /><span class="toggle-slider"></span></label>
             </div>
             <div class="setting-row">
               <span class="setting-label">段落重排</span>
-              <label class="toggle-switch"><input type="checkbox" v-model="localReSegment" /><span class="toggle-slider"></span></label>
+              <label class="toggle-switch"><input v-model="localReSegment" type="checkbox" /><span class="toggle-slider"></span></label>
             </div>
             <div class="setting-row">
               <span class="setting-label">目录逆序</span>
-              <label class="toggle-switch"><input type="checkbox" v-model="localReverseToc" /><span class="toggle-slider"></span></label>
+              <label class="toggle-switch"><input v-model="localReverseToc" type="checkbox" /><span class="toggle-slider"></span></label>
             </div>
             <div class="setting-row">
               <span class="setting-label">长章节拆分</span>
-              <label class="toggle-switch"><input type="checkbox" v-model="localSplitLongChapter" /><span class="toggle-slider"></span></label>
+              <label class="toggle-switch"><input v-model="localSplitLongChapter" type="checkbox" /><span class="toggle-slider"></span></label>
             </div>
             <div class="setting-row">
               <span class="setting-label">图片样式</span>
@@ -106,10 +106,6 @@ const imageStyleOptions = [
 ]
 
 let saveTimer: ReturnType<typeof setTimeout> | null = null
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === 'object' && !Array.isArray(value)
-}
 
 function setLocalTheme(val: string): void {
   localTheme.value = val

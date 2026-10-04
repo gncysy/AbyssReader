@@ -3,14 +3,14 @@
     <div v-if="book" class="reader-fullscreen" :data-theme="effectiveTheme">
       <Transition name="controls-slide">
         <header v-if="showControls" v-no-drag class="reader-header" @mouseenter="clearHideTimer" @mouseleave="resetHideTimer">
-          <button class="btn-back" @click.stop="handleCloseAndEmit" aria-label="返回书架">
+          <button class="btn-back" aria-label="返回书架" @click.stop="handleCloseAndEmit">
             <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 12H5M12 19l-7-7 7-7"/></svg>
           </button>
           <span class="header-progress">{{ Math.round(scrollPercent * 100) }}%</span>
           <div class="reader-title-drag">
-            <h2 class="reader-title clickable" @click.stop="openToc" title="点击打开目录">{{ currentChapter?.title || '加载中...' }}</h2>
+            <h2 class="reader-title clickable" title="点击打开目录" @click.stop="openToc">{{ currentChapter?.title || '加载中...' }}</h2>
           </div>
-          <button class="btn-icon-header" @click.stop="openSettings" title="阅读设置">
+          <button class="btn-icon-header" title="阅读设置" @click.stop="openSettings">
             <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
           </button>
         </header>
@@ -63,7 +63,7 @@
 
 <script setup lang="ts">
 import { ref, watch, onMounted, onUnmounted } from 'vue'
-import { useReaderStore, useBookshelfStore } from '@/stores'
+import { useReaderStore } from '@/stores'
 import { useReplaceRuleStore } from '@/stores/replace-rules.js'
 import { useReaderContent } from '@/composables/useReaderContent.js'
 import ReaderContent from './ReaderContent.vue'
@@ -78,7 +78,6 @@ const props = defineProps<{ book: Book | null; source?: BookSource | null; initi
 const emit = defineEmits<{ (e: 'close'): void }>()
 
 const readerStore = useReaderStore()
-const bookshelfStore = useBookshelfStore()
 const replaceRuleStore = useReplaceRuleStore()
 
 const sourceValue = props.source ?? null

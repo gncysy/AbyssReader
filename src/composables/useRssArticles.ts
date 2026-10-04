@@ -5,8 +5,10 @@
 import { ref } from 'vue'
 import { createAnalyzer } from '@engine/parser/index.js'
 import { network } from '@/services/network.js'
+import { parseSourceHeader } from '@engine/business/source/helper.js'
+import { getJsRuntime } from '@engine/parser/js-executor.js'
 import type { RssSource, RssArticle } from '@/types'
-import type { EngineBookSource } from '@engine/types.js'
+import type { EngineBookSource, ParseContext } from '@engine/types.js'
 
 const CACHE_TTL = 5 * 60 * 1000
 const MAX_CACHE_ENTRIES = 20
@@ -31,7 +33,8 @@ export function useRssArticles() {
     html: string,
     baseUrl: string,
   ): Promise<{ articles: RssArticle[]; nextUrl: string }> {
-    const analyzer = createAnalyzer(toEngineBookSource(source))
+    const engineSource = toEngineBookSource(source)
+    const analyzer = createAnalyzer(engineSource)
     analyzer.setContent(html, baseUrl)
 
     let listRule = source.ruleArticles || ''
@@ -50,16 +53,18 @@ export function useRssArticles() {
     const imageRule = source.ruleImage || ''
     const dateRule = source.rulePubDate || ''
 
+    const urlCtx: ParseContext = { source: engineSource, baseUrl, result: html, isUrl: true }
+
     const result: RssArticle[] = []
     for (const item of elements) {
       if (item === null || item === undefined) continue
-      const itemAnalyzer = createAnalyzer(toEngineBookSource(source))
+      const itemAnalyzer = createAnalyzer(engineSource)
       itemAnalyzer.setContent(item, baseUrl)
 
       const title = (await itemAnalyzer.getString(titleRule)) || ''
       if (!title) continue
 
-      const link = (await itemAnalyzer.getString(linkRule, { isUrl: true } as Record<string, unknown>)) || ''
+      const link = (await itemAnalyzer.getString(linkRule, urlCtx)) || ''
       const description = descRule ? (await itemAnalyzer.getString(descRule)) || null : null
       const image = imageRule ? (await itemAnalyzer.getString(imageRule)) || null : null
       const pubDate = dateRule ? (await itemAnalyzer.getString(dateRule)) || null : null
@@ -75,9 +80,9 @@ export function useRssArticles() {
       if (nextRule.toUpperCase() === 'PAGE') {
         nextUrl = baseUrl
       } else {
-        const nextAnalyzer = createAnalyzer(toEngineBookSource(source))
+        const nextAnalyzer = createAnalyzer(engineSource)
         nextAnalyzer.setContent(html, baseUrl)
-        const raw = await nextAnalyzer.getString(nextRule, { isUrl: true } as Record<string, unknown>)
+        const raw = await nextAnalyzer.getString(nextRule, urlCtx)
         if (raw) nextUrl = raw
       }
     }
@@ -112,7 +117,9 @@ export function useRssArticles() {
 
     loading.value = true
     try {
-      const html = await network.fetch(url, { method: 'GET' })
+      const runtime = getJsRuntime()
+      const headers = await parseSourceHeader(toEngineBookSource(source), runtime)
+      const html = await network.fetch(url, { method: 'GET', headers })
       const result = await parseArticles(source, typeof html === 'string' ? html : '', url)
       articles.value = result.articles
       hasNextPage.value = result.nextUrl !== '' && result.nextUrl !== url
@@ -134,7 +141,9 @@ export function useRssArticles() {
     if (!nextPageUrl.value || loadingMore.value) return
     loadingMore.value = true
     try {
-      const html = await network.fetch(nextPageUrl.value, { method: 'GET' })
+      const runtime = getJsRuntime()
+      const headers = await parseSourceHeader(toEngineBookSource(source), runtime)
+      const html = await network.fetch(nextPageUrl.value, { method: 'GET', headers })
       const result = await parseArticles(source, typeof html === 'string' ? html : '', nextPageUrl.value)
       const existingLinks = new Set(articles.value.map((a) => a.link))
       const uniqueNew = result.articles.filter((a) => !existingLinks.has(a.link))

@@ -55,6 +55,8 @@ export interface ContentRule {
   payAction?: string | null
   callBackJs?: string | null
   webView?: boolean | string | null
+  /** 解密密钥（部分书源自定义字段） */
+  decryptKey?: string | null
 }
 
 export interface ExploreRule {

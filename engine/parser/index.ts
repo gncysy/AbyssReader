@@ -22,6 +22,14 @@ export function setWebJsExecutor(executor: WebJsExecutor): void {
   globalWebJsExecutor = executor
 }
 
+/**
+ * 清理注入的 WebJsExecutor（供测试/热重载使用）。
+ * 修复：原实现无清理机制，测试或热重载时会互相污染。
+ */
+export function clearWebJsExecutor(): void {
+  globalWebJsExecutor = null
+}
+
 function getAnalyzer(html: unknown, baseCtx?: ParseContext): AnalyzeRule {
   const source = baseCtx?.source
   const analyzer = new AnalyzeRule(source)

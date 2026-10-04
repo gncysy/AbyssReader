@@ -30,6 +30,19 @@ interface JsSearchBookPayload {
   source?: string
 }
 
+interface JavaToastPayload {
+  message: string
+  isLong: boolean
+}
+
+interface LoginDataUpdatePayload {
+  info: string
+}
+
+interface ReLoginViewPayload {
+  deltaUp: boolean
+}
+
 export const windowApi = {
   minimize: async (): Promise<void> => {
     await getCurrentWindow().minimize()
@@ -121,6 +134,33 @@ export const windowApi = {
         keyword: payload.keyword || '',
         source: payload.source || '',
       })
+    })
+  },
+
+  // ─── java-toast（书源 JS 调用 java.toast / java.longToast）───
+
+  listenJavaToast: async (handler: (payload: JavaToastPayload) => void): Promise<UnlistenFn> => {
+    return listen('java-toast', (event: unknown) => {
+      const payload = (event as { payload: JavaToastPayload }).payload
+      handler(payload)
+    })
+  },
+
+  // ─── login-data-update（书源 JS 调用 java.upLoginData）───
+
+  listenLoginDataUpdate: async (handler: (info: string) => void): Promise<UnlistenFn> => {
+    return listen('login-data-update', (event: unknown) => {
+      const payload = (event as { payload: LoginDataUpdatePayload }).payload
+      handler(payload?.info || '')
+    })
+  },
+
+  // ─── re-login-view（书源 JS 调用 java.reLoginView）───
+
+  listenReLoginView: async (handler: (deltaUp: boolean) => void): Promise<UnlistenFn> => {
+    return listen('re-login-view', (event: unknown) => {
+      const payload = (event as { payload: ReLoginViewPayload }).payload
+      handler(!!payload?.deltaUp)
     })
   },
 }

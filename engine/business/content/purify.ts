@@ -1,5 +1,6 @@
 // ============================================
 // 段落重排 & 净化 — 对齐 Legado ContentHelp
+// JS 替换通过回调注入，不在此文件内执行任意 JS
 // ============================================
 
 import { getCachedRegex } from '../../utils/regex-cache.js'
@@ -18,6 +19,8 @@ interface ReplaceRule {
   [key: string]: unknown
 }
 
+export type JsReplacementFn = (jsCode: string, matched: string) => string
+
 const MARK_SENTENCES_END = '？。！?!~'
 const MARK_SENTENCES_END_P = '.？。！?!~'
 const MARK_SENTENCES_MID = '.，、,—…'
@@ -32,7 +35,6 @@ const FORCE_SPLIT_DEFAULT_TRIGGER = 2
 const FORCE_SPLIT_QUOTE_GAIN = 4
 const FORCE_SPLIT_QUOTE_MIN = 2
 const FORCE_SPLIT_QUOTE_TRIGGER = 4
-const REPLACE_TIMEOUT_DEFAULT = 5000
 
 function sAt(str: string, index: number): string {
   if (index < 0 || index >= str.length) return ''
@@ -181,11 +183,24 @@ function splitQuote(str: string): string {
   return str
 }
 
+/**
+ * 修复：StringBuilder 缓存内部字符串，避免每次 toString 都 join。
+ * dirty 标记：只有 append/setCharAt/replaceLastChar 后置 dirty，
+ * toString 时若 dirty 才 join。
+ */
 class StringBuilder {
   private chars: string[] = []
+  private cached: string | null = null
+  private cachedLength = 0
+
+  private markDirty(): void {
+    this.cached = null
+  }
 
   append(s: string): void {
     this.chars.push(s)
+    this.cachedLength += s.length
+    this.markDirty()
   }
 
   charAt(index: number): string {
@@ -200,21 +215,28 @@ class StringBuilder {
       arr[index] = ch
     }
     this.chars = [arr.join('')]
+    this.cachedLength = str.length
+    this.markDirty()
   }
 
   replaceLastChar(ch: string): void {
     const str = this.toString()
     if (str.length > 0) {
       this.chars = [str.substring(0, str.length - 1) + ch]
+      this.markDirty()
     }
   }
 
   toString(): string {
-    return this.chars.join('')
+    if (this.cached !== null) return this.cached
+    this.cached = this.chars.join('')
+    return this.cached
   }
 
   get length(): number {
-    return this.toString().length
+    // 缓存命中时 O(1)
+    if (this.cached !== null) return this.cached.length
+    return this.cachedLength
   }
 
   last(): string {
@@ -554,29 +576,9 @@ interface PurifyRule {
   pattern: string
   replacement: string
   isRegex: boolean
-  timeoutMs: number
 }
 
-function execJsReplacement(jsCode: string, matched: string): string {
-  try {
-    const code = jsCode
-      .replace(/^@js:\s*/, '')
-      .replace(/^<js>/, '')
-      .replace(/<\/js>$/, '')
-      .trim()
-    const fn = new Function('result', code + '; return result')
-    const r = fn(matched)
-    if (r !== undefined && r !== null && r !== '' && r !== matched) return String(r).replace(/\$/g, '$$$$')
-    return matched
-  } catch {
-    return matched
-  }
-}
-
-function applyReplaceRuleSync(text: string, rule: PurifyRule): string {
-  const start = Date.now()
-  const timeout = rule.timeoutMs > 0 ? rule.timeoutMs : REPLACE_TIMEOUT_DEFAULT
-
+function applyReplaceRuleSync(text: string, rule: PurifyRule, jsReplacementFn: JsReplacementFn | null): string {
   try {
     const replacement = rule.replacement || ''
     const isJsReplace = replacement.startsWith('@js:') || replacement.startsWith('<js>')
@@ -584,12 +586,31 @@ function applyReplaceRuleSync(text: string, rule: PurifyRule): string {
     if (rule.isRegex) {
       const re = getCachedRegex(rule.pattern, 'g')
       if (!re) return text
+      // 修复：每次 replace 前重置 lastIndex，避免全局正则残留状态
       re.lastIndex = 0
       const result = text.replace(re, (match) => {
-        if (Date.now() - start > timeout) throw new Error('timeout')
-        return isJsReplace ? execJsReplacement(replacement, match) : replacement
+        if (isJsReplace) {
+          if (!jsReplacementFn) return match
+          try {
+            return jsReplacementFn(replacement, match)
+          } catch {
+            return match
+          }
+        }
+        return replacement
       })
+      // 重置，避免影响后续使用
+      re.lastIndex = 0
       return result
+    }
+
+    if (isJsReplace) {
+      if (!jsReplacementFn) return text
+      try {
+        return jsReplacementFn(replacement, text)
+      } catch {
+        return text
+      }
     }
 
     return text.split(rule.pattern).join(replacement)
@@ -610,6 +631,7 @@ function removeSameTitle(text: string, chapterTitle: string, bookName: string): 
       : '^(\\s|[\\p{P}])*' + escapedTitle + '(\\s)*'
     const prefixPattern = getCachedRegex(pattern, 'u')
     if (!prefixPattern) return text
+    prefixPattern.lastIndex = 0
     const match = text.match(prefixPattern)
     if (match && match[0]) return text.substring(match[0].length)
   } catch {
@@ -624,6 +646,7 @@ export interface PurifyOptions {
   reSegmentEnabled: boolean
   purifyEnabled: boolean
   rules: ReplaceRule[]
+  jsReplacementFn?: JsReplacementFn | null
 }
 
 export function purifyText(rawText: string, options: PurifyOptions): string {
@@ -633,9 +656,13 @@ export function purifyText(rawText: string, options: PurifyOptions): string {
     if (options.reSegmentEnabled) {
       text = reSegment(text, options.chapterTitle)
       const leadingNewlines = getCachedRegex('^\\n+')
-      if (leadingNewlines) text = text.replace(leadingNewlines, '')
+      if (leadingNewlines) {
+        leadingNewlines.lastIndex = 0
+        text = text.replace(leadingNewlines, '')
+      }
     }
     if (options.purifyEnabled) {
+      const jsFn = options.jsReplacementFn ?? null
       for (const rule of options.rules) {
         if (!rule.isEnabled || !rule.pattern) continue
         if (!rule.scopeContent && rule.scopeTitle) continue
@@ -643,8 +670,7 @@ export function purifyText(rawText: string, options: PurifyOptions): string {
           pattern: rule.pattern,
           replacement: rule.replacement || '',
           isRegex: rule.isRegex,
-          timeoutMs: rule.timeoutMillisecond || REPLACE_TIMEOUT_DEFAULT,
-        })
+        }, jsFn)
         if (newText) text = newText
       }
     }
@@ -663,7 +689,13 @@ export function textToHtml(text: string): string {
   const doubleNewlines = getCachedRegex('\\n\\n', 'g')
   const singleNewlines = getCachedRegex('\\n', 'g')
   let result = '<p>' + text
-  if (doubleNewlines) result = result.replace(doubleNewlines, '</p><p>')
-  if (singleNewlines) result = result.replace(singleNewlines, '<br>')
+  if (doubleNewlines) {
+    doubleNewlines.lastIndex = 0
+    result = result.replace(doubleNewlines, '</p><p>')
+  }
+  if (singleNewlines) {
+    singleNewlines.lastIndex = 0
+    result = result.replace(singleNewlines, '<br>')
+  }
   return result + '</p>'
 }

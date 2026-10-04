@@ -5,6 +5,7 @@ import { READER } from '@/constants/reader.js'
 
 const TODAY_KEY = 'todayReadDate'
 const TODAY_COUNT_KEY = 'todayReadCount'
+const DEFAULT_THEME = 'dark'
 
 function getTodayStr(): string {
   return new Date().toISOString().slice(0, 10)
@@ -59,7 +60,7 @@ function isBookSettingsMap(value: unknown): value is Record<string, Record<strin
 }
 
 export const useReaderStore = defineStore('reader', () => {
-  const readerTheme = ref<string>(READER.FONT_SIZE_DEFAULT !== undefined ? 'dark' : 'dark')
+  const readerTheme = ref<string>(DEFAULT_THEME)
   const fontSize = ref<number>(READER.FONT_SIZE_DEFAULT)
   const lineHeight = ref<number>(READER.LINE_HEIGHT_DEFAULT)
   const chineseConverterType = ref<number>(0)

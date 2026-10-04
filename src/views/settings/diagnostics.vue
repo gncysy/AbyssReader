@@ -4,7 +4,7 @@
     <div class="diag-toolbar"><span class="diag-count">{{ diagnostics.length }} 条诊断记录</span><div style="display:flex;gap:8px"><button class="btn-secondary" style="padding:4px 12px;font-size:12px" @click="copyAll">复制全部</button><button class="btn-secondary" style="padding:4px 12px;font-size:12px" @click="clearAll">清空</button></div></div>
     <EmptyState v-if="diagnostics.length === 0" title="暂无诊断记录" description="打开漫画章节或执行书源 JS 规则后自动收集" />
     <div v-else class="diag-list">
-      <div v-for="(diag, idx) in pagedDiagnostics" :key="diag.id" class="diag-card" :class="{ 'diag-error': diag.type === 'error' }">
+      <div v-for="diag in pagedDiagnostics" :key="diag.id" class="diag-card" :class="{ 'diag-error': diag.type === 'error' }">
         <div class="diag-header"><span class="diag-tag">{{ diag.tag || '未知' }}</span><span class="diag-time">{{ diag.timestamp }}</span><span v-if="diag.type === 'error'" class="diag-badge diag-badge-error">错误</span><span v-else class="diag-badge diag-badge-ok">正常</span></div>
         <div class="diag-url" :title="diag.sourceUrl">{{ diag.sourceUrl || '-' }}</div>
         <div class="diag-fields">

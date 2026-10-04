@@ -3,7 +3,7 @@
     <header class="subpage-header"><BackButton /><h2>订阅源调试</h2><span v-if="source" class="source-name-badge">{{ source.sourceName }}</span><div style="flex:1"></div><button class="btn-secondary" style="padding:4px 12px;font-size:12px" @click="showHtmlModal = true">查看 HTML</button><button class="btn-secondary" style="padding:4px 12px;font-size:12px" @click="clearLogs">清空日志</button></header>
     <div class="debug-toolbar">
       <div class="toolbar-left">
-        <CustomDropdown v-model="selectedSortIndex" :options="sortOptions" placeholder="选择分类..." style="min-width:150px" @update:modelValue="onSortChange" />
+        <CustomDropdown v-model="selectedSortIndex" :options="sortOptions" placeholder="选择分类..." style="min-width:150px" @update:model-value="onSortChange" />
         <input v-model="searchInput" type="text" placeholder="输入关键词或 URL..." class="input-search" style="width:280px" @keyup.enter="runDebug" />
         <button class="btn-primary" :disabled="running" @click="runDebug">{{ running ? '执行中...' : '调试' }}</button>
       </div>
@@ -11,7 +11,7 @@
     <div v-if="status" class="status-bar" :class="status.type">{{ status.message }}</div>
     <div class="log-container">
       <div class="log-header"><span>日志 ({{ filteredLogs.length }})</span><span style="font-size:11px;color:var(--text-muted)">{{ running ? '● 运行中' : '○ 就绪' }}</span></div>
-      <div class="log-list" ref="logListRef">
+      <div ref="logListRef" class="log-list">
         <div v-for="(log, idx) in filteredLogs" :key="idx" class="log-entry" :class="'log-' + log.level"><span class="log-time">{{ log.time }}</span><span class="log-module">{{ log.module }}</span><span class="log-message">{{ log.message }}</span></div>
         <div v-if="filteredLogs.length === 0" class="log-empty">暂无日志，点击"调试"开始</div>
       </div>

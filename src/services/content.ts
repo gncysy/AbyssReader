@@ -3,11 +3,14 @@
 // ============================================
 
 import { analyzeUrl } from '@engine/url/index.js'
-import { logInfo, logError } from '@engine/log/index.js'
+import { logInfo, logError, logWarn } from '@engine/log/index.js'
 import { parseContentPage, injectImageStyle } from '@engine/business/content/fetcher-parser.js'
+import type { RuleEvaluator } from '@engine/business/book/index.js'
+import { getString, getStringList, getElements } from '@engine/parser/index.js'
+import { getJsRuntime } from '@engine/parser/js-executor.js'
 import { shouldExecuteInDeno, evaluateRule } from './rule-evaluator.js'
 import { fetchWithWebviewFallback } from './fetch.js'
-import CryptoJS from 'crypto-js'
+import { aesDecrypt } from '@engine/crypto/index.js'
 import { engine } from './engine.js'
 import type { BookSource } from '@/types'
 import type { EngineBookSource, EngineBook, EngineChapter } from '@engine/types.js'
@@ -19,11 +22,19 @@ const BASE64_LENGTH_THRESHOLD = 2000
 const AES_MIN_LENGTH_RATIO = 0.3
 const HEX_MAX_LENGTH = 500
 const HEX_MIN_NEWLINE_COUNT = 1
-const AES_KEY_LENGTH = 16
 const INVALID_RESULT_MIN_LENGTH = 100
+const DEBUG_PARAMS_PREVIEW_LENGTH = 200
 
 function toEngineBookSource(source: BookSource): EngineBookSource {
   return source as unknown as EngineBookSource
+}
+
+function createRuleEvaluator(): RuleEvaluator {
+  return {
+    getString: (content, rule, ctx) => getString(content, rule, ctx),
+    getStringList: (content, rule, ctx) => getStringList(content, rule, ctx),
+    getElements: (content, rule, ctx) => getElements(content, rule, ctx),
+  }
 }
 
 async function resolveChapterUrl(
@@ -79,29 +90,39 @@ function getDecryptKey(source: BookSource): string | null {
 async function decryptJsonFromHtml(html: string, source: BookSource): Promise<string> {
   const decryptKey = getDecryptKey(source)
   if (!decryptKey) {
-    logError('reader', 'frontend', '[正文] fallback: 书源未配置 decryptKey')
+    logWarn('reader', 'frontend', '[正文] fallback: 书源未配置 decryptKey')
     return ''
   }
 
   try {
     const paramsMatch = html.match(/params = '([^']+)'/)
     if (!paramsMatch || !paramsMatch[1]) {
-      logError('reader', 'frontend', '[正文] fallback: 未能从 HTML 中提取 params')
+      logWarn('reader', 'frontend', '[正文] fallback: 未能从 HTML 中提取 params')
       return ''
     }
     const params = paramsMatch[1]
 
-    const encryptedDataWithIV = CryptoJS.enc.Base64.parse(params)
-    const iv = CryptoJS.lib.WordArray.create(encryptedDataWithIV.words.slice(0, 16))
-    const encryptedBytes = encryptedDataWithIV.words.slice(4)
-    const encryptedHex = CryptoJS.enc.Hex.stringify(CryptoJS.lib.WordArray.create(encryptedBytes))
-    const keyUtf8 = CryptoJS.enc.Utf8.parse(decryptKey)
-    const decrypted = CryptoJS.AES.decrypt(
-      { ciphertext: CryptoJS.enc.Hex.parse(encryptedHex) } as unknown as CryptoJS.lib.CipherParams,
-      keyUtf8,
-      { iv: iv }
-    )
-    const decryptedText = decrypted.toString(CryptoJS.enc.Utf8)
+    logInfo('reader', 'frontend', `[正文] fallback params 长度=${params.length} 前缀=${params.substring(0, DEBUG_PARAMS_PREVIEW_LENGTH)}`)
+
+    let binary: string
+    try {
+      binary = atob(params)
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e)
+      logError('reader', 'frontend', `[正文] fallback params base64 解码失败: ${msg}`)
+      return ''
+    }
+    const bytes = new Uint8Array(binary.length)
+    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i)
+    if (bytes.length <= 16) {
+      logError('reader', 'frontend', `[正文] fallback params 解码后长度不足: ${bytes.length}`)
+      return ''
+    }
+    const iv = bytes.slice(0, 16)
+    const ciphertext = bytes.slice(16)
+    const ivB64 = btoa(String.fromCharCode(...iv))
+    const cipherB64 = btoa(String.fromCharCode(...ciphertext))
+    const decryptedText = aesDecrypt(cipherB64, decryptKey, 'CBC', ivB64)
 
     if (!decryptedText || decryptedText.length < 10) {
       logError('reader', 'frontend', '[正文] fallback: 解密结果为空')
@@ -115,8 +136,9 @@ async function decryptJsonFromHtml(html: string, source: BookSource): Promise<st
         logInfo('reader', 'frontend', `[正文] fallback JSON 解密成功: ${(parsed.chapter_images as string[]).length} 张图片`)
         return images
       }
-    } catch {
-      // 不是合法 JSON，继续尝试其他方式
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e)
+      logWarn('reader', 'frontend', `[正文] fallback 解密结果不是合法 JSON: ${msg}`)
     }
 
     logError('reader', 'frontend', '[正文] fallback: 无法从解密结果中提取图片列表')
@@ -137,7 +159,6 @@ async function executeBodyJs(
   nextChapterUrl: string | null | undefined,
 ): Promise<string> {
   try {
-    const { getJsRuntime } = await import('@engine/parser/js-executor.js')
     const runtime = getJsRuntime()
     if (!runtime) return responseBody
 
@@ -174,7 +195,6 @@ async function executeHeaderRule(source: BookSource): Promise<Record<string, str
   try {
     const headerStr = source.header
     if (headerStr.startsWith('@js:') || headerStr.startsWith('<js>')) {
-      const { getJsRuntime } = await import('@engine/parser/js-executor.js')
       const runtime = getJsRuntime()
       if (runtime) {
         const result = await runtime.execute(headerStr, {
@@ -189,8 +209,9 @@ async function executeHeaderRule(source: BookSource): Promise<Record<string, str
             for (const [key, value] of Object.entries(parsed)) {
               if (value !== null && value !== undefined) headers[key] = String(value)
             }
-          } catch {
-            // ignore
+          } catch (e: unknown) {
+            const msg = e instanceof Error ? e.message : String(e)
+            logWarn('reader', 'frontend', `[正文] header JS 返回非 JSON: ${msg}`)
           }
         }
       }
@@ -200,8 +221,9 @@ async function executeHeaderRule(source: BookSource): Promise<Record<string, str
         for (const [key, value] of Object.entries(parsed)) {
           if (value !== null && value !== undefined) headers[key] = String(value)
         }
-      } catch {
-        // ignore
+      } catch (e: unknown) {
+        const msg = e instanceof Error ? e.message : String(e)
+        logWarn('reader', 'frontend', `[正文] header 字符串非 JSON: ${msg}`)
       }
     }
   } catch (e: unknown) {
@@ -290,7 +312,7 @@ async function fetchAndDecryptPage(
           jsExecuted = true
 
           if (decrypted.startsWith('<img src="') && decrypted.length < INVALID_RESULT_MIN_LENGTH) {
-            logError('reader', 'frontend', `[正文] JS 解密结果异常(${decrypted.length}字符)，触发 fallback`)
+            logWarn('reader', 'frontend', `[正文] JS 解密结果异常(${decrypted.length}字符)，触发 fallback`)
             const fallbackHtml = await decryptJsonFromHtml(processedHtml, source)
             if (fallbackHtml) decrypted = fallbackHtml
           } else if (decrypted.length > 10 && decrypted.includes('<img')) {
@@ -318,24 +340,6 @@ async function fetchAndDecryptPage(
       }
     }
 
-    if (decrypted.length < BASE64_LENGTH_THRESHOLD && /^[A-Za-z0-9+/=\s]+$/.test(decrypted.trim())) {
-      try {
-        const keyStr = (source.bookSourceUrl || '').padEnd(AES_KEY_LENGTH, '0').substring(0, AES_KEY_LENGTH)
-        const key = CryptoJS.enc.Utf8.parse(keyStr)
-        const aesDecrypted = CryptoJS.AES.decrypt(decrypted.trim(), key, {
-          mode: CryptoJS.mode.ECB,
-          padding: CryptoJS.pad.Pkcs7,
-        })
-        const decryptedStr = aesDecrypted.toString(CryptoJS.enc.Utf8)
-        if (decryptedStr && decryptedStr.length > decrypted.length * AES_MIN_LENGTH_RATIO) {
-          decrypted = decryptedStr
-          logInfo('reader', 'frontend', '[正文] AES/ECB 解密成功')
-        }
-      } catch {
-        // ignore
-      }
-    }
-
     if (decrypted.length < HEX_MAX_LENGTH && /^[0-9a-fA-F\s]+$/.test(decrypted.trim())) {
       try {
         const hex = decrypted.replace(/\s/g, '')
@@ -346,8 +350,22 @@ async function fetchAndDecryptPage(
           decrypted = decoded
           logInfo('reader', 'frontend', '[正文] Hex 解密成功')
         }
-      } catch {
-        // ignore
+      } catch (e: unknown) {
+        const msg = e instanceof Error ? e.message : String(e)
+        logWarn('reader', 'frontend', `[正文] Hex 解密失败: ${msg}`)
+      }
+    }
+
+    if (decrypted.length < BASE64_LENGTH_THRESHOLD && /^[A-Za-z0-9+/=\s]+$/.test(decrypted.trim())) {
+      try {
+        const decryptedStr = aesDecrypt(decrypted.trim(), source.bookSourceUrl || '', 'ECB')
+        if (decryptedStr && decryptedStr.length > decrypted.length * AES_MIN_LENGTH_RATIO) {
+          decrypted = decryptedStr
+          logInfo('reader', 'frontend', '[正文] AES/ECB 解密成功')
+        }
+      } catch (e: unknown) {
+        const msg = e instanceof Error ? e.message : String(e)
+        logWarn('reader', 'frontend', `[正文] AES/ECB 解密失败: ${msg}`)
       }
     }
 
@@ -419,6 +437,7 @@ export async function getContent(
   const chapter = options.chapter || { url: chapterUrl }
   const nextChapterUrl = options.nextChapterUrl || ''
   const isComic = source.bookSourceType === 2
+  const evaluator = createRuleEvaluator()
 
   let resolvedUrl = chapterUrl
   const chRecord = chapter as Record<string, unknown>
@@ -453,7 +472,8 @@ export async function getContent(
       chapter as Partial<EngineChapter>,
       engineSource,
       nextChapterUrl,
-      true
+      true,
+      evaluator
     )
     if (pageContent && pageContent.trim()) contentList.push(pageContent.trim())
     nextUrlSet.add(firstPage.redirectUrl)
@@ -475,13 +495,14 @@ export async function getContent(
           const { content: npc } = await parseContentPage(
             book as Partial<EngineBook>, nextUrl, nextPage.redirectUrl, nextPage.html,
             ruleObj as Parameters<typeof parseContentPage>[4],
-            chapter as Partial<EngineChapter>, engineSource, nextChapterUrl, nextUrls.length > 1
+            chapter as Partial<EngineChapter>, engineSource, nextChapterUrl, nextUrls.length > 1,
+            evaluator
           )
           return npc && npc.trim() ? npc.trim() : null
         },
         MAX_CONCURRENT_PAGES
       )
-      for (const r of pageResults) { if (r) contentList.push(r) }
+      for (const r of pageResults) contentList.push(r)
     }
 
     let contentStr = contentList.join('\n')
@@ -499,12 +520,14 @@ export async function getContent(
             } else {
               contentStr = contentStr.replace(new RegExp(pattern, 'g'), replacement)
             }
-          } catch {
-            // ignore
+          } catch (e: unknown) {
+            const msg = e instanceof Error ? e.message : String(e)
+            logWarn('reader', 'frontend', `[正文] replaceRegex 失败: ${msg}`)
           }
         }
-      } catch {
-        // ignore
+      } catch (e: unknown) {
+        const msg = e instanceof Error ? e.message : String(e)
+        logWarn('reader', 'frontend', `[正文] replaceRegex 拆分失败: ${msg}`)
       }
     }
 

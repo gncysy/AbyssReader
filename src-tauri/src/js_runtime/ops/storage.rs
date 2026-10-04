@@ -31,9 +31,6 @@ fn get_or_create_encryption_key() -> [u8; KEYRING_KEY_LENGTH] {
     let entry = match keyring::Entry::new(KEYRING_SERVICE, KEYRING_USERNAME) {
         Ok(e) => e,
         Err(_) => {
-            // 修复：keyring 不可用时使用随机密钥，而不是可预测的主机名
-            // 随机密钥仅在当前进程内有效，重启后 cookie 解密会失败
-            // 但这是比使用可预测密钥更安全的选择
             use rand::RngCore;
             let mut key = [0u8; KEYRING_KEY_LENGTH];
             rand::rngs::OsRng.fill_bytes(&mut key);
@@ -191,7 +188,6 @@ pub fn set_cookie_internal(url: &str, cookie_str: &str) {
 #[op2]
 #[string]
 pub fn op_java_put(#[string] source_key: String, #[string] key: String, #[string] value: String) -> String {
-    // 修复：限制 value 大小，防止恶意书源导致内存耗尽
     if value.len() > MAX_STORAGE_VALUE_LENGTH {
         let truncated = &value[..MAX_STORAGE_VALUE_LENGTH];
         STORAGE.lock().entry(source_key).or_default().insert(key, truncated.to_string());
@@ -210,6 +206,26 @@ pub fn op_java_get(#[string] source_key: String, #[string] key: String) -> Strin
         .and_then(|m| m.get(&key))
         .cloned()
         .unwrap_or_default()
+}
+
+/// 新增：删除某个 key。
+#[op2]
+#[string]
+pub fn op_java_remove(#[string] source_key: String, #[string] key: String) -> String {
+    let mut store = STORAGE.lock();
+    if let Some(map) = store.get_mut(&source_key) {
+        map.remove(&key);
+    }
+    "true".into()
+}
+
+/// 新增：清空某个 source_key 下的所有存储。
+#[op2]
+#[string]
+pub fn op_java_clear_source_storage(#[string] source_key: String) -> String {
+    let mut store = STORAGE.lock();
+    store.remove(&source_key);
+    "true".into()
 }
 
 #[op2]
@@ -269,8 +285,30 @@ pub fn op_java_login_complete(#[string] url: String, #[string] cookie_str: Strin
     format!("ok, saved {} cookies", domain)
 }
 
+/// 对齐 Legado：java.upLoginData(data)。
+/// data 是 JSON 字符串或空字符串。
+/// 前端监听 `login-data-update` 事件消费。
 #[op2(fast)]
-pub fn op_java_up_login_data(#[string] _info: String) {}
+pub fn op_java_up_login_data(#[string] info: String) {
+    if let Some(handle) = crate::js_runtime::ops::get_app_handle() {
+        let _ = handle.emit(
+            "login-data-update",
+            serde_json::json!({ "info": info }),
+        );
+    }
+}
+
+/// 对齐 Legado：java.reLoginView(deltaUp)。
+/// 前端监听 `re-login-view` 事件消费。
+#[op2(fast)]
+pub fn op_java_re_login_view(delta_up: bool) {
+    if let Some(handle) = crate::js_runtime::ops::get_app_handle() {
+        let _ = handle.emit(
+            "re-login-view",
+            serde_json::json!({ "deltaUp": delta_up }),
+        );
+    }
+}
 
 #[op2(fast)]
 pub fn op_java_refresh_explore() {
@@ -289,6 +327,22 @@ pub fn op_java_refresh_book_info() {
 #[op2(fast)]
 pub fn op_java_emit_log(#[string] level: String, #[string] msg: String) {
     crate::js_runtime::ops::emit_log(&level, &msg);
+}
+
+#[op2(fast)]
+pub fn op_java_toast(#[string] msg: String, is_long: bool) {
+    let level = if is_long { "error" } else { "warn" };
+    crate::js_runtime::ops::emit_log(level, &msg);
+
+    if let Some(handle) = crate::js_runtime::ops::get_app_handle() {
+        let _ = handle.emit(
+            "java-toast",
+            serde_json::json!({
+                "message": msg,
+                "isLong": is_long
+            }),
+        );
+    }
 }
 
 #[op2(fast)]
@@ -312,7 +366,6 @@ pub fn op_java_start_browser_await(#[string] url: String, #[string] _title: Stri
 #[op2]
 #[string]
 pub fn op_java_time_format(#[bigint] timestamp: i64) -> String {
-    // 修复：13 位时间戳按毫秒处理，其他按秒处理
     let ts_sec = if timestamp > 99_999_999_999 { timestamp / 1000 } else { timestamp };
     chrono::DateTime::from_timestamp(ts_sec, 0)
         .map(|dt| dt.format("%Y-%m-%d %H:%M:%S").to_string())

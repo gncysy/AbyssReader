@@ -1,6 +1,6 @@
 <template>
   <Teleport to="body">
-    <div v-if="visible" class="photo-overlay" @click="close">
+    <div v-if="visible" v-no-drag class="photo-overlay" @click="close">
       <img :src="src" class="photo-img" @click.stop />
       <button class="photo-close" @click="close">✕</button>
     </div>

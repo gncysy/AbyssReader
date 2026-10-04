@@ -2,7 +2,7 @@
 // CSS 选择器工具函数单元测试
 // ============================================
 
-import { describe, it, expect, beforeAll } from 'vitest'
+import { describe, it, expect, beforeAll as _beforeAll } from 'vitest'
 import { normalizeCssSelector } from '../../../../../engine/parser/dom/css.js'
 
 // 注意：elementsSingle / getResultList / getElementsRecursive 依赖 DomProvider，

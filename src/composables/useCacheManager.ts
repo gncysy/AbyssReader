@@ -2,7 +2,7 @@
 // useCacheManager — 缓存管理逻辑（从 settings/data.vue 提取）
 // ============================================
 
-import { ref, computed, onMounted } from 'vue'
+import { ref, onMounted } from 'vue'
 import { useMessage } from 'naive-ui'
 import { cache } from '@/services/cache.js'
 import { CACHE } from '@/constants/index.js'

@@ -1,6 +1,95 @@
 use crate::error::Result;
 use crate::js_runtime::runtime;
 use crate::commands::JsExecutionResponse;
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct LoginJsContext {
+    pub source: serde_json::Value,
+    #[serde(default)]
+    pub result: serde_json::Value,
+    #[serde(default)]
+    pub book: serde_json::Value,
+    #[serde(default)]
+    pub chapter: serde_json::Value,
+    #[serde(default)]
+    pub is_long_click: bool,
+    #[serde(default)]
+    pub base_url: String,
+}
+
+#[tauri::command]
+pub async fn execute_login_js(
+    code: String,
+    context: serde_json::Value,
+    timeout_ms: Option<u64>,
+) -> Result<JsExecutionResponse> {
+    let timeout_ms = timeout_ms.unwrap_or(60000);
+
+    let source = context.get("source").cloned().unwrap_or(serde_json::Value::Null);
+    let result = context.get("result").cloned().unwrap_or(serde_json::Value::Null);
+    let book = context.get("book").cloned().unwrap_or(serde_json::Value::Null);
+    let chapter = context.get("chapter").cloned().unwrap_or(serde_json::Value::Null);
+    let is_long_click = context
+        .get("isLongClick")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    let base_url = context
+        .get("baseUrl")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+
+    let mut sandbox_context = serde_json::json!({
+        "source": source,
+        "result": result,
+        "book": book,
+        "chapter": chapter,
+        "isLongClick": is_long_click,
+        "baseUrl": base_url,
+    });
+
+    let ua = crate::storage::store_get("userAgent").unwrap_or_default();
+    let ua = if let Some(ref u) = ua {
+        if u.is_empty() {
+            crate::utils::DEFAULT_MOBILE_UA
+        } else {
+            u.as_str()
+        }
+    } else {
+        crate::utils::DEFAULT_MOBILE_UA
+    };
+    crate::js_runtime::ops::set_global_ua(ua.to_string());
+    if let Some(obj) = sandbox_context.as_object_mut() {
+        obj.insert("userAgent".into(), serde_json::Value::String(ua.to_string()));
+    }
+
+    let context_json = serde_json::to_string(&sandbox_context).unwrap_or_else(|_| "{}".into());
+
+    let timeout_result = tokio::time::timeout(
+        std::time::Duration::from_millis(timeout_ms),
+        async { runtime::execute(&code, &context_json) },
+    )
+    .await;
+
+    match timeout_result {
+        Ok(Ok(result)) => Ok(JsExecutionResponse {
+            success: true,
+            result,
+            error: None,
+        }),
+        Ok(Err(e)) => Ok(JsExecutionResponse {
+            success: false,
+            result: String::new(),
+            error: Some(e),
+        }),
+        Err(_) => Ok(JsExecutionResponse {
+            success: false,
+            result: String::new(),
+            error: Some(format!("登录 JS 执行超时（超过 {}ms）", timeout_ms)),
+        }),
+    }
+}
 
 #[tauri::command]
 pub async fn source_login(source: serde_json::Value) -> Result<JsExecutionResponse> {
@@ -103,7 +192,6 @@ pub async fn source_login_action(source: serde_json::Value, action: String) -> R
     });
     let ctx_json = serde_json::to_string(&ctx).unwrap_or_default();
 
-    // 分别执行 jsLib、loginUrl JS、loginUi JS
     if !js_lib.is_empty() {
         let _ = runtime::execute(js_lib, "{}");
     }
@@ -116,7 +204,6 @@ pub async fn source_login_action(source: serde_json::Value, action: String) -> R
         let _ = runtime::execute(&code, &ctx_json);
     }
 
-    // 执行 action
     let action_code = action
         .trim_start()
         .strip_prefix("@js:")

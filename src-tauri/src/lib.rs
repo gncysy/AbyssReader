@@ -29,6 +29,7 @@ pub fn run() {
             commands::test_book_source, commands::test_all_sources,
             commands::get_explore_categories, commands::execute_js_rule, commands::dict_query,
             commands::source_login, commands::source_login_ui, commands::source_login_action,
+            commands::execute_login_js,
             commands::fetch_url, commands::fetch_webview, commands::download_binary, commands::proxy_image,
             commands::login_webview, commands::rss_open_url,
             commands::embedded_webview_action,

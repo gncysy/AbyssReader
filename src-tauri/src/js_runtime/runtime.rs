@@ -8,6 +8,9 @@ use serde_json::Value;
 const POLYFILL_CORE: &str = include_str!("polyfills/core.js");
 const POLYFILL_NET: &str = include_str!("polyfills/net.js");
 const POLYFILL_DOM: &str = include_str!("polyfills/dom.js");
+const POLYFILL_BIGINT: &str = include_str!("polyfills/bigint.js");
+const POLYFILL_SM3: &str = include_str!("polyfills/sm3.js");
+const POLYFILL_PACKAGES: &str = include_str!("polyfills/packages.js");
 
 const MAX_JS_LIBS: usize = 50;
 
@@ -34,7 +37,7 @@ fn return_runtime(rt: JsRuntime) {
 fn discard_runtime() {
     RUNTIME_SLOT.with(|slot| {
         *slot.borrow_mut() = None;
-    });
+    })
 }
 
 pub fn create_fresh_runtime() -> JsRuntime {
@@ -49,13 +52,17 @@ pub fn create_fresh_runtime() -> JsRuntime {
         .expect("polyfill_net.js 加载失败");
     rt.execute_script("polyfill_dom.js", POLYFILL_DOM)
         .expect("polyfill_dom.js 加载失败");
+    rt.execute_script("polyfill_bigint.js", POLYFILL_BIGINT)
+        .expect("polyfill_bigint.js 加载失败");
+    rt.execute_script("polyfill_sm3.js", POLYFILL_SM3)
+        .expect("polyfill_sm3.js 加载失败");
+    rt.execute_script("polyfill_packages.js", POLYFILL_PACKAGES)
+        .expect("polyfill_packages.js 加载失败");
 
     super::ops::load_cookies_from_file();
     rt
 }
 
-/// 获取 'static 生命周期的脚本名。
-/// 同名脚本只泄漏一次，泄漏总量受 MAX_JS_LIBS 限制。
 fn get_static_script_name(name: &str) -> &'static str {
     let mut guard = LEAKED_SCRIPT_NAMES.lock().unwrap();
     let map = guard.get_or_insert_with(HashMap::new);
@@ -69,7 +76,26 @@ fn get_static_script_name(name: &str) -> &'static str {
 
 fn load_js_libs(rt: &mut JsRuntime, source: &Value) -> Result<(), String> {
     if let Some(js_lib_str) = source.get("jsLib").and_then(|v| v.as_str()) {
-        if let Ok(libs) = serde_json::from_str::<std::collections::HashMap<String, String>>(js_lib_str) {
+        let trimmed = js_lib_str.trim();
+        if trimmed.is_empty() {
+            return Ok(());
+        }
+
+        let parsed_map: Option<HashMap<String, String>> =
+            serde_json::from_str(trimmed).ok();
+
+        let is_url_map = parsed_map
+            .as_ref()
+            .map(|m| {
+                !m.is_empty()
+                    && m.values().all(|v| {
+                        v.starts_with("http://") || v.starts_with("https://")
+                    })
+            })
+            .unwrap_or(false);
+
+        if is_url_map {
+            let libs = parsed_map.unwrap();
             if libs.len() > MAX_JS_LIBS {
                 eprintln!("[jsLib] 过多 JS 库: {}，跳过", libs.len());
                 return Ok(());
@@ -82,13 +108,7 @@ fn load_js_libs(rt: &mut JsRuntime, source: &Value) -> Result<(), String> {
                 .join(&cache_key);
 
                 let content = if cache_path.exists() {
-                    match std::fs::read_to_string(&cache_path) {
-                        Ok(data) => data,
-                        Err(e) => {
-                            eprintln!("[jsLib] 读取缓存失败 {}: {}", url, e);
-                            continue;
-                        }
-                    }
+                    std::fs::read_to_string(&cache_path).unwrap_or_default()
                 } else {
                     match crate::network::http::execute_http_request_blocking(
                         &url, "GET", None, None, None, 30,
@@ -110,6 +130,17 @@ fn load_js_libs(rt: &mut JsRuntime, source: &Value) -> Result<(), String> {
                     if let Err(e) = rt.execute_script(static_name, content) {
                         eprintln!("[jsLib] 执行失败 {}: {}", name, e);
                     }
+                }
+            }
+        } else {
+            let script_name = format!("jslib_inline_{:x}", md5::compute(trimmed.as_bytes()));
+            let static_name = get_static_script_name(&script_name);
+            match rt.execute_script(static_name, trimmed.to_string()) {
+                Ok(_) => {
+                    eprintln!("[jsLib] 内联 JS 执行成功 ({} 字符)", trimmed.len());
+                }
+                Err(e) => {
+                    eprintln!("[jsLib] 内联 JS 执行失败: {}", e);
                 }
             }
         }
@@ -159,8 +190,27 @@ pub fn execute(code: &str, context_json: &str) -> Result<String, String> {
 }
 
 /// 将用户代码包装在 IIFE 中。
-/// 使用 eval 获取 completion value（最后一个表达式的值），
-/// 对齐 Legado Rhino 引擎行为——支持 if 块内最后表达式、多语句等。
+///
+/// 修复（本轮）：书源代码里常见
+/// `var result = "undefined" != typeof result && result ? result : {};`
+/// 这类"保留外部注入值"的写法。
+///
+/// V8 的 sloppy 直接 eval 里，`var result` 声明提升会遮蔽外层注入的 `result`，
+/// 导致书源读到空对象。对齐 Rhino 语义：`var x` 不遮蔽已有绑定。
+///
+/// 解决方案：
+/// - 用间接 eval `(0, eval)(code)`，在全局作用域执行用户代码
+/// - `setup_wrapper` 里的 `var result` 等已在全局作用域声明，
+///   间接 eval 的 `var result` 不重新声明全局已有属性，
+///   赋值操作更新全局 `result`，保留注入值
+/// - 间接 eval 的"最后表达式"语义保留
+///
+/// 已知边界：
+/// - 间接 eval 里定义的用户函数会挂到全局（如 `fqAutoRegister`）。
+///   每个书源执行时会重新定义，行为一致。
+///   不同书源同名函数会互相覆盖，但每次执行都重新定义自己的，可接受。
+/// - `setup_wrapper` 与 `wrap_user_code` 之间通过全局变量传递上下文，
+///   全局残留会在下次 `setup_wrapper` 执行时被覆盖。
 fn wrap_user_code(code: &str) -> String {
     let code_json = serde_json::to_string(code).unwrap_or_else(|_| "\"\"".into());
     format!(
@@ -168,13 +218,37 @@ fn wrap_user_code(code: &str) -> String {
 (function() {{
     var __execResult;
     try {{
-        __execResult = eval({code_json});
+        __execResult = (0, eval)({code_json});
     }} catch (e) {{
-        return {{
-            __error: true,
-            __message: e.message || String(e),
-            __stack: (e.stack || '').substring(0, 2000)
-        }};
+        try {{
+            return JSON.stringify({{
+                __error: true,
+                __message: e && e.message ? e.message : String(e),
+                __stack: (e && e.stack ? e.stack : '').substring(0, 2000)
+            }});
+        }} catch (e2) {{
+            return '{{"__error":true,"__message":"' + String(e && e.message ? e.message : e).replace(/"/g, '\\"') + '"}}';
+        }}
+    }}
+    if (__execResult && typeof __execResult.then === 'function') {{
+        __execResult = undefined;
+    }}
+    if (__execResult === null || __execResult === undefined) {{
+        return undefined;
+    }}
+    if (Array.isArray(__execResult)) {{
+        try {{
+            return JSON.stringify(__execResult);
+        }} catch (e) {{
+            return undefined;
+        }}
+    }}
+    if (typeof __execResult === 'object') {{
+        try {{
+            return JSON.stringify(__execResult);
+        }} catch (e) {{
+            return undefined;
+        }}
     }}
     return __execResult;
 }})()
@@ -198,84 +272,111 @@ fn execute_impl(rt: &mut JsRuntime, code: &str, context_json: &str) -> Result<St
         return Err(format!("注入上下文失败: {}", e));
     }
 
+    // 修复：把注入变量声明到全局作用域（用 globalThis.xxx = 而不是 var xxx），
+    // 这样间接 eval 里的 `var result` 不会重新声明，而是赋值到已有的全局属性。
+    //
+    // 如果使用 `var result = ...`，在 Deno Core 的 execute_script 里可能仍被包在
+    // 隐式作用域内（实现差异），导致间接 eval 看不到。用 globalThis 显式声明最稳。
     let setup_wrapper = r#"
-var D = globalThis.__sandbox_data || {};
-var result = D.result || '';
-var src = D.src || result;
-var source = D.source || {};
-var baseUrl = D.baseUrl || source.bookSourceUrl || source.key || '';
-var key = D.key || '';
-var page = D.page || 1;
-var book = D.book || {};
-var chapter = D.chapter || {};
-var title = D.title || chapter.title || '';
-var nextChapterUrl = D.nextChapterUrl || '';
+(function() {
+    var D = globalThis.__sandbox_data || {};
 
-var _sourceUrl = source.bookSourceUrl || source.key || '';
-if (typeof source.key === 'undefined' || source.key === null || source.key === '') {
-    source.key = _sourceUrl;
-}
-if (typeof source.getKey !== 'function') {
-    source.getKey = function() { return _sourceUrl; };
-}
-if (typeof source.getTag !== 'function') {
-    source.getTag = function() { return source.bookSourceName || source.sourceName || source.name || ''; };
-}
-if (typeof source.getSource !== 'function') {
-    source.getSource = function() { return source; };
-}
-if (typeof source.put !== 'function') {
-    source.put = function(k, v) { return java.put('source_' + _sourceUrl + '_' + String(k), String(v)); };
-}
-if (typeof source.get !== 'function') {
-    source.get = function(k) { return java.get('source_' + _sourceUrl + '_' + String(k)); };
-}
-if (typeof source.setVariable !== 'function') {
-    source.setVariable = function(v) { return java.put('source_' + _sourceUrl + '__variable', String(v)); };
-}
-if (typeof source.getVariable !== 'function') {
-    source.getVariable = function(k) {
-        if (k === undefined) {
-            return java.get('source_' + _sourceUrl + '__variable');
-        }
-        return java.get('source_' + _sourceUrl + '_' + String(k));
-    };
-}
-if (typeof source.putVariable !== 'function') {
-    source.putVariable = function(k, v) { return java.put('source_' + _sourceUrl + '_' + String(k), String(v)); };
-}
-if (typeof source.getLoginHeader !== 'function') {
-    source.getLoginHeader = function() { return java.get('loginHeader_' + _sourceUrl); };
-}
-if (typeof source.putLoginHeader !== 'function') {
-    source.putLoginHeader = function(h) { return java.put('loginHeader_' + _sourceUrl, String(h)); };
-}
-if (typeof source.getLoginInfo !== 'function') {
-    source.getLoginInfo = function() { return java.get('userInfo_' + _sourceUrl); };
-}
-if (typeof source.putLoginInfo !== 'function') {
-    source.putLoginInfo = function(i) { return java.put('userInfo_' + _sourceUrl, String(i)); };
-}
-if (typeof source.putConcurrent !== 'function') {
-    source.putConcurrent = function(v) { return java.put('concurrent_' + _sourceUrl, String(v)); };
-}
+    globalThis.result = D.result || '';
+    globalThis.src = D.src || globalThis.result;
+    globalThis.source = D.source || {};
+    globalThis.baseUrl = D.baseUrl || globalThis.source.bookSourceUrl || globalThis.source.key || '';
+    globalThis.key = D.key || '';
+    globalThis.page = D.page || 1;
+    globalThis.book = D.book || {};
+    globalThis.chapter = D.chapter || {};
+    globalThis.title = D.title || globalThis.chapter.title || '';
+    globalThis.nextChapterUrl = D.nextChapterUrl || '';
+    globalThis.isLongClick = D.isLongClick || false;
 
-var _bookUrl = book.bookUrl || '';
-if (typeof book.setReverseToc !== 'function') {
-    book.setReverseToc = function(v) { java.put('book_' + _bookUrl + '__reverseToc', v ? '1' : '0'); };
-}
-if (typeof book.putVariable !== 'function') {
-    book.putVariable = function(k, v) { java.put('book_' + _bookUrl + '__' + k, String(v)); };
-}
-if (typeof book.getVariable !== 'function') {
-    book.getVariable = function(k) { return java.get('book_' + _bookUrl + '__' + k); };
-}
-
-try {
-    if (typeof globalThis.__loadJsLib === 'function') {
-        globalThis.__loadJsLib(source, globalThis.java);
+    var source = globalThis.source;
+    var _sourceUrl = source.bookSourceUrl || source.key || '';
+    if (typeof source.key === 'undefined' || source.key === null || source.key === '') {
+        source.key = _sourceUrl;
     }
-} catch (e) {}
+    if (typeof source.getKey !== 'function') {
+        source.getKey = function() { return _sourceUrl; };
+    }
+    if (typeof source.getTag !== 'function') {
+        source.getTag = function() { return source.bookSourceName || source.sourceName || source.name || ''; };
+    }
+    if (typeof source.getSource !== 'function') {
+        source.getSource = function() { return source; };
+    }
+    if (typeof source.put !== 'function') {
+        source.put = function(k, v) { return java.put('source_' + _sourceUrl + '_' + String(k), String(v)); };
+    }
+    if (typeof source.get !== 'function') {
+        source.get = function(k) { return java.get('source_' + _sourceUrl + '_' + String(k)); };
+    }
+    if (typeof source.setVariable !== 'function') {
+        source.setVariable = function(v) { return java.put('source_' + _sourceUrl + '__variable', String(v)); };
+    }
+    if (typeof source.getVariable !== 'function') {
+        source.getVariable = function(k) {
+            if (k === undefined) {
+                return java.get('source_' + _sourceUrl + '__variable');
+            }
+            return java.get('source_' + _sourceUrl + '_' + String(k));
+        };
+    }
+    if (typeof source.putVariable !== 'function') {
+        source.putVariable = function(k, v) { return java.put('source_' + _sourceUrl + '_' + String(k), String(v)); };
+    }
+    if (typeof source.removeVariable !== 'function') {
+        source.removeVariable = function(k) { return java.remove('source_' + _sourceUrl + '_' + String(k)); };
+    }
+    if (typeof source.getLoginHeader !== 'function') {
+        source.getLoginHeader = function() { return java.get('loginHeader_' + _sourceUrl); };
+    }
+    if (typeof source.putLoginHeader !== 'function') {
+        source.putLoginHeader = function(h) { return java.put('loginHeader_' + _sourceUrl, String(h)); };
+    }
+    if (typeof source.removeLoginHeader !== 'function') {
+        source.removeLoginHeader = function() { return java.remove('loginHeader_' + _sourceUrl); };
+    }
+    if (typeof source.getLoginInfo !== 'function') {
+        source.getLoginInfo = function() { return java.get('userInfo_' + _sourceUrl); };
+    }
+    if (typeof source.putLoginInfo !== 'function') {
+        source.putLoginInfo = function(i) { return java.put('userInfo_' + _sourceUrl, String(i)); };
+    }
+    if (typeof source.removeLoginInfo !== 'function') {
+        source.removeLoginInfo = function() { return java.remove('userInfo_' + _sourceUrl); };
+    }
+    if (typeof source.getLoginInfoMap !== 'function') {
+        source.getLoginInfoMap = function() {
+            var v = java.get('userInfo_' + _sourceUrl);
+            if (!v) return {};
+            try { return JSON.parse(v.replace(/^#/, '')); } catch(e) { return {}; }
+        };
+    }
+    if (typeof source.putConcurrent !== 'function') {
+        source.putConcurrent = function(v) { return java.put('concurrent_' + _sourceUrl, String(v)); };
+    }
+
+    var book = globalThis.book;
+    var _bookUrl = book.bookUrl || '';
+    if (typeof book.setReverseToc !== 'function') {
+        book.setReverseToc = function(v) { java.put('book_' + _bookUrl + '__reverseToc', v ? '1' : '0'); };
+    }
+    if (typeof book.putVariable !== 'function') {
+        book.putVariable = function(k, v) { java.put('book_' + _bookUrl + '__' + k, String(v)); };
+    }
+    if (typeof book.getVariable !== 'function') {
+        book.getVariable = function(k) { return java.get('book_' + _bookUrl + '__' + k); };
+    }
+
+    try {
+        if (typeof globalThis.__loadJsLib === 'function') {
+            globalThis.__loadJsLib(source, globalThis.java);
+        }
+    } catch (e) {}
+})();
 "#;
 
     if let Err(e) = rt.execute_script("setup_vars", setup_wrapper) {
@@ -296,6 +397,10 @@ try {
 
             if let Some(s) = local.to_string(&context_scope) {
                 let result_str = s.to_rust_string_lossy(&context_scope);
+
+                if result_str == "[object Promise]" {
+                    return Ok(String::new());
+                }
 
                 if result_str.starts_with("{\"__error\":true") {
                     let diag_msg = format!("DIAG|error|{}", result_str);

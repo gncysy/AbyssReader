@@ -47,7 +47,6 @@ export interface RssSource {
   type?: number | undefined
   lastUpdateTime?: number | undefined
   searchUrl?: string | null | undefined
-  [key: string]: unknown
 }
 
 export interface RssArticle {

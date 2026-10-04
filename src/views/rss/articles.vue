@@ -4,7 +4,6 @@
       <BackButton />
       <h2>{{ source?.sourceName || '订阅源' }}</h2>
     </header>
-    <template>
       <div v-if="sortTabs.length > 1" class="sort-tabs">
         <button v-for="tab in sortTabs" :key="tab.name" class="sort-tab" :class="{ active: activeSortName === tab.name }" @click="switchSort(tab)">{{ tab.name }}</button>
       </div>
@@ -17,7 +16,6 @@
       <div v-if="hasNextPage && !loading" style="text-align:center;padding:16px"><button class="btn-secondary" :disabled="loadingMore" @click="loadNextPage">{{ loadingMore ? '加载中...' : '加载更多' }}</button></div>
       <div v-if="loading" style="display:flex;justify-content:center;padding:60px"><LoadingSpinner /></div>
       <EmptyState v-if="!loading && articles.length === 0" title="暂无文章" />
-    </template>
   </div>
 </template>
 

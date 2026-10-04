@@ -1,12 +1,12 @@
 <template>
   <div
+    v-show="visible"
     ref="thumbRef"
     class="scroll-thumb"
     :style="thumbStyle"
     @mousedown="onMouseDown"
     @mouseenter="onMouseEnter"
     @mouseleave="onMouseLeave"
-    v-show="visible"
   ></div>
 </template>
 

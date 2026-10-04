@@ -8,10 +8,10 @@
           <span v-if="selectedIndex >= 0" class="header-source-badge">{{ sourceOptions.find(o => o.value === selectedIndex)?.label || '' }}</span>
         </div>
         <div class="header-actions">
-          <button class="header-btn" @click="openEditor" :disabled="selectedIndex < 0" title="编辑书源">
+          <button class="header-btn" :disabled="selectedIndex < 0" title="编辑书源" @click="openEditor">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
           </button>
-          <button class="header-btn header-btn-close" @click="closePanel" aria-label="关闭">
+          <button class="header-btn header-btn-close" aria-label="关闭" @click="closePanel">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
           </button>
         </div>
@@ -36,7 +36,7 @@
       <template v-else>
         <div class="debug-body">
           <div class="debug-toolbar">
-            <CustomDropdown v-model="selectedIndex" :options="sourceOptions" placeholder="选择书源..." @update:modelValue="(v: string | number) => onSourceChange(Number(v))" style="min-width:180px" />
+            <CustomDropdown v-model="selectedIndex" :options="sourceOptions" placeholder="选择书源..." style="min-width:180px" @update:model-value="(v: string | number) => onSourceChange(Number(v))" />
             <div class="debug-tabs">
               <button v-for="tab in tabs" :key="tab.key" class="debug-tab" :class="{ active: activeTab === tab.key }" @click="activeTab = tab.key">{{ tab.label }}</button>
             </div>
@@ -47,7 +47,7 @@
               <input v-model="flowKeyword" type="text" placeholder="输入关键词..." class="debug-input" @keyup.enter="runFlow" />
               <button class="btn-primary" :disabled="flowRunning" @click="runFlow">{{ flowRunning ? '执行中...' : '搜索' }}</button>
             </div>
-            <div class="flow-log-container" ref="flowLogListRef">
+            <div ref="flowLogListRef" class="flow-log-container">
               <div v-for="(entry, idx) in flowEntries" :key="idx" class="flow-entry">
                 <div v-if="entry.type === 'text'" class="flow-log-text" :class="'log-' + (entry.level || 'info')">
                   <span class="log-time">{{ entry.time }}</span>
@@ -109,7 +109,7 @@
                 <button class="btn-secondary" @click="clearLogs">清空</button>
               </div>
             </div>
-            <div class="log-list" ref="generalLogListRef">
+            <div ref="generalLogListRef" class="log-list">
               <div v-for="(log, idx) in filteredLogs" :key="idx" class="log-entry" :class="'log-' + log.level"><span class="log-time">{{ log.time }}</span><span class="log-module">{{ log.module }}</span><span class="log-source">{{ log.source }}</span><span class="log-message">{{ log.message }}</span></div>
             </div>
           </div>
@@ -165,26 +165,46 @@ const flowKeyword = ref('')
 const flowRunning = ref(false)
 const flowEntries = ref<FlowEntry[]>([])
 
+// 修复：批量滚动调度，避免 nextTick 队列爆满
+let scrollScheduled = false
+function scheduleScroll(elRef: { value: HTMLElement | null }): void {
+  if (scrollScheduled) return
+  scrollScheduled = true
+  nextTick(() => {
+    scrollScheduled = false
+    if (elRef.value) elRef.value.scrollTop = elRef.value.scrollHeight
+  })
+}
+
 function addFlowText(level: string, message: string): void {
   const now = new Date()
   const time = now.toTimeString().slice(0, 8)
   flowEntries.value.push({ type: 'text', level, time, module: 'flow', message })
   if (flowEntries.value.length > MAX_FLOW_ENTRIES) {
-    flowEntries.value.splice(0, flowEntries.value.length - MAX_FLOW_ENTRIES)
+    const excess = flowEntries.value.length - MAX_FLOW_ENTRIES
+    if (excess > 50) flowEntries.value.splice(0, excess)
+    else for (let i = 0; i < excess; i++) flowEntries.value.shift()
   }
-  nextTick(() => { if (flowLogListRef.value) flowLogListRef.value.scrollTop = flowLogListRef.value.scrollHeight })
+  scheduleScroll(flowLogListRef)
 }
 
 function addFlowCard(step: string, title: string, htmlContent: string): void {
   flowEntries.value.push({ type: 'card', step, title, content: htmlContent })
   if (flowEntries.value.length > MAX_FLOW_ENTRIES) {
-    flowEntries.value.splice(0, flowEntries.value.length - MAX_FLOW_ENTRIES)
+    const excess = flowEntries.value.length - MAX_FLOW_ENTRIES
+    if (excess > 50) flowEntries.value.splice(0, excess)
+    else for (let i = 0; i < excess; i++) flowEntries.value.shift()
   }
-  nextTick(() => { if (flowLogListRef.value) flowLogListRef.value.scrollTop = flowLogListRef.value.scrollHeight })
+  scheduleScroll(flowLogListRef)
 }
 
 function escapeHtml(str: string): string {
-  return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;')
 }
 
 const jsCode = ref('')
@@ -354,11 +374,12 @@ async function runFlow(): Promise<void> {
   }
 }
 
-// 修复：使用 push + 手动截断，避免每次展开数组
 function pushLog(entry: LogEntry): void {
   allLogs.value.push(entry)
   if (allLogs.value.length > MAX_LOGS) {
-    allLogs.value.splice(0, allLogs.value.length - MAX_LOGS)
+    const excess = allLogs.value.length - MAX_LOGS
+    if (excess > 50) allLogs.value.splice(0, excess)
+    else for (let i = 0; i < excess; i++) allLogs.value.shift()
   }
 }
 
@@ -451,8 +472,11 @@ const logHandler = (entry: LogEntry) => {
   if (activeTab.value === 'flow') {
     flowEntries.value.push({ type: 'text', level: entry.level, time: entry.time, module: entry.module, message: entry.message })
     if (flowEntries.value.length > MAX_FLOW_ENTRIES) {
-      flowEntries.value.splice(0, flowEntries.value.length - MAX_FLOW_ENTRIES)
+      const excess = flowEntries.value.length - MAX_FLOW_ENTRIES
+      if (excess > 50) flowEntries.value.splice(0, excess)
+      else for (let i = 0; i < excess; i++) flowEntries.value.shift()
     }
+    scheduleScroll(flowLogListRef)
   }
 }
 let unsubscribe: (() => void) | null = null

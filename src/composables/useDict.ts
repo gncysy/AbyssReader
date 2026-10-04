@@ -2,7 +2,7 @@
 // useDict — 字典查询逻辑（错误结果不缓存）
 // ============================================
 
-import { ref } from 'vue'
+import { ref, reactive } from 'vue'
 import { store } from '@/services/store.js'
 import { queryDict as queryDictService } from '@/services/dict.js'
 import type { DictRule } from '@/types/dict.js'
@@ -26,8 +26,8 @@ export function useDict() {
   const dictRules = ref<DictRule[]>([])
   const dictActiveTab = ref(0)
   const dictLoading = ref(false)
-  const dictContents = ref<Record<number, string>>({})
-  // 记录哪些结果是成功缓存的
+  // 修复：用 reactive 替代 ref<Record>，通过逐键赋值触发响应式
+  const dictContents = reactive<Record<number, string>>({})
   const dictCachedTabs = ref<Set<number>>(new Set())
   const selectedText = ref('')
 
@@ -53,9 +53,9 @@ export function useDict() {
         selectedText.value || '',
         DICT_QUERY_TIMEOUT,
       )
-      // 检查是否为错误结果
       const isError = result.startsWith('<p>查询失败') || result.startsWith('<p>获取页面内容失败') || result.startsWith('<p>未匹配到内容')
-      dictContents.value[i] = result
+      // 修复：逐键赋值，reactive 会正确触发
+      dictContents[i] = result
       if (!isError) {
         const next = new Set(dictCachedTabs.value)
         next.add(i)
@@ -63,8 +63,7 @@ export function useDict() {
       }
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : String(e)
-      dictContents.value[i] = '<p>查询失败: ' + msg + '</p>'
-      // 错误结果不缓存
+      dictContents[i] = '<p>查询失败: ' + msg + '</p>'
       const next = new Set(dictCachedTabs.value)
       next.delete(i)
       dictCachedTabs.value = next
@@ -77,7 +76,10 @@ export function useDict() {
     selectedText.value = text
     loadDictRules().then(() => {
       dictActiveTab.value = 0
-      dictContents.value = {}
+      // 清空 reactive 对象的所有键
+      for (const key of Object.keys(dictContents)) {
+        delete dictContents[Number(key)]
+      }
       dictCachedTabs.value = new Set()
       dictVisible.value = true
       if (dictRules.value.length > 0) queryDictRule(0)
@@ -86,7 +88,6 @@ export function useDict() {
 
   function switchDictTab(i: number): void {
     dictActiveTab.value = i
-    // 只有成功缓存的结果才跳过重新查询
     if (dictCachedTabs.value.has(i)) return
     queryDictRule(i)
   }

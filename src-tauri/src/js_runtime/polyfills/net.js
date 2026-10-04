@@ -2,12 +2,12 @@
 // polyfill_net — ajax, cookie（对齐 Legado）
 // ============================================
 (function() {
-    var j = globalThis.java;
+    const j = globalThis.java;
 
     function parseAjaxResponse(raw) {
         try {
             if (typeof raw === 'string' && raw.trim().startsWith('{') && raw.trim().endsWith('}')) {
-                var parsed = JSON.parse(raw);
+                const parsed = JSON.parse(raw);
                 if (parsed && typeof parsed === 'object' && 'body' in parsed) {
                     return parsed;
                 }
@@ -17,16 +17,16 @@
     }
 
     function makeResponse(raw, originalUrl) {
-        var parsed = parseAjaxResponse(raw);
+        const parsed = parseAjaxResponse(raw);
 
-        var responseObj = {
+        const responseObj = {
             _raw: raw,
             _parsed: parsed,
             headers: function(name) {
-                var h = parsed.headers || {};
+                const h = parsed.headers || {};
                 if (name) {
-                    var lower = String(name).toLowerCase();
-                    for (var k in h) {
+                    const lower = String(name).toLowerCase();
+                    for (const k in h) {
                         if (k.toLowerCase() === lower) return h[k];
                     }
                     return '';
@@ -34,10 +34,10 @@
                 return h;
             },
             header: function(name) {
-                var h = parsed.headers || {};
+                const h = parsed.headers || {};
                 if (name) {
-                    var lower = String(name).toLowerCase();
-                    for (var k in h) {
+                    const lower = String(name).toLowerCase();
+                    for (const k in h) {
                         if (k.toLowerCase() === lower) return h[k];
                     }
                     return null;
@@ -53,10 +53,10 @@
                 return {
                     body: function() { return parsed.body || ''; },
                     headers: function(name) {
-                        var h = parsed.headers || {};
+                        const h = parsed.headers || {};
                         if (name) {
-                            var lower = String(name).toLowerCase();
-                            for (var k in h) {
+                            const lower = String(name).toLowerCase();
+                            for (const k in h) {
                                 if (k.toLowerCase() === lower) return h[k];
                             }
                             return '';
@@ -64,10 +64,10 @@
                         return h;
                     },
                     header: function(name) {
-                        var h = parsed.headers || {};
+                        const h = parsed.headers || {};
                         if (name) {
-                            var lower = String(name).toLowerCase();
-                            for (var k in h) {
+                            const lower = String(name).toLowerCase();
+                            for (const k in h) {
                                 if (k.toLowerCase() === lower) return h[k];
                             }
                             return null;
@@ -85,28 +85,28 @@
     }
 
     j.ajax = function(url, callTimeout) {
-        var urlStr = Array.isArray(url) ? String(url[0]) : String(url);
+        let urlStr = Array.isArray(url) ? String(url[0]) : String(url);
         if (!/^https?:\/\//i.test(urlStr)) {
             return "";
         }
 
-        var hasOptions = urlStr.indexOf(',{') !== -1;
+        const hasOptions = urlStr.indexOf(',{') !== -1;
 
         if (!hasOptions) {
-            var autoHeaders = {};
-            var source = globalThis.__sandbox_data && globalThis.__sandbox_data.source;
+            const autoHeaders = {};
+            const source = globalThis.__sandbox_data && globalThis.__sandbox_data.source;
             if (source && source.header) {
-                var headerStr = source.header;
+                const headerStr = source.header;
                 if (typeof headerStr === 'string') {
                     try {
                         if (headerStr.startsWith('@js:') || headerStr.startsWith('<js>')) {
-                            var jsCode = headerStr.replace(/^@js:\s*/, '').replace(/^<js>/, '').replace(/<\/js>$/, '');
-                            var fn = new Function('source', 'baseUrl', 'result', 'java', 'cookie', jsCode);
-                            var hResult = fn(source, source.bookSourceUrl || '', '', j, globalThis.cookie);
-                            var parsedH = JSON.parse(hResult);
+                            const jsCode = headerStr.replace(/^@js:\s*/, '').replace(/^<js>/, '').replace(/<\/js>$/, '');
+                            const fn = new Function('source', 'baseUrl', 'result', 'java', 'cookie', jsCode);
+                            const hResult = fn(source, source.bookSourceUrl || '', '', j, globalThis.cookie);
+                            const parsedH = JSON.parse(hResult);
                             if (parsedH && typeof parsedH === 'object') Object.assign(autoHeaders, parsedH);
                         } else {
-                            var parsedH2 = JSON.parse(headerStr.replace(/'/g, '"'));
+                            const parsedH2 = JSON.parse(headerStr.replace(/'/g, '"'));
                             if (parsedH2 && typeof parsedH2 === 'object') Object.assign(autoHeaders, parsedH2);
                         }
                     } catch(e) {}
@@ -114,8 +114,8 @@
             }
 
             try {
-                var baseUrl = source ? (source.bookSourceUrl || '') : '';
-                var cookieStr = globalThis.cookie ? globalThis.cookie.getCookie(baseUrl, '') : '';
+                const baseUrl = source ? (source.bookSourceUrl || '') : '';
+                const cookieStr = globalThis.cookie ? globalThis.cookie.getCookie(baseUrl, '') : '';
                 if (cookieStr && !autoHeaders['Cookie']) autoHeaders['Cookie'] = cookieStr;
             } catch(e) {}
 
@@ -124,16 +124,16 @@
 
             if (callTimeout) autoHeaders['_callTimeout'] = String(callTimeout);
 
-            var optionObj = { headers: autoHeaders };
+            const optionObj = { headers: autoHeaders };
             urlStr = urlStr + ',' + JSON.stringify(optionObj);
         }
 
-        var rawResult = Deno.core.ops.op_java_ajax(urlStr);
-        var respObj = makeResponse(rawResult, urlStr);
-        var body = respObj.body();
+        const rawResult = Deno.core.ops.op_java_ajax(urlStr);
+        const respObj = makeResponse(rawResult, urlStr);
+        const body = respObj.body();
 
         try {
-            var setCookieHeader = respObj.headers('Set-Cookie') || respObj.headers('set-cookie');
+            const setCookieHeader = respObj.headers('Set-Cookie') || respObj.headers('set-cookie');
             if (setCookieHeader) {
                 globalThis.cookie.setCookie(urlStr, setCookieHeader);
             }
@@ -144,9 +144,9 @@
     };
 
     j.ajaxAll = function(urlList) {
-        var urls = Array.isArray(urlList) ? urlList : [urlList];
-        var results = [];
-        for (var i = 0; i < urls.length; i++) results.push(j.ajax(urls[i]));
+        const urls = Array.isArray(urlList) ? urlList : [urlList];
+        const results = [];
+        for (let i = 0; i < urls.length; i++) results.push(j.ajax(urls[i]));
         return results;
     };
 
@@ -155,18 +155,18 @@
     };
 
     j.connect = function(urlStr, header, callTimeout) {
-        var h = {};
+        let h = {};
         if (header && typeof header === 'string') {
-            try { var parsed = JSON.parse(header.replace(/'/g, '"')); if (parsed) h = parsed; } catch(e) {}
+            try { const parsed = JSON.parse(header.replace(/'/g, '"')); if (parsed) h = parsed; } catch(e) {}
         } else if (header && typeof header === 'object') {
             h = header;
         }
-        var url = String(urlStr);
+        let url = String(urlStr);
         if (Object.keys(h).length > 0) {
-            var optionObj = { headers: h };
+            const optionObj = { headers: h };
             url = url + ',' + JSON.stringify(optionObj);
         }
-        var raw = Deno.core.ops.op_java_ajax(url);
+        const raw = Deno.core.ops.op_java_ajax(url);
         return makeResponse(raw, urlStr);
     };
 
@@ -174,30 +174,30 @@
         if (arguments.length === 1 && !/^https?:\/\//i.test(String(urlStr))) {
             return Deno.core.ops.op_java_get("default", String(urlStr));
         }
-        var h = headers || {};
-        var url = String(urlStr);
+        const h = headers || {};
+        let url = String(urlStr);
         if (Object.keys(h).length > 0) {
-            var optionObj = { headers: h };
+            const optionObj = { headers: h };
             url = url + ',' + JSON.stringify(optionObj);
         }
-        var raw = Deno.core.ops.op_java_ajax(url);
+        const raw = Deno.core.ops.op_java_ajax(url);
         return makeResponse(raw, urlStr);
     };
 
     j.post = function(urlStr, body, headers, timeout) {
-        var h = headers || {};
-        var bodyStr = typeof body === 'string' ? body : JSON.stringify(body);
-        var optionObj = { method: "POST", body: bodyStr, headers: h };
-        var url = String(urlStr) + ',' + JSON.stringify(optionObj);
-        var raw = Deno.core.ops.op_java_ajax(url);
+        const h = headers || {};
+        const bodyStr = typeof body === 'string' ? body : JSON.stringify(body);
+        const optionObj = { method: "POST", body: bodyStr, headers: h };
+        const url = String(urlStr) + ',' + JSON.stringify(optionObj);
+        const raw = Deno.core.ops.op_java_ajax(url);
         return makeResponse(raw, urlStr);
     };
 
     j.head = function(urlStr, headers, timeout) {
-        var h = headers || {};
-        var optionObj = { method: "HEAD", headers: h };
-        var url = String(urlStr) + ',' + JSON.stringify(optionObj);
-        var raw = Deno.core.ops.op_java_ajax(url);
+        const h = headers || {};
+        const optionObj = { method: "HEAD", headers: h };
+        const url = String(urlStr) + ',' + JSON.stringify(optionObj);
+        const raw = Deno.core.ops.op_java_ajax(url);
         return makeResponse(raw, urlStr);
     };
 
@@ -223,7 +223,7 @@
     j.putLoginHeader = function(h) { Deno.core.ops.op_java_put('default', 'loginHeader', String(h)); };
     j.getLoginHeader = function() { return Deno.core.ops.op_java_get('default', 'loginHeader'); };
     j.getLoginInfoMap = function() {
-        var v = Deno.core.ops.op_java_get('default', 'loginHeader');
+        const v = Deno.core.ops.op_java_get('default', 'loginHeader');
         if (!v) return {};
         try { return JSON.parse(v.replace(/^#/, '')); } catch(e) { return {}; }
     };
@@ -242,10 +242,10 @@
     };
 
     globalThis.JavaImporter = function() {
-        var args = arguments;
+        const args = arguments;
         return {
             get: function(target, name) {
-                for (var i = 0; i < args.length; i++) {
+                for (let i = 0; i < args.length; i++) {
                     if (args[i][name] !== undefined) return args[i][name];
                 }
                 return undefined;

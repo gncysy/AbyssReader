@@ -19,34 +19,98 @@ function isComicFetchResult(value: unknown): value is ComicFetchResult {
   return typeof obj.url === 'string'
 }
 
-/**
- * 拆分漫画图片 URL 中的 ,{...} 选项。
- * 例如：https://img.example.com/1.jpg,{"headers":{"Referer":"https://example.com/"}}
- * 返回干净 URL 和额外 headers。
- */
-function parseImageUrl(url: string): { cleanUrl: string; extraHeaders: Record<string, string> } {
+interface ParsedImageUrl {
+  cleanUrl: string
+  extraHeaders: Record<string, string>
+}
+
+const parsedUrlCache = new Map<string, ParsedImageUrl>()
+const PARSED_CACHE_MAX = 500
+
+function parseImageUrl(url: string): ParsedImageUrl {
+  const cached = parsedUrlCache.get(url)
+  if (cached) return cached
+
   const commaIdx = url.indexOf(',{')
-  if (commaIdx === -1) return { cleanUrl: url, extraHeaders: {} }
-  const cleanUrl = url.substring(0, commaIdx)
-  const optionsStr = url.substring(commaIdx + 1)
-  try {
-    const options = JSON.parse(optionsStr) as Record<string, unknown>
-    const headers = (options.headers as Record<string, string>) || {}
-    return { cleanUrl, extraHeaders: headers }
-  } catch {
-    return { cleanUrl, extraHeaders: {} }
+  let result: ParsedImageUrl
+  if (commaIdx === -1) {
+    result = { cleanUrl: url, extraHeaders: {} }
+  } else {
+    const cleanUrl = url.substring(0, commaIdx)
+    const optionsStr = url.substring(commaIdx + 1)
+    try {
+      const options = JSON.parse(optionsStr) as Record<string, unknown>
+      const headers = (options.headers as Record<string, string>) || {}
+      result = { cleanUrl, extraHeaders: headers }
+    } catch {
+      result = { cleanUrl, extraHeaders: {} }
+    }
   }
+
+  if (parsedUrlCache.size >= PARSED_CACHE_MAX) {
+    const firstKey = parsedUrlCache.keys().next().value
+    if (firstKey !== undefined) parsedUrlCache.delete(firstKey)
+  }
+  parsedUrlCache.set(url, result)
+  return result
 }
 
 /**
- * 合并 headers：额外 headers 优先
+ * 解析 header 字段。
+ * 书源的 header 可能是字符串（JSON 编码）或对象。
+ */
+function parseHeaderValue(headerVal: unknown): Record<string, string> {
+  if (!headerVal) return {}
+  if (typeof headerVal === 'object' && !Array.isArray(headerVal)) {
+    const result: Record<string, string> = {}
+    for (const [k, v] of Object.entries(headerVal as Record<string, unknown>)) {
+      if (v !== null && v !== undefined) result[k] = String(v)
+    }
+    return result
+  }
+  if (typeof headerVal === 'string') {
+    try {
+      const parsed = JSON.parse(headerVal) as Record<string, unknown>
+      const result: Record<string, string> = {}
+      for (const [k, v] of Object.entries(parsed)) {
+        if (v !== null && v !== undefined) result[k] = String(v)
+      }
+      return result
+    } catch {
+      try {
+        const parsed = JSON.parse(headerVal.replace(/'/g, '"')) as Record<string, unknown>
+        const result: Record<string, string> = {}
+        for (const [k, v] of Object.entries(parsed)) {
+          if (v !== null && v !== undefined) result[k] = String(v)
+        }
+        return result
+      } catch {
+        return {}
+      }
+    }
+  }
+  return {}
+}
+
+/**
+ * 合并 source JSON 与额外 headers。
+ * 修复：原实现把 source.header（字符串）当对象展开，导致 header 被破坏。
+ * 现在先解析 header 字符串，再合并。
  */
 function mergeSourceJson(sourceJson: string, extraHeaders: Record<string, string>): string {
   if (Object.keys(extraHeaders).length === 0) return sourceJson
   try {
     const source = JSON.parse(sourceJson) as Record<string, unknown>
-    const existingHeaders = (source.header as Record<string, string>) || {}
-    source.header = { ...existingHeaders, ...extraHeaders }
+    // 解析现有 header（可能是字符串或对象）
+    const existingHeaders = parseHeaderValue(source.header)
+    // 合并
+    const mergedHeaders: Record<string, string> = { ...existingHeaders }
+    for (const [k, v] of Object.entries(extraHeaders)) {
+      // 额外 headers 优先
+      mergedHeaders[k] = v
+    }
+    // 写回为对象（Rust 端 build_headers 支持对象和字符串两种格式）
+    source.header = mergedHeaders
     return JSON.stringify(source)
   } catch {
     return sourceJson
@@ -54,7 +118,6 @@ function mergeSourceJson(sourceJson: string, extraHeaders: Record<string, string
 }
 
 export async function proxyCover(url: string, sourceJson: string): Promise<string> {
-  // 拆分 URL 中的 headers 选项
   const { cleanUrl, extraHeaders } = parseImageUrl(url)
   const mergedSource = mergeSourceJson(sourceJson, extraHeaders)
 
@@ -62,6 +125,7 @@ export async function proxyCover(url: string, sourceJson: string): Promise<strin
     const result = await invoke('proxy_image', { url: cleanUrl, sourceJson: mergedSource })
     return typeof result === 'string' ? result : cleanUrl
   } catch {
+    // 兜底：直接 fetch（不带 headers，可能失败）
     try {
       const response = await fetch(cleanUrl, { mode: 'no-cors' })
       if (response.ok) {
@@ -86,7 +150,6 @@ export async function loadSingleImage(
   sourceJson: string,
   comicId: string,
 ): Promise<void> {
-  // 拆分 URL 中的 headers 选项
   const { cleanUrl, extraHeaders } = parseImageUrl(item.url)
   const mergedSource = mergeSourceJson(sourceJson, extraHeaders)
 

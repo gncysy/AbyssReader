@@ -3,9 +3,10 @@
     <SkeletonCard v-for="i in skeletonCount" :key="i" />
   </div>
   <div v-else-if="books.length > 0" class="books-grid">
+    <!-- 修复：用 bookUrl 做 key，避免书籍重排时复用错误 DOM -->
     <BookCard
-      v-for="(book, idx) in books"
-      :key="book.bookUrl || idx"
+      v-for="book in books"
+      :key="book.bookUrl || book.name || Math.random().toString(36)"
       :book="book"
       @click="$emit('click-book', book)"
       @contextmenu="$emit('contextmenu-book', book, $event)"
@@ -28,6 +29,8 @@ defineEmits<{
   'click-book': [book: Book]
   'contextmenu-book': [book: Book, event: MouseEvent]
 }>()
+
+void props
 </script>
 
 <style scoped>

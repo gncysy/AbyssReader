@@ -12,7 +12,11 @@
     "test": "vitest",
     "test:ui": "vitest --ui",
     "test:coverage": "vitest --coverage",
-    "test:watch": "vitest --watch"
+    "test:watch": "vitest --watch",
+    "lint": "eslint . --ext .ts,.tsx,.vue,.js,.cjs --report-unused-disable-directives",
+    "lint:fix": "eslint . --ext .ts,.tsx,.vue,.js,.cjs --fix",
+    "format": "prettier --write \"src/**/*.{ts,vue,json,css,scss,html}\" \"engine/**/*.ts\"",
+    "format:check": "prettier --check \"src/**/*.{ts,vue,json,css,scss,html}\" \"engine/**/*.ts\""
   },
   "dependencies": {
     "@tauri-apps/api": "^2.0.0",
@@ -39,14 +43,21 @@
     "@tauri-apps/cli": "^2.0.0",
     "@types/crypto-js": "^4.2.0",
     "@types/tough-cookie": "^4.0.5",
+    "@typescript-eslint/eslint-plugin": "^7.18.0",
+    "@typescript-eslint/parser": "^7.18.0",
     "@vitejs/plugin-vue": "^5.0.0",
     "@vitest/ui": "^4.1.10",
     "autoprefixer": "^10.4.0",
+    "eslint": "^8.57.1",
+    "eslint-config-prettier": "^9.1.2",
+    "eslint-plugin-vue": "^9.33.0",
     "postcss": "^8.4.0",
+    "prettier": "^3.9.9",
     "tailwindcss": "^3.4.0",
     "typescript": "^5.3.0",
     "vite": "^6.0.0",
     "vitest": "^4.1.10",
+    "vue-eslint-parser": "^9.4.3",
     "vue-tsc": "^2.0.0"
   }
 }

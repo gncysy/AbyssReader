@@ -2,8 +2,9 @@
 // useSearch — 搜索状态管理（流式输出）
 // ============================================
 
-import { ref } from 'vue'
+import { ref, triggerRef } from 'vue'
 import { search } from '@/services/search.js'
+import { logError } from '@engine/log/index.js'
 import type { Book, BookSource } from '@/types'
 import { NETWORK } from '@/constants/index.js'
 
@@ -21,11 +22,12 @@ export function useSearch() {
   const totalSources = ref(0)
   const searchResults = ref<Record<string, Book[]>>({})
 
+  // 修复：每次 doSearch 开始时重建 controller，
+  // 保证 signal 与当次搜索绑定，cancelSearch 能正确终止
   let abortController: AbortController = new AbortController()
 
   function cancelSearch(): void {
     abortController.abort()
-    abortController = new AbortController()
     loading.value = false
   }
 
@@ -35,6 +37,9 @@ export function useSearch() {
     options: DoSearchOptions = {},
   ): Promise<Book[]> {
     const concurrency = options.concurrency || NETWORK.CONCURRENCY
+
+    // 修复：每次搜索重建 controller，旧 signal 与旧搜索绑定
+    abortController = new AbortController()
     const signal = abortController.signal
 
     const enabledSources = sources.filter((s) => s.enabled !== false)
@@ -62,32 +67,34 @@ export function useSearch() {
           if (options.filter !== undefined && options.filter !== null) searchOptions.filter = options.filter
           if (options.shouldBreak !== undefined && options.shouldBreak !== null) searchOptions.shouldBreak = options.shouldBreak
           books = await search(source, keyword, searchOptions)
-        } catch {
-          // 单个书源失败，静默跳过
+        } catch (e: unknown) {
+          const msg = e instanceof Error ? e.message : String(e)
+          logError('search', 'frontend', `[搜索] ${source.bookSourceName || ''} 失败: ${msg}`)
         }
 
         if (!signal.aborted) {
           if (books.length > 0) {
             const displayName = source.bookSourceName || source.bookSourceUrl || '未知书源'
 
-            const existing = searchResults.value[displayName] || []
-            const existingUrls = new Set(existing.map(b => b.bookUrl))
-            const newBooks = books.filter(b => !existingUrls.has(b.bookUrl))
-            searchResults.value = {
-              ...searchResults.value,
-              [displayName]: [...existing, ...newBooks],
+            const bucket = searchResults.value[displayName]
+            const existingUrls = new Set((bucket || []).map((b) => b.bookUrl))
+            const newBooks = books.filter((b) => !existingUrls.has(b.bookUrl))
+            if (bucket) {
+              bucket.push(...newBooks)
+            } else {
+              searchResults.value[displayName] = [...newBooks]
             }
 
             for (const b of books) {
-              ;(b as unknown as Record<string, unknown>)._sourceKey = sourceKey
+              b._sourceKey = sourceKey
             }
 
             allBooks.push(...books)
+            triggerRef(searchResults)
           }
 
           completedCount.value++
 
-          // 修复：实时回调进度
           if (options.onProgress) {
             options.onProgress(completedCount.value, enabledSources.length)
           }

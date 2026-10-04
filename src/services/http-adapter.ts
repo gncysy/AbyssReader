@@ -27,6 +27,18 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
 }
 
+interface FetchUrlResponse {
+  status: number
+  body: string
+  headers: Record<string, string>
+  url: string
+}
+
+function isFetchUrlResponse(value: unknown): value is FetchUrlResponse {
+  if (!isRecord(value)) return false
+  return typeof value.status === 'number' && typeof value.body === 'string'
+}
+
 export const tauriHttpAdapter: HttpClientAdapter = {
   async request(config: RequestConfig): Promise<ResponseData> {
     const { invoke } = await import('@tauri-apps/api/core')
@@ -34,8 +46,10 @@ export const tauriHttpAdapter: HttpClientAdapter = {
       ? (typeof config.body === 'string' ? config.body : JSON.stringify(config.body))
       : null
 
+    const startTime = Date.now()
+
     try {
-      const data = await invoke('fetch_url', {
+      const data: unknown = await invoke('fetch_url', {
         url: config.url,
         method: config.method || 'GET',
         body: bodyStr,
@@ -48,12 +62,36 @@ export const tauriHttpAdapter: HttpClientAdapter = {
         preserveStyle: false,
       })
 
+      const duration = Date.now() - startTime
+
+      // 修复：解析结构化结果，不再硬编码 status: 200
+      if (isFetchUrlResponse(data)) {
+        return {
+          status: data.status,
+          data: data.body,
+          headers: data.headers || {},
+          url: data.url || config.url,
+          duration,
+        }
+      }
+
+      // 兼容：若后端返回字符串（不该发生，但兜底）
+      if (typeof data === 'string') {
+        return {
+          status: 200,
+          data,
+          headers: {},
+          url: config.url,
+          duration,
+        }
+      }
+
       return {
         status: 200,
-        data: typeof data === 'string' ? data : JSON.stringify(data),
+        data: JSON.stringify(data),
         headers: {},
         url: config.url,
-        duration: 0,
+        duration,
       }
     } catch (err) {
       throw new Error(formatError(err))

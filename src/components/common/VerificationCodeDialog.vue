@@ -1,6 +1,7 @@
 <template>
-  <n-modal v-model:show="visible" preset="dialog" title="验证码" positive-text="确认" negative-text="取消"
-    @positive-click="submit" @negative-click="cancel" :closable="false" :close-on-esc="false" :mask-closable="false">
+  <n-modal
+v-model:show="visible" preset="dialog" title="验证码" positive-text="确认" negative-text="取消"
+    :closable="false" :close-on-esc="false" :mask-closable="false" @positive-click="submit" @negative-click="cancel">
     <div style="display:flex;flex-direction:column;gap:12px;padding:4px 0">
       <div v-if="svgData" style="display:flex;justify-content:center;background:var(--bg);border-radius:var(--radius-sm);padding:12px" v-html="sanitizedSvg"></div>
       <n-input v-model:value="code" placeholder="请输入验证码" @keyup.enter="submit" />

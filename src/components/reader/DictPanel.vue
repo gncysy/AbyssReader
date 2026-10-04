@@ -1,10 +1,10 @@
 <template>
   <n-modal :show="visible" :z-index="50001" preset="card" title="字典" style="max-width:700px;max-height:85vh" :bordered="false" @update:show="(val: boolean) => $emit('update:visible', val)">
-    <div class="dict-tabs" v-if="rules.length > 1">
+    <div v-if="rules.length > 1" class="dict-tabs">
       <button v-for="(r, i) in rules" :key="i" class="dict-tab" :class="{ active: activeTab === i }" @click="switchTab(i)">{{ r.name }}</button>
     </div>
     <div v-if="loading" style="text-align:center;padding:40px"><LoadingSpinner /></div>
-    <div v-else class="dict-content" v-html="activeContent" @click="handleLinkClick"></div>
+    <div v-else class="dict-content" @click="handleLinkClick" v-html="activeContent"></div>
   </n-modal>
 </template>
 

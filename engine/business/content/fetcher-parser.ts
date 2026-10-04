@@ -1,9 +1,11 @@
 // ============================================
 // 正文解析 — 纯函数（对齐 Legado ContentHelp）
+// 规则执行通过 RuleEvaluator 注入
 // ============================================
 
-import { getString, getElements, resolveUrl } from '../../index.js'
+import { resolveUrl } from '../../index.js'
 import type { EngineBookSource, EngineBook, EngineChapter, ParseContext } from '../../types.js'
+import type { RuleEvaluator } from '../book/info-parser.js'
 
 const NBSP_REGEX = /(&nbsp;)+/g
 const ESP_REGEX = /&ensp;|&emsp;/g
@@ -32,7 +34,7 @@ export function injectImageStyle(html: string, imageStyle: string | null | undef
 }
 
 export function formatKeepImg(html: string, redirectUrl: string, imageStyle: string | null | undefined): string {
-  let result = html
+  const result = html
     .replace(NBSP_REGEX, ' ').replace(ESP_REGEX, ' ').replace(NO_PRINT_REGEX, '')
     .replace(WRAP_HTML_REGEX, '\n').replace(COMMENT_REGEX, '').replace(NOT_IMG_HTML_REGEX, '')
     .replace(INDENT1_REGEX, '\n\u3000\u3000').replace(INDENT2_REGEX, '\u3000\u3000').replace(LAST_REGEX, '')
@@ -87,7 +89,8 @@ export async function parseContentPage(
   chapter: Partial<EngineChapter>,
   bookSource: EngineBookSource,
   nextChapterUrl: string | null | undefined,
-  getNextPageUrl: boolean
+  getNextPageUrl: boolean,
+  evaluator: RuleEvaluator,
 ): Promise<{ content: string; nextUrls: string[] }> {
   const ctx: ParseContext = {
     source: bookSource,
@@ -103,9 +106,11 @@ export async function parseContentPage(
   const sourceRegex = contentRule.sourceRegex || ''
   if (sourceRegex) {
     try {
-      const e = await getString(body, sourceRegex, ctx)
+      const e = await evaluator.getString(body, sourceRegex, ctx)
       if (e && e.trim()) { workingBody = e; ctx.result = workingBody }
-    } catch {}
+    } catch {
+      // ignore
+    }
   }
 
   let content = ''
@@ -113,7 +118,7 @@ export async function parseContentPage(
   const selector = contentRule.content || ''
   if (selector) {
     try {
-      content = await getString(workingBody, selector, ctx) || ''
+      content = await evaluator.getString(workingBody, selector, ctx) || ''
     } catch {
       content = ''
     }
@@ -140,13 +145,15 @@ export async function parseContentPage(
   const nextContentUrlRule = contentRule.nextContentUrl || ''
   if (getNextPageUrl && nextContentUrlRule) {
     try {
-      const r = await getElements(workingBody, nextContentUrlRule, { ...ctx, isUrl: true })
+      const r = await evaluator.getElements(workingBody, nextContentUrlRule, { ...ctx, isUrl: true })
       if (Array.isArray(r)) {
         for (const u of r) {
           if (u && typeof u === 'string' && u.trim()) nextUrls.push(u.trim())
         }
       }
-    } catch {}
+    } catch {
+      // ignore
+    }
   }
 
   return { content, nextUrls }

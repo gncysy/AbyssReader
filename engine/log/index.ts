@@ -90,12 +90,19 @@ export function emitLog(
     time: new Date().toLocaleTimeString(),
     level, module, source, message, tag,
   }
+
+  // 修复：批量移除，避免每次 shift 的 O(n)
   logHistory.push(entry)
-  // 修复：使用 shift 逐个移除，避免 splice(0, excess) 的大规模移动
-  // 当超出最大条数时，每次只移除一条，均摊 O(1)
   if (logHistory.length > MAX_LOGS) {
-    logHistory.shift()
+    const excess = logHistory.length - MAX_LOGS
+    // 超量较大时用 splice，较小时用 shift 避免大数组复制
+    if (excess > 100) {
+      logHistory.splice(0, excess)
+    } else {
+      for (let i = 0; i < excess; i++) logHistory.shift()
+    }
   }
+
   logListeners.forEach(({ handler, filter }) => {
     if (matchesFilter(entry, filter)) {
       try { handler(entry) } catch { /* ignore */ }
@@ -163,6 +170,9 @@ export interface DiagnosticSnapshot {
 const diagnosticHistory: DiagnosticSnapshot[] = []
 const MAX_DIAGNOSTICS = 50
 
+// 修复：knownKeys 提到模块常量，避免每次 parseDiagnostic 都 new Set
+const DIAG_KNOWN_KEYS = new Set(['t','u','c','r','o','p','a','m','s','x','y','z','v','w','q','e','f','d0','d1'])
+
 function parseDiagnostic(entry: LogEntry): DiagnosticSnapshot | null {
   const msg = entry.message || ''
   const prefix = 'DIAG|'
@@ -175,9 +185,8 @@ function parseDiagnostic(entry: LogEntry): DiagnosticSnapshot | null {
   try {
     const d = JSON.parse(jsonStr) as Record<string, unknown>
     const extra: Record<string, string> = {}
-    const knownKeys = new Set(['t','u','c','r','o','p','a','m','s','x','y','z','v','w','q','e','f','d0','d1'])
     for (const k of Object.keys(d)) {
-      if (!knownKeys.has(k)) {
+      if (!DIAG_KNOWN_KEYS.has(k)) {
         const val = d[k]
         extra[k] = typeof val === 'string' ? val : JSON.stringify(val)
       }

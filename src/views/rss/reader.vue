@@ -33,6 +33,15 @@ const loading = ref(true)
 
 const sanitizedContent = computed(() => {
   if (!content.value) return ''
+  // 修复：若原文含 HTML 标签（如 <p>、<img>），保持标签结构，只做净化
+  const hasHtmlTags = /<[a-z][\s\S]*>/i.test(content.value)
+  if (hasHtmlTags) {
+    return DOMPurify.sanitize(content.value, {
+      ALLOWED_TAGS: ['p','br','strong','b','em','i','u','s','span','div','h1','h2','h3','h4','h5','h6','img','a','blockquote','pre','code','ul','ol','li','figure','figcaption'],
+      ALLOWED_ATTR: ['href','src','alt','title','style','width','height'],
+    })
+  }
+  // 纯文本：按段落拆分，加缩进
   const paragraphs = content.value.split(/\n\n+/).filter((p) => p.trim())
   const html = paragraphs.map((p) => {
     const trimmed = p.trim()
@@ -41,7 +50,7 @@ const sanitizedContent = computed(() => {
   }).join('')
   return DOMPurify.sanitize(html, {
     ALLOWED_TAGS: ['p','br','strong','b','em','i','u','s','span','div','h1','h2','h3','h4','h5','h6','img','a','blockquote','pre','code','ul','ol','li'],
-    ALLOWED_ATTR: ['href','src','alt','title','style']
+    ALLOWED_ATTR: ['href','src','alt','title','style'],
   })
 })
 
@@ -94,9 +103,15 @@ async function loadArticle(): Promise<void> {
     }
 
     if (!content.value) {
+      // 修复：优先提取 <body> 内的 HTML（保留标签），而非 strip 所有标签
       const bodyMatch = htmlStr.match(/<body[^>]*>([\s\S]*)<\/body>/i)
       const bodyVal = bodyMatch && bodyMatch[1] !== undefined ? bodyMatch[1] : ''
-      content.value = bodyVal ? bodyVal.replace(/<[^>]+>/g, '') : htmlStr.replace(/<[^>]+>/g, '')
+      if (bodyVal) {
+        content.value = bodyVal
+      } else {
+        // 无 <body> 标签，降级到纯文本
+        content.value = htmlStr.replace(/<[^>]+>/g, '')
+      }
     }
   } catch (err: unknown) {
     const e = err as Error

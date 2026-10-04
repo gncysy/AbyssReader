@@ -1,6 +1,6 @@
 <template>
-  <div class="custom-dropdown" :class="{ open: isOpen }" ref="dropdownRef">
-    <div class="custom-dropdown-trigger" @click="toggle" tabindex="0" @keydown.enter="toggle" @keydown.space.prevent="toggle">
+  <div ref="dropdownRef" class="custom-dropdown" :class="{ open: isOpen }">
+    <div class="custom-dropdown-trigger" tabindex="0" @click="toggle" @keydown.enter="toggle" @keydown.space.prevent="toggle">
       <span>{{ selectedLabel || placeholder }}</span>
       <span class="custom-dropdown-arrow">▼</span>
     </div>
@@ -10,9 +10,9 @@
         :key="String(opt.value)"
         class="custom-dropdown-item"
         :class="{ active: String(modelValue) === String(opt.value) }"
+        tabindex="0"
         @click="select(opt.value)"
         @keydown.enter="select(opt.value)"
-        tabindex="0"
       >{{ opt.label }}</div>
     </div>
   </div>

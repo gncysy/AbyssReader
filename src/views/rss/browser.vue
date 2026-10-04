@@ -1,14 +1,14 @@
 <template>
   <div class="rss-browser">
-    <header class="browser-toolbar" v-no-drag>
+    <header v-no-drag class="browser-toolbar">
       <div class="toolbar-left">
-        <button class="tb-btn" @click="goBack" title="后退">
+        <button class="tb-btn" title="后退" @click="goBack">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 12H5M12 19l-7-7 7-7"/></svg>
         </button>
-        <button class="tb-btn" @click="goForward" title="前进">
+        <button class="tb-btn" title="前进" @click="goForward">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
         </button>
-        <button class="tb-btn" @click="reload" title="刷新">
+        <button class="tb-btn" title="刷新" @click="reload">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
         </button>
       </div>
@@ -19,7 +19,7 @@
         spellcheck="false"
         @keyup.enter="navigateTo(urlInput)"
       />
-      <button class="tb-btn tb-btn-close" @click="closeBrowser" title="关闭">
+      <button class="tb-btn tb-btn-close" title="关闭" @click="closeBrowser">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
       </button>
     </header>
@@ -39,6 +39,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { Webview } from '@tauri-apps/api/webview'
 import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow'
 import { invoke } from '@tauri-apps/api/core'
+import { LogicalPosition, LogicalSize } from '@tauri-apps/api/dpi'
 
 const URL_POLL_INTERVAL_MS = 2000
 
@@ -86,8 +87,8 @@ const BLANK_TARGET_FIX_SCRIPT = `
 async function webviewAction(action: string, data: string): Promise<string> {
   try {
     return await invoke('embedded_webview_action', { label: webviewLabel, action, data })
-  } catch (err: any) {
-    errorMessage.value = `${action} 失败: ${err?.message || String(err)}`
+  } catch (err: unknown) {
+    errorMessage.value = `${action} 失败: ${(err as Error)?.message || String(err)}`
     return ''
   }
 }
@@ -118,10 +119,10 @@ async function updateWebviewBounds(): Promise<void> {
   if (!webviewReady || !webviewContainer.value || !externalWebview) return
   try {
     const rect = webviewContainer.value.getBoundingClientRect()
-    await externalWebview.setPosition({ type: 'Logical', x: rect.left, y: rect.top } as any)
-    await externalWebview.setSize({ type: 'Logical', width: rect.width, height: rect.height } as any)
-  } catch (err: any) {
-    errorMessage.value = `更新 Webview 边界失败: ${err?.message || String(err)}`
+    await externalWebview.setPosition(new LogicalPosition(rect.left, rect.top))
+    await externalWebview.setSize(new LogicalSize(rect.width, rect.height))
+  } catch (err: unknown) {
+    errorMessage.value = `更新 Webview 边界失败: ${(err as Error)?.message || String(err)}`
   }
 }
 
@@ -163,14 +164,15 @@ async function initWebview(): Promise<void> {
       urlMonitorInterval = setInterval(monitorUrlChange, URL_POLL_INTERVAL_MS)
     })
 
-    externalWebview.once('tauri://error', (event: any) => {
+    externalWebview.once('tauri://error', (event: unknown) => {
       webviewReady = false
       externalWebview = null
       if (urlMonitorInterval) {
         clearInterval(urlMonitorInterval)
         urlMonitorInterval = null
       }
-      errorMessage.value = event?.payload?.message || event?.payload || '未知错误'
+      const ev = event as { payload?: { message?: string } | string }
+      errorMessage.value = typeof ev?.payload === 'string' ? ev.payload : (ev?.payload?.message || '未知错误')
     })
 
     setTimeout(() => {
@@ -181,10 +183,10 @@ async function initWebview(): Promise<void> {
         containerResizeObserver.observe(webviewContainer.value)
       }
     }, 500)
-  } catch (err: any) {
+  } catch (err: unknown) {
     webviewReady = false
     externalWebview = null
-    errorMessage.value = err?.message || String(err)
+    errorMessage.value = (err as Error)?.message || String(err)
   }
 }
 

@@ -10,13 +10,14 @@ export { getExploreCategories, getExploreCategoriesAsync, executeExploreJs, getE
 export type { ExploreKind } from './explore/index.js'
 
 export { parseBookInfo } from './book/index.js'
+export type { RuleEvaluator } from './book/index.js'
 export { parseTocPage, parseTocJson, dedupChapters } from './book/index.js'
 
 export {
   parseContentPage, injectImageStyle, formatKeepImg, stripHtml,
   reSegment, purifyText, textToHtml,
 } from './content/index.js'
-export type { PurifyOptions } from './content/index.js'
+export type { PurifyOptions, JsReplacementFn } from './content/index.js'
 
 export { extractImageUrls, createComicImages } from './comic/index.js'
 export type { ComicImage } from './comic/index.js'

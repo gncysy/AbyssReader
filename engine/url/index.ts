@@ -25,11 +25,26 @@ export interface UrlOption {
   webViewDelayTime?: number
 }
 
+/**
+ * 把 JS 执行结果转成字符串。
+ * - null / undefined → ''
+ * - string → 原样
+ * - number / boolean → String()
+ * - 对象 / 数组 → JSON.stringify（避免 "[object Object]"）
+ * - 其他 → String()
+ */
 function formatJsValue(val: unknown): string {
   if (val === null || val === undefined) return ''
   if (typeof val === 'string') return val
   if (typeof val === 'number' && Number.isInteger(val)) return String(val)
   if (typeof val === 'boolean') return String(val)
+  if (typeof val === 'object') {
+    try {
+      return JSON.stringify(val)
+    } catch {
+      return ''
+    }
+  }
   return String(val)
 }
 
@@ -43,7 +58,6 @@ export function resolveUrl(url: string, baseUrl?: string): string {
   if (/^data:/i.test(relativePathTrim)) return relativePathTrim
   if (relativePathTrim.toLowerCase().startsWith('javascript')) return ''
 
-  // 修复：当 baseUrl 没有逗号时不应截断
   const commaIndex = baseUrl.indexOf(',')
   const cleanBase = commaIndex === -1 ? baseUrl.trim() : baseUrl.substring(0, commaIndex).trim()
 
@@ -87,7 +101,7 @@ export function buildUrl(url: string, baseUrl: string, variables: Record<string,
   let result = url
   for (const [key, val] of Object.entries(variables)) {
     if (val === null || val === undefined) continue
-    result = result.replace(new RegExp('\\{\\{' + key + '\\}\\}', 'g'), encodeURIComponent(String(val)))
+    result = result.replace(new RegExp('\\{\\{' + key + '\\}\\}', 'g'), encodeURIComponent(formatJsValue(val)))
   }
   return resolveUrl(result, baseUrl)
 }
@@ -130,6 +144,7 @@ export async function analyzeUrl(
   options: AnalyzeUrlOptions = {},
 ): Promise<UrlAnalysis> {
   let baseUrl = options.baseUrl || ''
+  PARAM_PATTERN.lastIndex = 0
   const urlMatcher = PARAM_PATTERN.exec(baseUrl)
   if (urlMatcher) baseUrl = baseUrl.substring(0, urlMatcher.index)
   const hashIdx = baseUrl.indexOf('#')
@@ -140,7 +155,6 @@ export async function analyzeUrl(
 
   let ruleUrlProcessed = ruleUrl
 
-  // 执行 @js: / <js>
   const jsMatcher = /<js>([\s\S]*?)<\/js>|@js:([\s\S]*)/gi
   let jsStart = 0
   let jsResult = ruleUrlProcessed
@@ -168,7 +182,7 @@ export async function analyzeUrl(
             speakSpeed: options.speakSpeed || 0,
           })
           if (r !== null && r !== undefined && r !== '') {
-            jsResult = String(r)
+            jsResult = formatJsValue(r)
           }
         } catch {
           // ignore
@@ -185,7 +199,6 @@ export async function analyzeUrl(
   }
   ruleUrlProcessed = jsResult
 
-  // 先同步替换简单变量占位符
   if (options.key !== undefined && options.key !== null) {
     ruleUrlProcessed = ruleUrlProcessed.replace(/\{\{key\}\}/g, encodeURIComponent(String(options.key)))
   }
@@ -199,7 +212,6 @@ export async function analyzeUrl(
     ruleUrlProcessed = ruleUrlProcessed.replace(/\{\{speakSpeed\}\}/g, String(options.speakSpeed))
   }
 
-  // 剩余的 {{...}} 执行 JS（async 等待）
   if (ruleUrlProcessed.includes('{{') && ruleUrlProcessed.includes('}}')) {
     const templateRegex = /\{\{([\s\S]*?)\}\}/g
     let templateMatch: RegExpExecArray | null
@@ -229,8 +241,8 @@ export async function analyzeUrl(
     }
   }
 
-  // 替换页码 <page1,page2,page3>
   if (options.page !== undefined && options.page > 0) {
+    PAGE_PATTERN.lastIndex = 0
     ruleUrlProcessed = ruleUrlProcessed.replace(PAGE_PATTERN, (_m, pagesStr: string) => {
       const pages = pagesStr.split(',').map((s: string) => s.trim())
       const idx = options.page! - 1
@@ -239,20 +251,27 @@ export async function analyzeUrl(
     })
   }
 
-  // 分离 URL 和选项
   let urlNoOption = ruleUrlProcessed
   let urlOption: UrlOption | null = null
+  PARAM_PATTERN.lastIndex = 0
   const paramMatch = PARAM_PATTERN.exec(ruleUrlProcessed)
   if (paramMatch) {
     urlNoOption = ruleUrlProcessed.substring(0, paramMatch.index)
     urlOption = parseUrlOption(ruleUrlProcessed.substring(paramMatch.index + 1))
   }
 
-  let url = resolveUrl(urlNoOption, baseUrl)
-  const newBase = getBaseUrl(url)
-  if (newBase) baseUrl = newBase
-
-  url = encodeQueryNonAscii(url)
+  // 修复：data: URL 保持原样，不做 base 拼接、不做查询编码
+  // 对齐 Legado NetworkUtils.getAbsoluteURL：isDataUrl 时直接返回
+  const isDataUrl = /^data:/i.test(urlNoOption.trim())
+  let url: string
+  if (isDataUrl) {
+    url = urlNoOption.trim()
+  } else {
+    url = resolveUrl(urlNoOption, baseUrl)
+    const newBase = getBaseUrl(url)
+    if (newBase) baseUrl = newBase
+    url = encodeQueryNonAscii(url)
+  }
 
   const method: 'GET' | 'POST' = urlOption?.method?.toUpperCase() === 'POST' ? 'POST' : 'GET'
   let body: string | null = null
@@ -276,7 +295,7 @@ export async function analyzeUrl(
   const serverID = urlOption?.serverID || null
   const webViewDelayTime = Math.max(0, urlOption?.webViewDelayTime || 0)
 
-  if (urlOption?.js) {
+  if (urlOption?.js && !isDataUrl) {
     const runtime = getJsRuntime()
     if (runtime) {
       try {
@@ -288,8 +307,9 @@ export async function analyzeUrl(
           page: options.page || 1,
           key: options.key || '',
         })
-        if (r && typeof r === 'string' && r.trim()) {
-          url = r.trim()
+        const formatted = formatJsValue(r)
+        if (formatted.trim()) {
+          url = formatted.trim()
         }
       } catch {
         // ignore

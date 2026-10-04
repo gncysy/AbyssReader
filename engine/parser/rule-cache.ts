@@ -8,21 +8,49 @@ import { AnalyzeByJSONPath } from './json/jsonpath.js'
 import { SourceRule } from './source-rule.js'
 
 const CACHE_MAX_SIZE = 16
+const KEY_PREFIX_LENGTH = 64
+const KEY_FNV_OFFSET = 2166136261
+const KEY_FNV_PRIME = 16777619
+
+/**
+ * 计算字符串的 FNV-1a 哈希（32 位）。
+ * 修复：原实现用 `outerHTML.substring(0, 300)` 做 DOM key，
+ * 长文档前缀相同会撞 key。改为完整内容 + 哈希。
+ */
+function fnv1aHash(str: string): string {
+  let hash = KEY_FNV_OFFSET
+  for (let i = 0; i < str.length; i++) {
+    hash ^= str.charCodeAt(i)
+    hash = Math.imul(hash, KEY_FNV_PRIME)
+    hash = hash >>> 0
+  }
+  return hash.toString(36)
+}
 
 function getContentKey(content: unknown): string {
   if (content === null || content === undefined) return 'null'
   if (typeof content === 'string') {
-    return 'str:' + content.substring(0, 500) + ':' + content.length
+    // 小字符串直接用原文，大字符串用 前缀 + 哈希 + 长度
+    if (content.length <= KEY_PREFIX_LENGTH) return 'str:' + content
+    return 'str:' + content.substring(0, KEY_PREFIX_LENGTH) + ':' + fnv1aHash(content) + ':' + content.length
   }
   if (typeof content === 'object') {
     const obj = content as Record<string, unknown>
     if (obj.tag !== undefined && typeof obj.querySelectorAll === 'function') {
-      const outerHTML = typeof obj.outerHTML === 'string' ? obj.outerHTML : (typeof obj.tag === 'string' ? obj.tag : 'dom')
-      return 'dom:' + outerHTML.substring(0, 300)
+      const outerHTML = typeof obj.outerHTML === 'string' ? obj.outerHTML : ''
+      if (outerHTML.length === 0) {
+        // 无 outerHTML，用 tag + textContent 做 key
+        const tag = typeof obj.tag === 'string' ? obj.tag : 'dom'
+        const text = typeof obj.textContent === 'string' ? obj.textContent : ''
+        return 'dom:' + tag + ':' + fnv1aHash(text) + ':' + text.length
+      }
+      // 修复：完整内容做哈希，不再截断
+      return 'dom:' + fnv1aHash(outerHTML) + ':' + outerHTML.length
     }
     try {
       const jsonStr = JSON.stringify(content)
-      return 'json:' + jsonStr.substring(0, 300) + ':' + jsonStr.length
+      if (jsonStr.length <= KEY_PREFIX_LENGTH) return 'json:' + jsonStr
+      return 'json:' + fnv1aHash(jsonStr) + ':' + jsonStr.length
     } catch {
       return 'obj:' + Object.prototype.toString.call(content)
     }

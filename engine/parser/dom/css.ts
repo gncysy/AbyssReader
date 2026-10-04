@@ -227,6 +227,8 @@ function finishSelect(
 
 function getResultLast(elements: DomNode[], lastRule: string): string[] {
   const results: string[] = []
+  const seen = new Set<string>()
+
   if (RESULT_ATTRS.has(lastRule)) {
     switch (lastRule) {
       case 'text':
@@ -260,7 +262,10 @@ function getResultLast(elements: DomNode[], lastRule: string): string[] {
   } else {
     for (const el of elements) {
       const val = el.getAttribute ? el.getAttribute(lastRule) || '' : ''
-      if (val && !results.includes(val)) results.push(val)
+      if (val && !seen.has(val)) {
+        seen.add(val)
+        results.push(val)
+      }
     }
   }
   return results
@@ -390,10 +395,14 @@ export class AnalyzeByCSS {
       const html = typeof content === 'string' ? content : String(content)
       if (html.trimStart().startsWith('<?xml')) {
         const doc = provider.parseXML(html)
+        // 修复：优先 documentElement，保证 head 里的 meta/title/link 可选
         this.root = doc.documentElement || doc.body || doc as unknown as DomNode
       } else {
         const doc = provider.parseHTML(html)
-        this.root = doc.body || doc.documentElement || doc as unknown as DomNode
+        // 修复：原实现用 doc.body 作为根，导致 <head> 里的 meta/title/link 无法被选择。
+        // 改用 documentElement（即 <html>），能覆盖 head + body。
+        // 对齐 Legado：Jsoup 的 Document 根就是 <html>，querySelectorAll 能命中 head 里的元素。
+        this.root = doc.documentElement || doc.body || doc as unknown as DomNode
       }
     }
   }

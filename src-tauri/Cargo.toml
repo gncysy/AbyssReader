@@ -49,10 +49,12 @@ open = "5"
 hanconv = "0.5"
 rsa = { version = "0.9", features = ["pem", "sha2"] }
 sha2 = "0.10"
+sha1 = "0.10"
 pkcs8 = { version = "0.10", features = ["pem", "encryption"] }
 rand = "0.8"
 dirs-next = "2.0"
 zip = "2"
+flate2 = "1"
 ttf-parser = "0.24"
 keyring = { version = "4", features = ["apple-native-keyring-store", "dbus-secret-service-keyring-store"] }
 

@@ -1,9 +1,11 @@
 // ============================================
 // 搜索解析 — 纯函数（对齐 Legado）
+// 规则执行通过 RuleEvaluator 注入
 // ============================================
 
-import { getString, getStringList, resolveUrl } from '../../index.js'
+import { resolveUrl } from '../../index.js'
 import type { EngineBook, EngineBookSource, ParseContext } from '../../types.js'
+import type { RuleEvaluator } from '../book/info-parser.js'
 
 const NAME_MAX_LENGTH = 100
 const MAX_TAG_COUNT = 3
@@ -11,6 +13,7 @@ const INTRO_MAX_LENGTH = 500
 const NAME_REGEX = /\s+作\s*者.*|\s+\S+\s+著/
 const AUTHOR_REGEX = /^\s*作\s*者[:：\s]+|\s+著/
 const WORD_COUNT_THRESHOLD = 10000
+const MAX_EXTRACT_DEPTH = 8
 
 function getRuleString(rule: Record<string, unknown> | null | undefined, key: string): string {
   if (!rule) return ''
@@ -22,14 +25,15 @@ function isHtmlContent(str: string): boolean {
   return str.startsWith('<') && str.includes('>') && str.length > 100
 }
 
-function extractString(val: unknown, preferAttribute = false): string {
+function extractString(val: unknown, preferAttribute = false, depth = 0): string {
+  if (depth > MAX_EXTRACT_DEPTH) return ''
   if (val === null || val === undefined) return ''
   if (typeof val === 'string') return val
   if (typeof val === 'number' || typeof val === 'boolean') return String(val)
   if (Array.isArray(val)) {
     if (val.length === 0) return ''
     for (const item of val) {
-      const result = extractString(item, preferAttribute)
+      const result = extractString(item, preferAttribute, depth + 1)
       if (result) return result
     }
     return ''
@@ -130,25 +134,25 @@ export async function parseSearchItem(
   ruleBookUrl: string,
   key: string,
   page: number,
+  evaluator: RuleEvaluator,
   filter?: ((name: string, author: string, kind: string | null) => boolean) | null,
 ): Promise<EngineBook | null> {
   const bookPlaceholder: Partial<EngineBook> = {}
   const itemCtx: ParseContext = { source, baseUrl, result: item, book: bookPlaceholder, key, page }
 
-  // 修复：规则为空时使用空字符串，不调用 getString 避免回退到整个 HTML
-  const rawName = ruleName ? await getString(item, ruleName, itemCtx) : ''
+  const rawName = ruleName ? await evaluator.getString(item, ruleName, itemCtx) : ''
   const nameRawStr = extractString(rawName)
   const name = formatBookName(nameRawStr)
   if (!name || !isValidBookName(name)) return null
 
-  const rawAuthor = ruleAuthor ? await getString(item, ruleAuthor, itemCtx) : ''
+  const rawAuthor = ruleAuthor ? await evaluator.getString(item, ruleAuthor, itemCtx) : ''
   const authorRawStr = extractString(rawAuthor)
   const author = formatBookAuthor(authorRawStr) || '未知作者'
 
   let kind: string | null = null
   try {
     if (ruleKind) {
-      const kindList = await getStringList(item, ruleKind, itemCtx)
+      const kindList = await evaluator.getStringList(item, ruleKind, itemCtx)
       if (kindList && kindList.length > 0) {
         kind = kindList.join(',')
         bookPlaceholder.kind = kind
@@ -163,7 +167,7 @@ export async function parseSearchItem(
   let wordCount: string | null = null
   try {
     if (ruleWordCount) {
-      const wc = await getString(item, ruleWordCount, itemCtx)
+      const wc = await evaluator.getString(item, ruleWordCount, itemCtx)
       const wcStr = extractString(wc)
       if (wcStr && !isHtmlContent(wcStr)) wordCount = formatWordCount(wcStr)
     }
@@ -174,7 +178,7 @@ export async function parseSearchItem(
   let lastChapter: string | null = null
   try {
     if (ruleLastChapter) {
-      const raw = await getString(item, ruleLastChapter, itemCtx)
+      const raw = await evaluator.getString(item, ruleLastChapter, itemCtx)
       const str = extractString(raw)
       if (str && !isHtmlContent(str)) lastChapter = str
     }
@@ -185,7 +189,7 @@ export async function parseSearchItem(
   let intro: string | null = null
   try {
     if (ruleIntro) {
-      const rawIntro = await getString(item, ruleIntro, itemCtx)
+      const rawIntro = await evaluator.getString(item, ruleIntro, itemCtx)
       const introStr = extractString(rawIntro)
       if (introStr && !isHtmlContent(introStr)) {
         intro = cleanIntro(introStr)
@@ -198,7 +202,7 @@ export async function parseSearchItem(
   let coverUrl: string | null = null
   try {
     if (ruleCoverUrl) {
-      const rawCover = await getString(item, ruleCoverUrl, itemCtx)
+      const rawCover = await evaluator.getString(item, ruleCoverUrl, itemCtx)
       const coverStr = extractString(rawCover, true)
       if (coverStr && !isHtmlContent(coverStr)) {
         coverUrl = resolveUrl(coverStr, baseUrl)
@@ -210,7 +214,7 @@ export async function parseSearchItem(
 
   let bookUrlRaw = ''
   if (ruleBookUrl) {
-    const bookUrlStr = await getString(item, ruleBookUrl, itemCtx)
+    const bookUrlStr = await evaluator.getString(item, ruleBookUrl, itemCtx)
     bookUrlRaw = extractString(bookUrlStr, true)
   }
   const urlParts = bookUrlRaw.split(/[\n\r\t ]+/).filter(Boolean)
@@ -237,6 +241,7 @@ export async function parseInfoItem(
   body: string,
   key: string,
   page: number,
+  evaluator: RuleEvaluator,
   filter?: ((name: string, author: string, kind: string | null) => boolean) | null,
 ): Promise<EngineBook | null> {
   const rule = source.ruleBookInfo as Record<string, unknown> | null
@@ -245,7 +250,7 @@ export async function parseInfoItem(
   const ctx: ParseContext = { source, baseUrl, result: body, book: {}, key, page }
 
   const nameRule = getRuleString(rule, 'name')
-  const rawName = nameRule ? await getString(body, nameRule, ctx) : ''
+  const rawName = nameRule ? await evaluator.getString(body, nameRule, ctx) : ''
   const nameRawStr = extractString(rawName)
   const name = formatBookName(nameRawStr)
   if (!name || !isValidBookName(name)) return null
@@ -253,14 +258,14 @@ export async function parseInfoItem(
   if (filter && filter(name, '', null) === false) return null
 
   const authorRule = getRuleString(rule, 'author')
-  const rawAuthor = authorRule ? await getString(body, authorRule, ctx) : ''
+  const rawAuthor = authorRule ? await evaluator.getString(body, authorRule, ctx) : ''
   const authorRawStr = extractString(rawAuthor)
   const author = formatBookAuthor(authorRawStr) || '未知作者'
 
   const coverRule = getRuleString(rule, 'coverUrl')
   let coverUrl: string | null = null
   if (coverRule) {
-    const rawCover = await getString(body, coverRule, ctx)
+    const rawCover = await evaluator.getString(body, coverRule, ctx)
     const coverStr = extractString(rawCover, true)
     if (coverStr && !isHtmlContent(coverStr)) coverUrl = resolveUrl(String(coverStr), baseUrl)
   }
@@ -268,7 +273,7 @@ export async function parseInfoItem(
   const introRule = getRuleString(rule, 'intro')
   let intro: string | null = null
   if (introRule) {
-    const rawIntro = await getString(body, introRule, ctx)
+    const rawIntro = await evaluator.getString(body, introRule, ctx)
     const introStr = extractString(rawIntro)
     if (introStr && !isHtmlContent(introStr)) intro = cleanIntro(introStr)
   }
@@ -276,7 +281,7 @@ export async function parseInfoItem(
   const kindRule = getRuleString(rule, 'kind')
   let kind: string | null = null
   if (kindRule) {
-    const rawKind = await getString(body, kindRule, ctx)
+    const rawKind = await evaluator.getString(body, kindRule, ctx)
     const kindStr = extractString(rawKind)
     if (kindStr && !isHtmlContent(kindStr)) kind = kindStr
   }
@@ -284,7 +289,7 @@ export async function parseInfoItem(
   const lastChapterRule = getRuleString(rule, 'lastChapter')
   let lastChapter: string | null = null
   if (lastChapterRule) {
-    const rawLastChapter = await getString(body, lastChapterRule, ctx)
+    const rawLastChapter = await evaluator.getString(body, lastChapterRule, ctx)
     const lastChapterStr = extractString(rawLastChapter)
     if (lastChapterStr && !isHtmlContent(lastChapterStr)) lastChapter = lastChapterStr
   }

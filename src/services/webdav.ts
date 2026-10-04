@@ -4,6 +4,7 @@
 
 import { store, network } from './index.js'
 import { invoke } from '@tauri-apps/api/core'
+import { logError } from '@engine/log/index.js'
 
 const PASSWORD_SALT = 'moYue-reader-webdav-salt-v1'
 const KEY_DERIVE_ITERATIONS = 50000
@@ -16,6 +17,27 @@ interface BackupItem {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
+}
+
+function base64ToBytes(b64: string): Uint8Array | null {
+  try {
+    const binary = atob(b64)
+    const bytes = new Uint8Array(binary.length)
+    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i)
+    return bytes
+  } catch {
+    return null
+  }
+}
+
+function bytesToBase64(bytes: Uint8Array): string {
+  let binary = ''
+  const CHUNK = 8192
+  for (let i = 0; i < bytes.length; i += CHUNK) {
+    const chunk = bytes.subarray(i, i + CHUNK)
+    binary += String.fromCharCode(...chunk)
+  }
+  return btoa(binary)
 }
 
 async function getDefaultDeviceName(): Promise<string> {
@@ -76,8 +98,10 @@ export async function encryptConfig(config: Record<string, unknown>): Promise<Re
       const combined = new Uint8Array(iv.length + encrypted.byteLength)
       combined.set(iv)
       combined.set(new Uint8Array(encrypted), iv.length)
-      encoded.password = btoa(String.fromCharCode(...combined))
-    } catch {
+      encoded.password = bytesToBase64(combined)
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e)
+      logError('sync', 'frontend', `[WebDAV] 加密失败: ${msg}`)
       encoded.password = ''
     }
   }
@@ -88,9 +112,12 @@ export async function decryptConfig(config: Record<string, unknown>): Promise<Re
   const decoded = { ...config }
   if (typeof decoded.password === 'string' && decoded.password) {
     try {
-      const combined = new Uint8Array(
-        atob(decoded.password).split('').map(c => c.charCodeAt(0))
-      )
+      const combined = base64ToBytes(decoded.password)
+      if (!combined) {
+        logError('sync', 'frontend', '[WebDAV] 密码 base64 解码失败')
+        decoded.password = ''
+        return decoded
+      }
       const iv = combined.slice(0, 12)
       const encrypted = combined.slice(12)
       const key = await deriveKeyFromDevice()
@@ -100,7 +127,9 @@ export async function decryptConfig(config: Record<string, unknown>): Promise<Re
         encrypted as BufferSource
       )
       decoded.password = new TextDecoder().decode(decrypted)
-    } catch {
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e)
+      logError('sync', 'frontend', `[WebDAV] 解密失败: ${msg}`)
       decoded.password = ''
     }
   }
@@ -140,58 +169,58 @@ export async function webdavRequest(
   return { status: 200, data: typeof res === 'string' ? res : JSON.stringify(res) }
 }
 
+/**
+ * 从 XML 中提取所有 response 节点。
+ * 修复：兼容任意命名空间前缀（<d:>、<D:>、<ns1:>、无前缀）。
+ */
+function extractResponses(xml: string): string[] {
+  // 用正则提取 <X:response>...</X:response> 或 <response>...</response>
+  const responses: string[] = []
+  const regex = /<([a-zA-Z0-9_-]+:)?response\b[^>]*>([\s\S]*?)<\/([a-zA-Z0-9_-]+:)?response>/gi
+  let m: RegExpExecArray | null
+  while ((m = regex.exec(xml)) !== null) {
+    responses.push(m[2] || '')
+  }
+  return responses
+}
+
+/**
+ * 提取子元素的文本内容，兼容任意命名空间前缀。
+ */
+function extractChildText(xml: string, tagName: string): string {
+  const regex = new RegExp(`<([a-zA-Z0-9_-]+:)?${tagName}\\b[^>]*>([\\s\\S]*?)<\\/([a-zA-Z0-9_-]+:)?${tagName}>`, 'i')
+  const m = regex.exec(xml)
+  return m && m[2] !== undefined ? m[2] : ''
+}
+
 export async function listBackups(config: Record<string, unknown>): Promise<BackupItem[]> {
   try {
     const res = await webdavRequest(config, 'PROPFIND', '', null, { Depth: '1' })
     const xml = res.data
-    if (!xml.includes('<d:multistatus') && !xml.includes('<D:multistatus')) return []
+    if (!xml.includes('multistatus') && !xml.includes('response')) return []
 
     const items: BackupItem[] = []
+    const responseBlocks = extractResponses(xml)
 
-    try {
-      const parser = new DOMParser()
-      const doc = parser.parseFromString(xml, 'application/xml')
-      const responses = doc.querySelectorAll('response, *|response')
+    for (const block of responseBlocks) {
+      const href = extractChildText(block, 'href')
+      const displayName = extractChildText(block, 'displayname')
+      const lastModified = extractChildText(block, 'getlastmodified')
 
-      responses.forEach((resp) => {
-        const href = resp.querySelector('href, *|href')?.textContent || ''
-        const displayName = resp.querySelector('displayname, *|displayname')?.textContent || ''
-        const lastModified = resp.querySelector('getlastmodified, *|getlastmodified')?.textContent || ''
+      const name = displayName || href.split('/').filter(Boolean).pop() || ''
+      if (!name || (!name.endsWith('.zip') && !name.endsWith('.json'))) continue
 
-        const name = displayName || href.split('/').filter(Boolean).pop() || ''
-        if (!name || (!name.endsWith('.zip') && !name.endsWith('.json'))) return
+      const nameWithoutExt = name.replace(/\.(zip|json)$/, '')
+      const parts = nameWithoutExt.split('-')
+      const deviceName = parts.length >= 3 ? parts.slice(2).join('-') : 'unknown'
 
-        const nameWithoutExt = name.replace(/\.(zip|json)$/, '')
-        const parts = nameWithoutExt.split('-')
-        const deviceName = parts.length >= 3 ? parts.slice(2).join('-') : 'unknown'
-
-        items.push({ filename: name, date: lastModified, deviceName })
-      })
-    } catch {
-      // 降级为正则解析
-      const responses = xml.split(/<(?:d|D):response>/g).filter((s: string) =>
-        s.includes('<d:href>') || s.includes('<D:href>') || s.includes('href')
-      )
-      for (const resp of responses) {
-        const nameMatch = resp.match(/<(?:d|D):displayname>([^<]+)<\/(?:d|D):displayname>/) ||
-          resp.match(/<href[^>]*>([^<]+)<\/href>/i)
-        if (!nameMatch) continue
-        const rawName = nameMatch[1]
-        if (!rawName) continue
-        const name = rawName.split('/').filter(Boolean).pop() || ''
-        if (!name || (!name.endsWith('.zip') && !name.endsWith('.json'))) continue
-
-        const dateMatch = resp.match(/<(?:d|D):getlastmodified>([^<]+)<\/(?:d|D):getlastmodified>/)
-        const date = dateMatch && dateMatch[1] !== undefined ? dateMatch[1] : ''
-        const nameWithoutExt = name.replace(/\.(zip|json)$/, '')
-        const parts = nameWithoutExt.split('-')
-        const deviceName = parts.length >= 3 ? parts.slice(2).join('-') : 'unknown'
-        items.push({ filename: name, date, deviceName })
-      }
+      items.push({ filename: name, date: lastModified, deviceName })
     }
 
     return items.sort((a, b) => b.filename.localeCompare(a.filename))
-  } catch {
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : String(e)
+    logError('sync', 'frontend', `[WebDAV] 列出备份失败: ${msg}`)
     return []
   }
 }
@@ -218,7 +247,9 @@ export async function restoreBackup(
       const res = await network.fetch(url, { method: 'GET', headers, timeout: 30000 })
       const data = JSON.parse(typeof res === 'string' ? res : JSON.stringify(res))
       if (isRecord(data)) {
-        for (const [key, value] of Object.entries(data)) {
+        // 修复：先收集所有 key-value，再批量写入（减少一次 IPC 开销）
+        const entries = Object.entries(data)
+        for (const [key, value] of entries) {
           await store.set(key, value)
         }
       }
@@ -233,31 +264,38 @@ export async function restoreBackup(
       return { success: false, message: 'ZIP 中未找到 JSON 文件' }
     }
 
+    // 修复：先收集所有待写入数据，再逐个写
+    const pendingWrites: Array<{ key: string; value: unknown; isReplaceRule: boolean }> = []
+
     for (const file of jsonFiles) {
       const content = await file.async('string')
       try {
         const parsed = JSON.parse(content) as unknown
         const key = file.name.replace(/\.json$/, '').replace(/^.*\//, '')
-        if (key === 'replaceRule') {
-          const rawExisting = await store.get('replaceRule')
-          const existing = Array.isArray(rawExisting) ? [...rawExisting] : []
-          const incoming = Array.isArray(parsed) ? parsed : []
-          const merged = [...existing]
-          for (const rule of incoming) {
-            const r = rule as Record<string, unknown>
-            if (!merged.find((er) => {
-              const e = er as Record<string, unknown>
-              return e.name === r.name && e.pattern === r.pattern
-            })) {
-              merged.push(rule)
-            }
-          }
-          await store.set('replaceRule', merged)
-        } else {
-          await store.set(key, parsed)
-        }
+        pendingWrites.push({ key, value: parsed, isReplaceRule: key === 'replaceRule' })
       } catch {
         continue
+      }
+    }
+
+    for (const write of pendingWrites) {
+      if (write.isReplaceRule) {
+        const rawExisting = await store.get('replaceRule')
+        const existing = Array.isArray(rawExisting) ? [...rawExisting] : []
+        const incoming = Array.isArray(write.value) ? write.value : []
+        const merged = [...existing]
+        for (const rule of incoming) {
+          const r = rule as Record<string, unknown>
+          if (!merged.find((er) => {
+            const e = er as Record<string, unknown>
+            return e.name === r.name && e.pattern === r.pattern
+          })) {
+            merged.push(rule)
+          }
+        }
+        await store.set('replaceRule', merged)
+      } else {
+        await store.set(write.key, write.value)
       }
     }
 

@@ -2,7 +2,7 @@
   <div class="rss-page">
     <header class="page-header"><div><h1 class="page-title">订阅</h1><p class="page-subtitle">{{ filteredSources.length }} 个订阅源</p></div></header>
     <div class="rss-toolbar">
-      <div class="toolbar-left"><SearchInput v-model="searchKey" placeholder="搜索订阅源..." name="rss-search" style="width:220px" /><CustomDropdown v-model="selectedGroup" :options="groupOptions" placeholder="全部分组" @update:modelValue="onGroupChange" style="min-width:120px" /></div>
+      <div class="toolbar-left"><SearchInput v-model="searchKey" placeholder="搜索订阅源..." name="rss-search" style="width:220px" /><CustomDropdown v-model="selectedGroup" :options="groupOptions" placeholder="全部分组" style="min-width:120px" @update:model-value="onGroupChange" /></div>
       <div class="toolbar-right">
         <button class="btn-secondary" style="padding:6px 14px;font-size:13px" @click="showImportModal = true">导入 JSON</button>
         <button class="btn-secondary" style="padding:6px 14px;font-size:13px" @click="triggerFileInput">导入文件</button>
@@ -28,23 +28,23 @@
           <div class="rss-info" @click.stop><h4 class="rss-name">{{ source.sourceName }}</h4><p class="rss-meta"><span v-if="source.sourceGroup" class="rss-group">{{ source.sourceGroup }}</span><span v-if="source.sourceComment" class="rss-comment">{{ source.sourceComment }}</span><span class="rss-status" :class="{ enabled: source.enabled !== false }">{{ source.enabled !== false ? '已启用' : '已禁用' }}</span></p></div>
         </div>
         <div class="rss-card-right" @click.stop>
-          <button class="btn-icon" @click="openSource(source)" title="打开">
+          <button class="btn-icon" title="打开" @click="openSource(source)">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
           </button>
-          <button class="btn-icon" @click="editSource(source)" title="编辑">
+          <button class="btn-icon" title="编辑" @click="editSource(source)">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
           </button>
-          <button class="btn-icon" @click="debugSource(source)" title="调试">
+          <button class="btn-icon" title="调试" @click="debugSource(source)">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>
           </button>
-          <button class="btn-icon" @click="quickLogin(source)" title="登录">
+          <button class="btn-icon" title="登录" @click="quickLogin(source)">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/><polyline points="10 17 15 12 10 7"/><line x1="15" y1="12" x2="3" y2="12"/></svg>
           </button>
-          <button class="btn-icon" @click="handleToggleEnabled(source)" :title="source.enabled ? '禁用' : '启用'">
+          <button class="btn-icon" :title="source.enabled ? '禁用' : '启用'" @click="handleToggleEnabled(source)">
             <svg v-if="source.enabled" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>
             <svg v-else width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
           </button>
-          <button class="btn-icon btn-icon-danger" @click="handleDeleteSource(source)" title="删除">
+          <button class="btn-icon btn-icon-danger" title="删除" @click="handleDeleteSource(source)">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
           </button>
         </div>

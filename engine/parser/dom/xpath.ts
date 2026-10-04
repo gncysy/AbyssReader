@@ -28,10 +28,12 @@ export class AnalyzeByXPath {
       const wrapped = wrapIncompleteHtml(html)
       if (wrapped.trimStart().startsWith('<?xml')) {
         const doc = provider.parseXML(wrapped)
+        // 修复：优先 documentElement
         this.root = doc.documentElement || doc.body || doc as unknown as DomNode
       } else {
         const doc = provider.parseHTML(wrapped)
-        this.root = doc.body || doc.documentElement || doc as unknown as DomNode
+        // 修复：与 AnalyzeByCSS 保持一致，用 documentElement 而非 body
+        this.root = doc.documentElement || doc.body || doc as unknown as DomNode
       }
     }
   }

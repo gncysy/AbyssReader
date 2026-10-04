@@ -14,7 +14,7 @@ export interface SyncResult {
   message: string
 }
 
-export async function backup(_config: SyncConfig, _data: any): Promise<SyncResult> {
+export async function backup(_config: SyncConfig, _data: unknown): Promise<SyncResult> {
   return { success: false, message: '未实现' }
 }
 

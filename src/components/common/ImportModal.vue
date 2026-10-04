@@ -1,5 +1,5 @@
 <template>
-  <n-modal v-model:show="visible" preset="card" :title="title || ''" style="max-width:600px" :bordered="false">
+  <n-modal :show="visible" preset="card" :title="title || ''" style="max-width:600px" :bordered="false" @update:show="(val: boolean) => emit('update:visible', val)">
     <div class="import-tabs">
       <button class="import-tab" :class="{ active: activeTab === 'json' }" @click="activeTab = 'json'">粘贴 JSON</button>
       <button class="import-tab" :class="{ active: activeTab === 'url' }" @click="activeTab = 'url'">从 URL</button>

@@ -13,9 +13,10 @@
       <button class="btn-check-update" :disabled="checking || downloading" @click="checkForUpdate"><span v-if="checking">检查中...</span><span v-else-if="downloading">下载中 {{ downloadProgress }}%</span><span v-else>{{ updateStatus || '检查更新' }}</span></button>
       <p v-if="updateError" class="update-error">{{ updateError }}</p>
     </div>
-    <div v-else class="about-markdown" v-html="renderedMarkdown" @click="handleMarkdownClick"></div>
+    <div v-else class="about-markdown" @click="handleMarkdownClick" v-html="renderedMarkdown"></div>
 
-    <n-modal v-model:show="showDownloadConfirm" preset="dialog" title="发现新版本" positive-text="下载安装" negative-text="取消"
+    <n-modal
+v-model:show="showDownloadConfirm" preset="dialog" title="发现新版本" positive-text="下载安装" negative-text="取消"
       @positive-click="confirmDownload" @negative-click="showDownloadConfirm = false">
       <p style="color:var(--text-secondary);font-size:14px;line-height:1.6">
         发现新版本 v{{ latestVersion }}，是否下载并安装？<br/>
@@ -223,9 +224,13 @@ async function downloadStreaming(
   const reader = response.body!.getReader()
   const chunks: Uint8Array[] = []
   let received = 0
-  while (true) {
+  let reading = true
+  while (reading) {
     const { done, value } = await reader.read()
-    if (done) break
+    if (done) {
+      reading = false
+      break
+    }
     chunks.push(value)
     received += value.length
     if (total > 0) downloadProgress.value = Math.round((received / total) * 100)

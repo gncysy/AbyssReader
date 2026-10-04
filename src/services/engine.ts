@@ -20,15 +20,46 @@ function isJsRuleResponse(value: unknown): value is JsRuleResponse {
   return typeof obj.success === 'boolean'
 }
 
+// 修复：标记已注入 getVariable/getKey/getTag 的 source 对象，
+// 避免每次 executeJs 调用都重新赋值。
+const INJECTED_SOURCE_FLAG = '__abyss_injected__'
+
+function ensureSourceMethods(source: Record<string, unknown>): void {
+  if (source[INJECTED_SOURCE_FLAG] === true) return
+
+  if (!source.getVariable) {
+    source.getVariable = function (this: Record<string, unknown>, key: string) {
+      return String(this[key] || '')
+    }
+  }
+  if (!source.getKey) {
+    source.getKey = function (this: Record<string, unknown>) {
+      return String(this.bookSourceUrl || this.sourceUrl || '')
+    }
+  }
+  if (!source.getTag) {
+    source.getTag = function (this: Record<string, unknown>) {
+      return String(this.bookSourceName || this.sourceName || '')
+    }
+  }
+  try {
+    Object.defineProperty(source, INJECTED_SOURCE_FLAG, {
+      value: true,
+      enumerable: false,
+      configurable: true,
+      writable: true,
+    })
+  } catch {
+    // 冻结对象，无法标记，但已注入方法，下次仍会重试（幂等）
+  }
+}
+
 async function executeJs(code: unknown, context: Record<string, unknown>): Promise<string> {
   const codeStr = typeof code === 'string' ? code : String(code || '')
   if (!codeStr) return ''
 
   if (context.source && typeof context.source === 'object') {
-    const src = context.source as Record<string, unknown>
-    if (!src.getVariable) src.getVariable = function (this: Record<string, unknown>, key: string) { return String(this[key] || '') }
-    if (!src.getKey) src.getKey = function (this: Record<string, unknown>) { return String(this.bookSourceUrl || this.sourceUrl || '') }
-    if (!src.getTag) src.getTag = function (this: Record<string, unknown>) { return String(this.bookSourceName || this.sourceName || '') }
+    ensureSourceMethods(context.source as Record<string, unknown>)
   }
 
   try {
@@ -76,7 +107,17 @@ const tauriJsRuntime: JsRuntime = {
   execute: executeJs,
 }
 
-setJsRuntime(tauriJsRuntime)
+let initialized = false
+
+export function initEngineJsRuntime(): void {
+  if (initialized) return
+  initialized = true
+  setJsRuntime(tauriJsRuntime)
+}
+
+export function resetEngineJsRuntime(): void {
+  initialized = false
+}
 
 export const engine = {
   executeJs,
@@ -84,7 +125,15 @@ export const engine = {
 
   getExploreBooks: async (source: unknown, categoryUrl: string, page = 1): Promise<unknown[]> => {
     const { getExploreBooks } = await import('@engine/business/explore/index.js')
-    return getExploreBooks(source as Parameters<typeof getExploreBooks>[0], categoryUrl, page)
+    const { getGlobalHttpClient } = await import('@engine/network/client.js')
+    const { getJsRuntime } = await import('@engine/parser/js-executor.js')
+    return getExploreBooks(
+      source as Parameters<typeof getExploreBooks>[0],
+      categoryUrl,
+      page,
+      getGlobalHttpClient(),
+      getJsRuntime(),
+    )
   },
 
   getExploreCategories: async (sourceIndex: number): Promise<unknown[]> => {

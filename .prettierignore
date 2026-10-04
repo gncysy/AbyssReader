@@ -1,0 +1,20 @@
+node_modules/
+dist/
+dist-ssr/
+coverage/
+*.local
+
+# Tauri
+src-tauri/target/
+src-tauri/gen/
+
+# 构建产物
+public/
+
+# Markdown 文档
+*.md
+
+# 锁文件
+package-lock.json
+pnpm-lock.yaml
+yarn.lock

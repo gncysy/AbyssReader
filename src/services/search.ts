@@ -5,13 +5,15 @@
 import { parseSearchItem, parseInfoItem, matchesBookUrlPattern } from '@engine/business/search/parser.js'
 import { analyzeUrl } from '@engine/url/index.js'
 import { parseSourceHeader } from '@engine/business/source/helper.js'
-import { getElements, getString } from '@engine/parser/index.js'
-import { logInfo, logError } from '@engine/log/index.js'
+import { getElements, getString, getStringList } from '@engine/parser/index.js'
+import { getJsRuntime } from '@engine/parser/js-executor.js'
+import { logError } from '@engine/log/index.js'
 import { handleError } from '@/utils/error-handler.js'
 import { shouldExecuteInDeno, evaluateRule } from './rule-evaluator.js'
 import { fetchWithWebviewFallback } from './fetch.js'
 import type { Book, BookSource } from '@/types'
 import type { EngineBook, EngineBookSource, ParseContext } from '@engine/types.js'
+import type { RuleEvaluator } from '@engine/business/book/index.js'
 import { NETWORK } from '@/constants/index.js'
 
 interface SearchOptions {
@@ -21,12 +23,27 @@ interface SearchOptions {
   shouldBreak?: ((size: number) => boolean) | null | undefined
 }
 
+export interface BatchSearchOptions {
+  page?: number
+  signal?: AbortSignal
+  concurrency?: number
+  onProgress?: (done: number, total: number) => void
+}
+
 function toEngineBookSource(source: BookSource): EngineBookSource {
   return source as unknown as EngineBookSource
 }
 
 function toBook(engineBook: EngineBook): Book {
   return engineBook as unknown as Book
+}
+
+function createRuleEvaluator(): RuleEvaluator {
+  return {
+    getString: (content, rule, ctx) => getString(content, rule, ctx),
+    getStringList: (content, rule, ctx) => getStringList(content, rule, ctx),
+    getElements: (content, rule, ctx) => getElements(content, rule, ctx),
+  }
 }
 
 export async function search(
@@ -42,7 +59,8 @@ export async function search(
   }
 
   const engineSource = toEngineBookSource(source)
-  const headerMap = await parseSourceHeader(engineSource)
+  const runtime = getJsRuntime()
+  const headerMap = await parseSourceHeader(engineSource, runtime)
   const urlAnalysis = await analyzeUrl(searchUrl, {
     key: keyword, page, source: engineSource, baseUrl: source.bookSourceUrl || '', headerMap,
   })
@@ -63,9 +81,10 @@ export async function search(
     if (!rule || !rule.bookList) return []
 
     const ctx: ParseContext = { source: engineSource, baseUrl, key: keyword, page, book: {} }
+    const evaluator = createRuleEvaluator()
 
     if (source.bookUrlPattern && matchesBookUrlPattern(urlAnalysis.url, source.bookUrlPattern)) {
-      const book = await parseInfoItem(engineSource, baseUrl, html, keyword, page)
+      const book = await parseInfoItem(engineSource, baseUrl, html, keyword, page, evaluator)
       return book ? [toBook(book)] : []
     }
 
@@ -84,7 +103,7 @@ export async function search(
 
     if (!Array.isArray(collections) || collections.length === 0) {
       if (!source.bookUrlPattern) {
-        const book = await parseInfoItem(engineSource, baseUrl, html, keyword, page)
+        const book = await parseInfoItem(engineSource, baseUrl, html, keyword, page, evaluator)
         return book ? [toBook(book)] : []
       }
       return []
@@ -106,6 +125,7 @@ export async function search(
         rule.bookUrl || '',
         keyword,
         page,
+        evaluator,
         options.filter ?? null
       )
 
@@ -136,11 +156,13 @@ export async function search(
 export async function batchSearch(
   sources: BookSource[],
   keyword: string,
-  options: { page?: number; signal?: AbortSignal; concurrency?: number } = {},
+  options: BatchSearchOptions = {},
 ): Promise<Map<string, Book[]>> {
   const results = new Map<string, Book[]>()
   const concurrency = options.concurrency || NETWORK.CONCURRENCY
   const queue = [...sources]
+  const total = sources.length
+  let done = 0
 
   async function worker(): Promise<void> {
     while (queue.length > 0) {
@@ -152,8 +174,17 @@ export async function batchSearch(
         if (options.signal !== undefined) searchOptions.signal = options.signal
         if (options.page !== undefined) searchOptions.page = options.page
         results.set(key, await search(source, keyword, searchOptions))
-      } catch {
+      } catch (e: unknown) {
+        const msg = e instanceof Error ? e.message : String(e)
+        logError('search', 'frontend', `[批量搜索] ${source.bookSourceName || source.bookSourceUrl || ''} 失败: ${msg}`)
         results.set(key, [])
+      }
+      done++
+      if (options.onProgress) {
+        try { options.onProgress(done, total) } catch (e: unknown) {
+          const msg = e instanceof Error ? e.message : String(e)
+          logError('search', 'frontend', `[批量搜索] 进度回调异常: ${msg}`)
+        }
       }
     }
   }

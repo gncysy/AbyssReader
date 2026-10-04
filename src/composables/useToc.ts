@@ -4,7 +4,7 @@
 
 import { ref, computed } from 'vue'
 import { fetchToc, loadTocFromCache, saveTocToCache } from '@/services/toc.js'
-import { logInfo } from '@engine/log/index.js'
+import { logWarn } from '@engine/log/index.js'
 import type { Book, BookSource, Chapter } from '@/types'
 
 const TOC_PAGE_SIZE = 200
@@ -49,12 +49,13 @@ export function useToc() {
   ): Promise<Chapter[]> {
     loadingToc.value = true
     try {
-      // 直接调用 fetchToc，它内部已处理缓存逻辑
       const fresh = await fetchToc(source, tocUrl, book)
       chapters.value = fresh
       return fresh
     } catch (err) {
       // fetchToc 失败时降级到缓存
+      const errorMsg = err instanceof Error ? err.message : String(err)
+      logWarn('reader', 'frontend', `[目录] fetchToc 失败: ${errorMsg}，尝试缓存`)
       if (book) {
         const cached = await loadTocFromCache(source, book)
         if (cached && cached.length > 0) {
@@ -62,6 +63,8 @@ export function useToc() {
           return cached
         }
       }
+      // 修复：记录最终失败原因，便于诊断
+      logWarn('reader', 'frontend', '[目录] 缓存也为空，返回空目录')
       chapters.value = []
       return []
     } finally {

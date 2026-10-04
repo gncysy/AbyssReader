@@ -19,6 +19,53 @@ function isJsExecutionResponse(value: unknown): value is JsExecutionResponse {
   return typeof obj.success === 'boolean'
 }
 
+function unwrapStringArray(arr: unknown[]): unknown[] {
+  let needsUnwrap = false
+  for (const item of arr) {
+    if (typeof item === 'string' && item.trim().startsWith('{')) {
+      needsUnwrap = true
+      break
+    }
+  }
+  if (!needsUnwrap) return arr
+
+  const result: unknown[] = []
+  for (const item of arr) {
+    if (typeof item === 'string') {
+      const trimmed = item.trim()
+      if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
+        try {
+          result.push(JSON.parse(trimmed))
+          continue
+        } catch {
+          // parse 失败，保留原值
+        }
+      }
+    }
+    result.push(item)
+  }
+  return result
+}
+
+function parseLegacyStringArray(trimmed: string): unknown[] | null {
+  if (!trimmed.startsWith('{') || !trimmed.endsWith('}')) return null
+  if (!trimmed.includes('},{')) {
+    try {
+      const obj = JSON.parse(trimmed) as unknown
+      return [obj]
+    } catch {
+      return null
+    }
+  }
+  try {
+    const wrapped = '[' + trimmed + ']'
+    const arr = JSON.parse(wrapped) as unknown
+    return Array.isArray(arr) ? arr : null
+  } catch {
+    return null
+  }
+}
+
 export async function executeJsSegment(
   code: string,
   data: unknown,
@@ -42,7 +89,6 @@ export async function executeJsSegment(
       if (typeof raw === 'string') {
         const trimmed = raw.trim()
 
-        // runtime.rs 中 JS 异常时返回 {"error":true,"message":"...","stack":"..."}
         if (trimmed.startsWith('{') && trimmed.includes('"error":true')) {
           try {
             const parsed = JSON.parse(trimmed) as Record<string, unknown>
@@ -50,18 +96,37 @@ export async function executeJsSegment(
             logError('engine', 'frontend', `[规则] JS 执行错误: ${errorMsg}`, ruleTag)
             return ''
           } catch {
-            // 不是合法 JSON，继续正常处理
+            // 不是合法 JSON
           }
         }
         if (trimmed === 'undefined' || trimmed === 'null') {
           return ''
         }
+
         if ((trimmed.startsWith('{') && trimmed.endsWith('}')) ||
             (trimmed.startsWith('[') && trimmed.endsWith(']'))) {
-          try { return JSON.parse(trimmed) as unknown } catch { return raw }
+          try {
+            const parsed = JSON.parse(trimmed) as unknown
+            if (Array.isArray(parsed)) {
+              return unwrapStringArray(parsed)
+            }
+            return parsed
+          } catch {
+            const legacyArr = parseLegacyStringArray(trimmed)
+            if (legacyArr !== null) {
+              return unwrapStringArray(legacyArr)
+            }
+            return raw
+          }
         }
+
         return raw
       }
+
+      if (Array.isArray(raw)) {
+        return unwrapStringArray(raw)
+      }
+
       return raw
     }
     const errorMsg = response.error || '未知错误'

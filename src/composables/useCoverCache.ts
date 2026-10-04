@@ -52,7 +52,7 @@ export function useCoverCache() {
   function onCoverError(book: Book): void {
     const url = book.customCoverUrl || book.coverUrl
     if (!url) return
-    ;(book as any)._coverFailed = true
+    ;(book as unknown as Record<string, unknown>)._coverFailed = true
   }
 
   return { coverCache, getCoverSrc, loadCoverFromCache, onCoverLoaded, onCoverError }

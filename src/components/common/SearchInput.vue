@@ -1,9 +1,9 @@
 <template>
   <input
+    :id="name"
     :value="modelValue"
     type="text"
     :name="name"
-    :id="name"
     :placeholder="placeholder"
     class="input-search"
     autocomplete="off"

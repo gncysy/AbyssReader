@@ -3,7 +3,6 @@
 // ============================================
 
 import { ref, computed } from 'vue'
-import { useMessage } from 'naive-ui'
 import { store } from '@/services'
 import { asArray } from '@/services/store.js'
 import type { RssSource } from '@/types'
@@ -27,8 +26,7 @@ const DEFAULT_RSS_SOURCES: RssSource[] = [
 ]
 
 export function useRssSourceManager() {
-  const msg = useMessage()
-  const sources = ref<RssSource[]>([])
+    const sources = ref<RssSource[]>([])
   const selectedUrls = ref(new Set<string>())
 
   const selectedCount = computed(() => selectedUrls.value.size)

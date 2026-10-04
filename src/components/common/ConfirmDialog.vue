@@ -20,7 +20,7 @@
 <script setup lang="ts">
 import { NModal } from 'naive-ui'
 
-const props = withDefaults(defineProps<{
+withDefaults(defineProps<{
   visible: boolean
   title?: string
   content?: string

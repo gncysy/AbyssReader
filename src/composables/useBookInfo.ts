@@ -82,15 +82,12 @@ export function useBookInfo() {
       loadedLastChapter.value = cached.lastChapter
       loadedWordCount.value = cached.wordCount
       loadedTocUrl.value = cached.tocUrl
-      // 修复：缓存的封面为 null 时，不覆盖 book.coverUrl
-      // 避免书架已有封面被详情页缓存覆盖为 null
       if (cached.coverUrl) {
         loadedCover.value = cached.coverUrl
         if (!book.coverUrl) {
           book.coverUrl = cached.coverUrl
         }
       } else {
-        // 缓存的封面为 null，尝试使用 book.coverUrl
         loadedCover.value = book.customCoverUrl || book.coverUrl || null
       }
       return
@@ -143,7 +140,6 @@ export function useBookInfo() {
         loadedTocUrl.value = book.bookUrl
       }
 
-      // 修复：如果详情页没解析到封面，使用 book 上已有的封面
       if (!loadedCover.value) {
         loadedCover.value = book.customCoverUrl || book.coverUrl || null
       }

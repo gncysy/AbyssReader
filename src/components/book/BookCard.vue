@@ -1,7 +1,13 @@
 <template>
   <div class="book-card" @click="$emit('click')" @contextmenu.prevent="$emit('contextmenu', $event)">
     <div class="book-card-cover">
-      <BookCover :src="book.customCoverUrl || book.coverUrl || null" :title="book.name" :author="book.author" :disable-change="true" />
+      <BookCover
+        :src="book.customCoverUrl || book.coverUrl || null"
+        :title="book.name"
+        :author="book.author"
+        :disable-change="true"
+        :base-url="book.bookUrl || null"
+      />
     </div>
     <div class="book-info">
       <h4>{{ book.name || '未命名' }}</h4>

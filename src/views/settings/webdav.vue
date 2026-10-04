@@ -159,7 +159,19 @@ async function restoreBackupFile(filename: string): Promise<void> {
   }
 }
 
-watch(config, () => scheduleSave(), { deep: true })
+// 修复：用 watch 监听每个字段，替代 deep: true
+// deep watch 在每个字符输入时都会遍历整个 config 对象
+watch(
+  () => [
+    config.value.server,
+    config.value.username,
+    config.value.password,
+    config.value.folder,
+    config.value.deviceName,
+  ],
+  () => scheduleSave()
+)
+
 onMounted(async () => { await loadConfig() })
 </script>
 

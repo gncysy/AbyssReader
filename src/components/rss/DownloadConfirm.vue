@@ -1,6 +1,7 @@
 <template>
-  <n-modal v-model:show="visible" preset="dialog" :title="title" :positive-text="positiveText" :negative-text="negativeText"
-    @positive-click="handleConfirm" @negative-click="visible = false" :closable="false" :close-on-esc="false" :mask-closable="false">
+  <n-modal
+v-model:show="visible" preset="dialog" :title="title" :positive-text="positiveText" :negative-text="negativeText"
+    :closable="false" :close-on-esc="false" :mask-closable="false" @positive-click="handleConfirm" @negative-click="visible = false">
     <p style="color:var(--text-secondary);font-size:14px;line-height:1.6;white-space:pre-wrap">{{ message }}</p>
   </n-modal>
 </template>

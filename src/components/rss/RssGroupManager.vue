@@ -126,7 +126,7 @@ async function doDeleteGroup(): Promise<void> {
     groups.value = groups.value.filter((g) => g !== group)
   } else {
     for (const s of allSources) {
-      if (s.sourceGroup === group) s.sourceGroup = null as any
+      if (s.sourceGroup === group) s.sourceGroup = null
     }
     groups.value = groups.value.filter((g) => g !== group)
   }

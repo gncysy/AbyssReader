@@ -5,6 +5,7 @@
 import { ref, computed } from 'vue'
 import { useRouter } from 'vue-router'
 import { useMessage } from 'naive-ui'
+import DOMPurify from 'isomorphic-dompurify'
 import { useBookshelfStore, useReaderStore } from '@/stores'
 import { store, engine } from '@/services'
 import { useBookInfo } from '@/composables/useBookInfo.js'
@@ -128,11 +129,18 @@ export function useBookDetail(book: Book | null, source: BookSource | null) {
       return '<span style="color:var(--text-muted)">暂无简介</span>'
     }
     if (/<[a-z][\s\S]*>/i.test(text)) {
-      return text
+      return DOMPurify.sanitize(text, {
+        ALLOWED_TAGS: ['p','br','strong','b','em','i','u','s','span','div','h1','h2','h3','h4','h5','h6','a','blockquote','pre','code','ul','ol','li'],
+        ALLOWED_ATTR: ['href','title','style'],
+      })
     }
-    return text
-      .replace(/<br\s*\/?>/gi, '\n')
-      .replace(/<[^>]+>/g, '')
+    const escaped = text
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;')
+    return escaped
       .split('\n')
       .map((l) => l.trim())
       .filter((l) => l.length > 0)
@@ -268,24 +276,17 @@ export function useBookDetail(book: Book | null, source: BookSource | null) {
     showMoreMenu.value = !showMoreMenu.value
   }
 
+  /**
+   * 打开登录：
+   * - loginUi 为空 → WebView 打开 loginUrl（由 SourceLoginDialog 内部处理）
+   * - loginUi 非空 → 打开 SourceLoginDialog 自定义表单
+   */
   async function handleLoginFromMenu(): Promise<void> {
     showMoreMenu.value = false
     if (!source) return
-    const src = source as unknown as Record<string, unknown>
-    const loginUrl = typeof src.loginUrl === 'string' ? src.loginUrl : ''
-    if (loginUrl) {
-      try {
-        const { loginWebview } = await import('@/services/network.js')
-        await loginWebview(source.bookSourceUrl || loginUrl || '', source.bookSourceName || '登录', 300)
-        msg.success('登录成功')
-        isLoggedIn.value = true
-        chapters.value = []
-        await init()
-      } catch (err: unknown) {
-        const msgStr = err instanceof Error ? err.message : String(err)
-        msg.error('登录失败: ' + msgStr)
-      }
-    }
+    const { useSourceLogin } = await import('@/composables/useSourceLogin.js')
+    const { openLogin } = useSourceLogin()
+    await openLogin(source, book as unknown as Record<string, unknown> | null, null)
   }
 
   function openSourceVar(): void {
@@ -358,7 +359,6 @@ export function useBookDetail(book: Book | null, source: BookSource | null) {
 
     const currentCover = book?.customCoverUrl || book?.coverUrl || null
 
-    // 先显示"默认封面"选项，不阻塞 UI
     coverOptions.value = [{
       coverUrl: null,
       label: '默认封面',
@@ -377,7 +377,7 @@ export function useBookDetail(book: Book | null, source: BookSource | null) {
       const queue = [...enabledSources]
       const workerCount = Math.min(COVER_SEARCH_CONCURRENCY, queue.length)
 
-      async function worker() {
+      const worker = async (): Promise<void> => {
         while (queue.length > 0) {
           const sourceItem = queue.shift()
           if (!sourceItem) break
@@ -394,12 +394,11 @@ export function useBookDetail(book: Book | null, source: BookSource | null) {
                   sourceIndex: enabledSources.indexOf(sourceItem),
                   isCurrent: found.coverUrl === currentCover,
                 }
-                // 流式更新：每找到一个封面就立即添加到列表
                 const existingIdx = coverOptions.value.findIndex(
                   (o) => o.coverUrl === found.coverUrl && o.sourceName === newOption.sourceName
                 )
                 if (existingIdx === -1) {
-                  coverOptions.value = [...coverOptions.value, newOption]
+                  coverOptions.value.push(newOption)
                 }
               }
             }
@@ -434,10 +433,9 @@ export function useBookDetail(book: Book | null, source: BookSource | null) {
       }
       await bookshelfStore.updateBook(book.bookUrl, updateFields)
       book.customCoverUrl = item.coverUrl || undefined
-      coverOptions.value = coverOptions.value.map((opt) => ({
-        ...opt,
-        isCurrent: opt.coverUrl === item.coverUrl && opt.sourceName === item.sourceName,
-      }))
+      for (const opt of coverOptions.value) {
+        opt.isCurrent = opt.coverUrl === item.coverUrl && opt.sourceName === item.sourceName
+      }
       msg.success('封面已更换')
       await init()
     } catch (err: unknown) {

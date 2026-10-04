@@ -1,71 +1,34 @@
 // ============================================
 // v-no-drag 指令
-// 解决问题：Tauri 窗口拖动区域下的按钮点击冲突
 // ============================================
-
-const INTERACTIVE_SELECTOR = 'button, a, input, select, textarea, [role="button"]'
-
-let activeInstances = 0
-
-function disableTitlebarDrag(): void {
-  const titlebar = document.querySelector('.titlebar-drag') as HTMLElement
-  if (titlebar) {
-    titlebar.style.setProperty('-webkit-app-region', 'no-drag', 'important')
-  }
-}
-
-function restoreTitlebarDrag(): void {
-  const titlebar = document.querySelector('.titlebar-drag') as HTMLElement
-  if (titlebar) {
-    titlebar.style.setProperty('-webkit-app-region', 'drag', 'important')
-  }
-}
-
-function applyNoDrag(root: HTMLElement): void {
-  root.style.setProperty('-webkit-app-region', 'no-drag', 'important')
-  const all = root.querySelectorAll('*')
-  all.forEach((el) => {
-    const htmlEl = el as HTMLElement
-    htmlEl.style.setProperty('-webkit-app-region', 'no-drag', 'important')
-    if (htmlEl.matches(INTERACTIVE_SELECTOR) || htmlEl.closest(INTERACTIVE_SELECTOR)) {
-      htmlEl.style.setProperty('pointer-events', 'auto', 'important')
-    }
-  })
-}
+//
+// 解决问题：Tauri 窗口拖动区域（-webkit-app-region: drag）
+// 与上层可交互元素的事件冲突。
+//
+// 背景：
+// - WebKit 的 -webkit-app-region: drag 区域**优先级高于 z-index**，
+//   即使用 z-index 更高的元素覆盖拖动区，鼠标事件仍被拖动区捕获。
+// - 这会导致弹窗顶部（与标题栏重叠区域）的按钮点击被"吃掉"，
+//   变成拖动窗口。
+//
+// 设计原则：
+// 1. 拖动区（.titlebar-drag）保持 drag —— 永远可拖动
+// 2. 弹窗/全屏组件根容器设 no-drag —— 整个组件脱离拖动区
+// 3. **不遍历后代**：-webkit-app-region 的作用域是"元素区域"，
+//    根容器设 no-drag 后其后代都在 no-drag 区域内
+//
+// 用法：
+// <Teleport to="body">
+//   <div class="modal-overlay" v-no-drag>
+//     ...
+//   </div>
+// </Teleport>
 
 export const vNoDrag = {
   mounted(el: HTMLElement): void {
-    if (activeInstances === 0) {
-      disableTitlebarDrag()
-    }
-    activeInstances++
-
-    applyNoDrag(el)
-
-    // 使用节流的 MutationObserver，避免高频触发
-    let throttled = false
-    const observer = new MutationObserver(() => {
-      if (throttled) return
-      throttled = true
-      requestAnimationFrame(() => {
-        applyNoDrag(el)
-        throttled = false
-      })
-    })
-    observer.observe(el, { childList: true, subtree: true })
-    ;(el as any).__noDragObserver = observer
+    el.style.setProperty('-webkit-app-region', 'no-drag', 'important')
   },
-
   unmounted(el: HTMLElement): void {
-    const observer = (el as any).__noDragObserver
-    if (observer) {
-      observer.disconnect()
-      delete (el as any).__noDragObserver
-    }
-
-    activeInstances = Math.max(0, activeInstances - 1)
-    if (activeInstances === 0) {
-      restoreTitlebarDrag()
-    }
+    el.style.removeProperty('-webkit-app-region')
   },
 }

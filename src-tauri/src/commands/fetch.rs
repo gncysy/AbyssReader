@@ -1,5 +1,5 @@
 use crate::error::Result;
-use crate::network::http::execute_http_request;
+use crate::network::http::{execute_http_request_full, HttpResponse};
 use std::collections::HashMap;
 
 const DEFAULT_TIMEOUT_SECS: u64 = 30;
@@ -17,16 +17,17 @@ pub async fn fetch_url(
     source_type: Option<i32>,
     preserve_style: Option<bool>,
     _body_js: Option<String>,
-) -> Result<String> {
+) -> Result<HttpResponse> {
     let method_str = method.unwrap_or_else(|| "GET".into());
     let timeout = timeout_secs.unwrap_or(DEFAULT_TIMEOUT_SECS);
 
     if use_webview == Some(true) {
         let app = crate::js_runtime::ops::get_app_handle()
             .ok_or_else(|| crate::error::AbyssError::WebViewError("AppHandle 未初始化".into()))?;
-        return crate::commands::webview::fetch_webview(
+        // WebView 路径返回结构化结果（status 恒为 200，因为 WebView 加载后取 body）
+        let body = crate::commands::webview::fetch_webview(
             app,
-            url,
+            url.clone(),
             Some(method_str),
             body,
             headers,
@@ -37,10 +38,16 @@ pub async fn fetch_url(
             source_type,
             preserve_style,
         )
-        .await;
+        .await?;
+        return Ok(HttpResponse {
+            status: 200,
+            body,
+            headers: HashMap::new(),
+            url,
+        });
     }
 
-    execute_http_request(&url, &method_str, headers, body, charset, timeout).await
+    execute_http_request_full(&url, &method_str, headers, body, charset, timeout).await
 }
 
 #[tauri::command]

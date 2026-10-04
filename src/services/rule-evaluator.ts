@@ -1,5 +1,6 @@
 // ============================================
-// 规则执行调度器 — @get: 直接从 STORAGE 读取，不执行 JS 收集
+// 规则执行调度器 — @get: 直接从存储读取，不执行 JS 收集
+// 依赖的 JsRuntime 通过参数注入
 // ============================================
 
 import { invoke } from '@tauri-apps/api/core'
@@ -7,6 +8,7 @@ import { getString } from '@engine/parser/index.js'
 import type { ParseContext } from '@engine/types.js'
 import { parseRuleSegments } from './rule-parser.js'
 import { executeJsSegment } from './rule-js-executor.js'
+import { getJsRuntime } from '@engine/parser/js-executor.js'
 
 export function shouldExecuteInDeno(rule: string): boolean {
   if (!rule) return false
@@ -20,9 +22,14 @@ export function shouldExecuteInDeno(rule: string): boolean {
 
 async function getVariableValue(key: string): Promise<string> {
   try {
-    const code = `java.get(${JSON.stringify(key)})`
+    const runtime = getJsRuntime()
+    if (runtime) {
+      const result = await runtime.execute(`java.get(${JSON.stringify(key)})`, {})
+      return typeof result === 'string' ? result : ''
+    }
+    // 降级：直接调用 Tauri 命令
     const response = await invoke('execute_js_rule', {
-      code,
+      code: `java.get(${JSON.stringify(key)})`,
       context: {},
       timeoutMs: 3000,
     })
@@ -42,9 +49,11 @@ export async function evaluateRule(
 ): Promise<unknown> {
   if (!rule) return data
 
-  if (rule.includes('@get:')) {
+  let processedRule = rule
+
+  if (processedRule.includes('@get:')) {
     try {
-      const getMatches = rule.match(/@get:\{([^}]+)\}/g)
+      const getMatches = processedRule.match(/@get:\{([^}]+)\}/g)
       if (getMatches) {
         const uniqueKeys = new Set<string>()
         for (const m of getMatches) {
@@ -55,7 +64,7 @@ export async function evaluateRule(
         for (const key of uniqueKeys) {
           const val = await getVariableValue(key)
           const escapedKey = key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-          rule = rule.replace(new RegExp('@get:\\{' + escapedKey + '\\}', 'g'), String(val))
+          processedRule = processedRule.replace(new RegExp('@get:\\{' + escapedKey + '\\}', 'g'), String(val))
         }
       }
     } catch {
@@ -63,21 +72,21 @@ export async function evaluateRule(
     }
   }
 
-  const needDeno = options?.forceDeno ?? shouldExecuteInDeno(rule)
+  const needDeno = options?.forceDeno ?? shouldExecuteInDeno(processedRule)
 
   if (!needDeno) {
-    if (rule && !rule.includes('@') && !rule.includes('.') && !rule.includes('#') && !rule.includes('[') && !rule.includes(' ') && !rule.startsWith('//')) {
-      return rule
+    if (processedRule && !processedRule.includes('@') && !processedRule.includes('.') && !processedRule.includes('#') && !processedRule.includes('[') && !processedRule.includes(' ') && !processedRule.startsWith('//')) {
+      return processedRule
     }
-    return getString(data, rule, context as ParseContext)
+    return getString(data, processedRule, context as ParseContext)
   }
 
-  const segments = parseRuleSegments(rule)
+  const segments = parseRuleSegments(processedRule)
   if (segments.length === 0) return data
 
   const ruleTag = typeof context?.source === 'object' && context.source !== null
-    ? String((context.source as Record<string, unknown>).bookSourceUrl || rule.substring(0, 100))
-    : rule.substring(0, 100)
+    ? String((context.source as Record<string, unknown>).bookSourceUrl || processedRule.substring(0, 100))
+    : processedRule.substring(0, 100)
 
   if (segments.length === 1) {
     const seg = segments[0]

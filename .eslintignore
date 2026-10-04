@@ -1,0 +1,17 @@
+node_modules/
+dist/
+dist-ssr/
+coverage/
+*.local
+
+# Tauri 全部排除（polyfill 用 Deno 全局 + var，RSS 注入脚本是 WebView 用的）
+src-tauri/
+
+# 构建产物
+public/
+
+# 配置文件
+vite.config.ts
+vitest.config.ts
+tailwind.config.js
+postcss.config.js
