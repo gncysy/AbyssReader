@@ -1,5 +1,10 @@
 // ============================================
 // useReaderContent — 阅读器正文内容管理
+//
+// 对齐 Legado ContentProcessor.getContent 的处理流程：
+// 1. preprocessContent（去重标题 → reSegment → 简繁转换 → trim）
+// 2. applyReplaceRules（单循环替换，受净化开关控制）
+// 3. textToHtml
 // ============================================
 
 import { ref, computed, nextTick, watch } from 'vue'
@@ -9,10 +14,10 @@ import { useReplaceRuleStore } from '@/stores/replace-rules.js'
 import { useChapterContent } from '@/composables/useChapterContent.js'
 import { useDict } from '@/composables/useDict.js'
 import { useReader } from '@/composables/useReader.js'
-import { purifyText, textToHtml } from '@engine/business/content/purify.js'
-import type { JsReplacementFn } from '@engine/business/content/purify.js'
+import { preprocessContent, applyReplaceRules, textToHtml } from '@engine/business/content/purify.js'
 import { loadSingleImage } from '@/services/comic.js'
 import { engine } from '@/services/engine.js'
+import { getRegexWorkerPool } from '@/services/regex-worker.js'
 import type { Book, BookSource, Chapter } from '@/types'
 import type TocPopup from '@/components/reader/TocPopup.vue'
 import type ReaderSettings from '@/components/reader/ReaderSettings.vue'
@@ -78,11 +83,6 @@ export function useReaderContent(book: Book | null, source: BookSource | null, _
     return readerStore.reSegment
   })
 
-  const jsReplacementFn: JsReplacementFn = (jsCode, matched) => {
-    void jsCode
-    return matched
-  }
-
   async function convertText(text: string): Promise<string> {
     if (readerStore.chineseConverterType === 0 || !text) return text
     const fnName = readerStore.chineseConverterType === 1 ? 'java.t2s' : 'java.s2t'
@@ -99,67 +99,46 @@ export function useReaderContent(book: Book | null, source: BookSource | null, _
     }
   }
 
-  async function applyJsReplacementRules(text: string, rules: typeof replaceRuleStore.rules): Promise<string> {
-    let result = text
-    for (const rule of rules) {
-      if (!rule.isEnabled || !rule.pattern) continue
-      if (!rule.scopeContent && rule.scopeTitle) continue
-      const replacement = rule.replacement || ''
-      const isJsReplace = replacement.startsWith('@js:') || replacement.startsWith('<js>')
-      if (!isJsReplace) continue
-
-      try {
-        if (rule.isRegex) {
-          // 修复：使用 matchAll 获取所有匹配，再逐个替换
-          // 用 replaceAll（ES2021）替代 split/join
-          const regex = new RegExp(rule.pattern, 'g')
-          const matches: string[] = []
-          let m: RegExpExecArray | null
-          while ((m = regex.exec(result)) !== null) {
-            matches.push(m[0])
-            if (regex.lastIndex === 0) break
-          }
-          for (const match of matches) {
-            const replaced = await engine.executeJs(replacement, { result: match })
-            if (replaced && replaced !== match) {
-              // 修复：用 replaceAll 替代 split + join
-              result = result.replaceAll(match, replaced)
-            }
-          }
-        } else {
-          const replaced = await engine.executeJs(replacement, { result })
-          if (replaced) result = replaced
-        }
-      } catch {
-        // ignore
-      }
-    }
-    return result
-  }
-
   async function reprocessCurrentContent(): Promise<void> {
     if (!rawTextContent.value) return
     if (isComic.value) return
 
-    let processed = rawTextContent.value
-    if (readerStore.chineseConverterType !== 0) {
-      processed = await convertText(processed)
-    }
+    const ch = currentChapter.value
+    const bk = currentBook.value
 
-    if (purifyEnabled.value) {
-      processed = await applyJsReplacementRules(processed, replaceRuleStore.rules)
-    }
-
-    const purifyOptions = {
-      chapterTitle: currentChapter.value?.title || '',
-      bookName: currentBook.value?.name || '',
+    // 阶段 1：预处理（不受净化开关控制）
+    const preprocessed = await preprocessContent(rawTextContent.value, {
+      chapterTitle: ch?.title || '',
+      bookName: bk?.name || '',
       reSegmentEnabled: effectiveReSegment.value,
-      purifyEnabled: purifyEnabled.value,
-      rules: replaceRuleStore.rules,
-      jsReplacementFn,
+      convertFn: readerStore.chineseConverterType !== 0
+        ? (t) => convertText(t)
+        : null,
+    })
+
+    // 阶段 2：替换（受净化开关控制）
+    let processed = preprocessed
+    if (purifyEnabled.value) {
+      processed = await applyReplaceRules(preprocessed, {
+        rules: replaceRuleStore.rules,
+        replaceContext: {
+          chapterTitle: ch?.title || '',
+          bookName: bk?.name || '',
+          chapter: ch,
+          book: bk,
+        },
+        jsExecutor: async (jsCode, matched, ctx) => {
+          return engine.executeJsStrict(jsCode, {
+            result: matched,
+            chapter: ctx.chapter || {},
+            book: ctx.book || {},
+          })
+        },
+        findMatches: (text, pattern, flags) => getRegexWorkerPool().findMatches(text, pattern, flags),
+      })
     }
-    const purified = purifyEnabled.value ? purifyText(processed, purifyOptions) : processed
-    content.value = textToHtml(purified)
+
+    content.value = textToHtml(processed)
   }
 
   const sanitizedContent = computed(() => {

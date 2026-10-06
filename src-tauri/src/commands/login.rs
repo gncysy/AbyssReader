@@ -18,6 +18,33 @@ pub struct LoginJsContext {
     pub base_url: String,
 }
 
+/// 把 runtime::execute 的结果转为 JsExecutionResponse。
+/// 识别 wrap_user_code 返回的错误 JSON，避免污染上层。
+fn to_response(result: std::result::Result<String, String>) -> JsExecutionResponse {
+    match result {
+        Ok(result) => {
+            if let Some(err_msg) = runtime::extract_js_error(&result) {
+                JsExecutionResponse {
+                    success: false,
+                    result: String::new(),
+                    error: Some(err_msg),
+                }
+            } else {
+                JsExecutionResponse {
+                    success: true,
+                    result,
+                    error: None,
+                }
+            }
+        }
+        Err(e) => JsExecutionResponse {
+            success: false,
+            result: String::new(),
+            error: Some(e),
+        },
+    }
+}
+
 #[tauri::command]
 pub async fn execute_login_js(
     code: String,
@@ -73,16 +100,7 @@ pub async fn execute_login_js(
     .await;
 
     match timeout_result {
-        Ok(Ok(result)) => Ok(JsExecutionResponse {
-            success: true,
-            result,
-            error: None,
-        }),
-        Ok(Err(e)) => Ok(JsExecutionResponse {
-            success: false,
-            result: String::new(),
-            error: Some(e),
-        }),
+        Ok(inner) => Ok(to_response(inner)),
         Err(_) => Ok(JsExecutionResponse {
             success: false,
             result: String::new(),
@@ -120,18 +138,7 @@ pub async fn source_login(source: serde_json::Value) -> Result<JsExecutionRespon
     });
     let context_json = serde_json::to_string(&context).unwrap_or_else(|_| "{}".into());
 
-    match runtime::execute(&code, &context_json) {
-        Ok(result) => Ok(JsExecutionResponse {
-            success: true,
-            result,
-            error: None,
-        }),
-        Err(e) => Ok(JsExecutionResponse {
-            success: false,
-            result: String::new(),
-            error: Some(e),
-        }),
-    }
+    Ok(to_response(runtime::execute(&code, &context_json)))
 }
 
 #[tauri::command]
@@ -165,18 +172,7 @@ pub async fn source_login_ui(source: serde_json::Value) -> Result<JsExecutionRes
     });
     let context_json = serde_json::to_string(&context).unwrap_or_else(|_| "{}".into());
 
-    match runtime::execute(&code, &context_json) {
-        Ok(result) => Ok(JsExecutionResponse {
-            success: true,
-            result,
-            error: None,
-        }),
-        Err(e) => Ok(JsExecutionResponse {
-            success: false,
-            result: String::new(),
-            error: Some(e),
-        }),
-    }
+    Ok(to_response(runtime::execute(&code, &context_json)))
 }
 
 #[tauri::command]
@@ -215,16 +211,5 @@ pub async fn source_login_action(source: serde_json::Value, action: String) -> R
         .trim()
         .to_string();
 
-    match runtime::execute(&action_code, &ctx_json) {
-        Ok(result) => Ok(JsExecutionResponse {
-            success: true,
-            result,
-            error: None,
-        }),
-        Err(e) => Ok(JsExecutionResponse {
-            success: false,
-            result: String::new(),
-            error: Some(e),
-        }),
-    }
+    Ok(to_response(runtime::execute(&action_code, &ctx_json)))
 }

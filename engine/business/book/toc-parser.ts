@@ -87,7 +87,10 @@ export async function parseTocPage(
   const nextTocUrlRule = getRuleString(tocRule, 'nextTocUrl')
   if (getNextUrl && nextTocUrlRule) {
     try {
-      const results = await evaluator.getElements(parsedData, nextTocUrlRule, { ...baseCtx, isUrl: true })
+      // 修复：nextTocUrl 是"取 href 属性的 URL 规则"，必须用 getStringList
+      // 返回 string[]，而不是 getElements（返回 DomNode[]，取不到 URL 字符串）。
+      // 原实现里 `typeof item === 'string'` 永远 false，nextUrls 永远为空。
+      const results = await evaluator.getStringList(parsedData, nextTocUrlRule, { ...baseCtx, isUrl: true })
       if (Array.isArray(results)) {
         for (const item of results) {
           if (item && typeof item === 'string' && item.trim() && item.trim() !== redirectUrl) {

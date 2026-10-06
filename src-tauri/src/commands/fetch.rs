@@ -96,7 +96,7 @@ pub async fn proxy_image(url: String, source_json: String) -> Result<String> {
     let source: serde_json::Value = serde_json::from_str(&source_json)
         .map_err(|e| crate::error::AbyssError::ParseError(e.to_string()))?;
 
-    let cache_key = format!("{:x}", md5::compute(url.as_bytes()));
+    let cache_key = crate::utils::md5_hex(url.as_bytes());
 
     if let Some(data) = cache::cache_get(CacheCategory::Image, &cache_key) {
         let ct = detect_image_type(&data);

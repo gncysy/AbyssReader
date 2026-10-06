@@ -22,6 +22,13 @@ const WINDOW_BG_B: u8 = 26;
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_store::Builder::new().build())
+        .plugin(tauri_plugin_dialog::init())
+        .register_asynchronous_uri_scheme_protocol("epub", |_ctx, request, responder| {
+            std::thread::spawn(move || {
+                let response = crate::commands::epub_protocol::handle_epub_request(&request);
+                responder.respond(response);
+            });
+        })
         .invoke_handler(tauri::generate_handler![
             commands::store_get, commands::store_set, commands::store_delete, commands::store_get_all,
             commands::get_book_sources, commands::add_book_source, commands::import_sources_from_url,
@@ -47,6 +54,9 @@ pub fn run() {
             commands::cleanup_webviews,
             commands::open_url,
             commands::submit_verification_code, commands::cancel_verification_code,
+            commands::parse_epub, commands::parse_epub_bytes,
+            commands::get_epub_chapters, commands::get_epub_chapter, commands::get_epub_chapter_css,
+            commands::clear_epub_cache,
         ])
 
         .setup(|app| {

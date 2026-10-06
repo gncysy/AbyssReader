@@ -2,6 +2,7 @@ import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import type { Book, BookSource } from '@/types'
 import { store } from '@/services'
+import { epub as epubApi } from '@/services/epub.js'
 
 function isBookArray(value: unknown): value is Book[] {
   return Array.isArray(value)
@@ -19,6 +20,10 @@ export const useBookshelfStore = defineStore('bookshelf', () => {
   const readerBook = ref<Book | null>(null)
   const readerSource = ref<BookSource | null>(null)
   const readerChapters = ref<unknown[]>([])
+
+  // EPUB 阅读器状态
+  const showEpubReader = ref(false)
+  const epubReaderBook = ref<Book | null>(null)
 
   const filteredBooks = computed(() => {
     let result = books.value
@@ -82,9 +87,28 @@ export const useBookshelfStore = defineStore('bookshelf', () => {
     return true
   }
 
+  /**
+   * 按 bookUrl 移出书架。
+   * 如果是 EPUB 书（bookUrl 以 epub:// 开头），同时清理磁盘缓存。
+   */
   async function removeBookByUrl(bookUrl: string): Promise<void> {
     const raw = await store.get('bookshelf')
     const all = isBookArray(raw) ? [...raw] : []
+    const target = all.find((b) => b.bookUrl === bookUrl)
+
+    // 先清理 EPUB 缓存（如果适用）
+    if (target && target.bookUrl.startsWith('epub://')) {
+      const rec = target as unknown as Record<string, unknown>
+      const epubBookId = typeof rec._epubBookId === 'string' ? rec._epubBookId : ''
+      if (epubBookId) {
+        try {
+          await epubApi.clearCache(epubBookId)
+        } catch (err) {
+          console.warn('[bookshelf] 清理 EPUB 缓存失败:', err)
+        }
+      }
+    }
+
     const filtered = all.filter((b) => b.bookUrl !== bookUrl)
     await store.set('bookshelf', filtered)
     books.value = filtered
@@ -149,12 +173,24 @@ export const useBookshelfStore = defineStore('bookshelf', () => {
     readerChapters.value = []
   }
 
+  function openEpubReader(book: Book): void {
+    epubReaderBook.value = book
+    showEpubReader.value = true
+  }
+
+  function closeEpubReader(): void {
+    showEpubReader.value = false
+    epubReaderBook.value = null
+  }
+
   return {
     books, loading, filterText, activeGroup, filteredBooks,
     showDetail, detailBook, detailSource,
     showReader, readerBook, readerSource, readerChapters,
+    showEpubReader, epubReaderBook,
     loadBooks, setFilter, setActiveGroup, hasBook, addBook, removeBookByUrl,
     updateBook, updateBookKind, getBookKind, moveBookToGroup,
     openDetail, closeDetail, openReader, closeReader,
+    openEpubReader, closeEpubReader,
   }
 })

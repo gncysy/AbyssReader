@@ -5,8 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "vue-tsc --noEmit && vite build",
-    "typecheck": "vue-tsc --noEmit",
+    "build": "vue-tsc --noEmit && tsc -p tsconfig.worker.json --noEmit && vite build",
+    "typecheck": "vue-tsc --noEmit && tsc -p tsconfig.worker.json --noEmit",
     "preview": "vite preview",
     "tauri": "tauri",
     "test": "vitest",
@@ -42,6 +42,7 @@
   "devDependencies": {
     "@tauri-apps/cli": "^2.0.0",
     "@types/crypto-js": "^4.2.0",
+    "@types/node": "^20.0.0",
     "@types/tough-cookie": "^4.0.5",
     "@typescript-eslint/eslint-plugin": "^7.18.0",
     "@typescript-eslint/parser": "^7.18.0",

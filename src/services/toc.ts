@@ -29,31 +29,21 @@ function toChapter(ch: EngineChapter): Chapter {
   return ch as unknown as Chapter
 }
 
-/**
- * 归一化 JS 返回的章节对象。
- * 修复：书源 JS 返回 `{name, url}`，但 Chapter 类型字段是 `title`。
- * 需要把 `name` 映射到 `title`，同时保留 `url` / `index` / `id`。
- */
 function normalizeChapter(raw: unknown, idx: number, _redirectUrl: string): Chapter | null {
   if (raw === null || raw === undefined) return null
   if (typeof raw !== 'object') return null
   const obj = raw as Record<string, unknown>
 
-  // 标题：优先 title，其次 name
   const rawTitle = obj.title ?? obj.name ?? obj.chapterName ?? ''
   const title = typeof rawTitle === 'string' ? rawTitle.trim() : String(rawTitle || '').trim()
   if (!title) return null
 
-  // URL：优先 url，其次 href
   const rawUrl = obj.url ?? obj.href ?? ''
   const urlStr = typeof rawUrl === 'string' ? rawUrl.trim() : String(rawUrl || '').trim()
 
-  // index / id
   const rawIndex = obj.index ?? obj.id ?? idx
-  // 归一化索引到 number（未用时也保留，供未来扩展）
   void (typeof rawIndex === 'number' ? rawIndex : parseInt(String(rawIndex), 10))
-  
-  // VIP / 付费
+
   const isVip = !!(obj.isVip ?? obj.is_vip ?? false)
   const isPay = !!(obj.isPay ?? obj.is_pay ?? false)
 
@@ -67,21 +57,12 @@ function normalizeChapter(raw: unknown, idx: number, _redirectUrl: string): Chap
   }
 }
 
-/**
- * 把 evaluateRule 返回的任意结果归一化成 Chapter[]。
- * 覆盖：
- * - 数组 [{name, url}, ...]
- * - 数组 [{title, url}, ...]
- * - 单个对象
- * - 字符串（原始 JSON）
- */
 function normalizeChapterList(response: unknown, redirectUrl: string): Chapter[] {
   let arr: unknown[] = []
 
   if (Array.isArray(response)) {
     arr = response
   } else if (typeof response === 'string') {
-    // 尝试解析 JSON
     const trimmed = response.trim()
     if (trimmed.startsWith('[') && trimmed.endsWith(']')) {
       try {
@@ -91,7 +72,6 @@ function normalizeChapterList(response: unknown, redirectUrl: string): Chapter[]
         // ignore
       }
     } else if (trimmed.startsWith('{') && trimmed.endsWith('}')) {
-      // 可能是 {…},{…} 伪数组，或单个对象
       try {
         const parsed = JSON.parse(trimmed) as unknown
         arr = [parsed]
@@ -269,7 +249,13 @@ async function concurrentMap<T, R>(
   return results
 }
 
-export async function fetchToc(
+/**
+ * 只走网络抓取目录，不查缓存。
+ *
+ * SWR 模式下的 revalidate 路径。
+ * 拉取完成后会自动写缓存。
+ */
+export async function fetchTocFromNetwork(
   source: BookSource, tocUrl: string, book?: Book,
 ): Promise<Chapter[]> {
   if (!tocUrl) {
@@ -286,15 +272,7 @@ export async function fetchToc(
     await runPreUpdateJs(source, book)
   }
 
-  if (book) {
-    const cached = await loadTocFromCache(source, book)
-    if (cached) {
-      logInfo('engine', 'frontend', `[目录] 从缓存加载 ${cached.length} 章`)
-      return cached
-    }
-  }
-
-  logInfo('engine', 'frontend', `[目录] 开始 url=${tocUrl.substring(0, 100)}`)
+  logInfo('engine', 'frontend', `[目录] 网络拉取 url=${tocUrl.substring(0, 100)}`)
 
   const headers = await executeHeaderRule(source)
   const bookData = book || { name: '', author: '', bookUrl: tocUrl }
@@ -326,7 +304,6 @@ export async function fetchToc(
         book: bookData,
         redirectUrl,
       }, { forceDeno: true })
-      // 修复：归一化 JS 返回的章节对象（name → title）
       pageChapters = normalizeChapterList(response, redirectUrl)
     } else {
       const parsed = await parseTocPage(
@@ -396,17 +373,36 @@ export async function fetchToc(
         await saveTocToCache(source, book, finalChapters)
       }
 
-      logInfo('engine', 'frontend', `[目录] 完成 ${finalChapters.length} 章`)
+      logInfo('engine', 'frontend', `[目录] 网络完成 ${finalChapters.length} 章`)
       return finalChapters
     }
     return []
   } catch (err) {
     handleError(err, {
       module: 'engine',
-      operation: 'fetchToc',
+      operation: 'fetchTocFromNetwork',
       sourceUrl: source.bookSourceUrl,
       userMessage: '获取目录失败，请检查书源或网络',
     })
     return []
   }
+}
+
+/**
+ * 兼容旧接口：先查缓存，缓存命中直接返回；未命中走网络。
+ *
+ * 这个语义是"cache-first"，调用方若需要 SWR 行为，
+ * 用 loadTocFromCache + fetchTocFromNetwork 组合。
+ */
+export async function fetchToc(
+  source: BookSource, tocUrl: string, book?: Book,
+): Promise<Chapter[]> {
+  if (book) {
+    const cached = await loadTocFromCache(source, book)
+    if (cached) {
+      logInfo('engine', 'frontend', `[目录] 从缓存加载 ${cached.length} 章`)
+      return cached
+    }
+  }
+  return fetchTocFromNetwork(source, tocUrl, book)
 }

@@ -1,11 +1,17 @@
 // ============================================
-// 段落重排 & 净化 — 对齐 Legado ContentHelp
-// JS 替换通过回调注入，不在此文件内执行任意 JS
+// 段落重排 & 净化 — 对齐 Legado ContentProcessor
+//
+// 导出两套 API：
+// - 异步版：preprocessContent / applyReplaceRules（useReaderContent 用）
+//   - 支持 @js: 规则 + Worker 正则匹配
+// - 同步版：purifyText / preprocessContentSync / applyReplaceRulesSync
+//   - 兼容原 API，供单元测试和纯同步场景使用
+//   - @js: 规则跳过（由调用方异步处理）
 // ============================================
 
 import { getCachedRegex } from '../../utils/regex-cache.js'
 
-interface ReplaceRule {
+export interface ReplaceRule {
   id?: number
   name?: string
   pattern: string
@@ -19,7 +25,58 @@ interface ReplaceRule {
   [key: string]: unknown
 }
 
+/**
+ * 正则匹配结果。与 services/regex-worker.ts 的 RegexMatch 结构一致。
+ * engine 层独立定义，避免依赖 services。
+ */
+export interface RegexMatch {
+  index: number
+  length: number
+  /** groups[0] 是全匹配，groups[N] 是第 N 个捕获组 */
+  groups: (string | null)[]
+}
+
+export interface ReplaceContext {
+  chapterTitle: string
+  bookName: string
+  chapter: unknown
+  book: unknown
+}
+
+export interface PreprocessOptions {
+  chapterTitle: string
+  bookName: string
+  reSegmentEnabled: boolean
+  /** 简繁转换回调。null 或 undefined 表示不转换 */
+  convertFn?: ((text: string) => Promise<string>) | null
+}
+
+export interface ApplyReplaceRulesOptions {
+  rules: ReplaceRule[]
+  replaceContext: ReplaceContext
+  /** @js: 规则的 JS 执行器（异步） */
+  jsExecutor?: ((jsCode: string, matched: string, ctx: ReplaceContext, ruleName: string) => Promise<string>) | null
+  /**
+   * 正则匹配函数。services 层注入 Worker 实现，以获得超时保护。
+   * 无注入时降级为主线程同步匹配（无超时保护）。
+   */
+  findMatches?: ((text: string, pattern: string, flags: string) => Promise<RegexMatch[]>) | null
+}
+
+/**
+ * 同步 JS 替换回调（保留原 API 兼容）。
+ * @js: 规则执行时的同步替代，返回值直接拼接。
+ */
 export type JsReplacementFn = (jsCode: string, matched: string) => string
+
+export interface PurifyOptions {
+  chapterTitle: string
+  bookName: string
+  reSegmentEnabled: boolean
+  purifyEnabled: boolean
+  rules: ReplaceRule[]
+  jsReplacementFn?: JsReplacementFn | null
+}
 
 const MARK_SENTENCES_END = '？。！?!~'
 const MARK_SENTENCES_END_P = '.？。！?!~'
@@ -183,11 +240,6 @@ function splitQuote(str: string): string {
   return str
 }
 
-/**
- * 修复：StringBuilder 缓存内部字符串，避免每次 toString 都 join。
- * dirty 标记：只有 append/setCharAt/replaceLastChar 后置 dirty，
- * toString 时若 dirty 才 join。
- */
 class StringBuilder {
   private chars: string[] = []
   private cached: string | null = null
@@ -234,7 +286,6 @@ class StringBuilder {
   }
 
   get length(): number {
-    // 缓存命中时 O(1)
     if (this.cached !== null) return this.cached.length
     return this.cachedLength
   }
@@ -572,51 +623,95 @@ export function reSegment(content: string, chapterName: string): string {
   }
 }
 
-interface PurifyRule {
-  pattern: string
-  replacement: string
-  isRegex: boolean
+/**
+ * 对齐 Java Matcher.appendReplacement 的替换模式展开。
+ *
+ * Java 语义：
+ * - $0         → 全匹配
+ * - $1..$N     → 第 N 个捕获组（N < 捕获组数量）
+ * - \x         → 字面 x
+ * - $ 后跟非数字 → 保持字面
+ * - $N 超出范围  → 抛异常（对齐 IndexOutOfBoundsException）
+ */
+function expandJavaReplacement(replacement: string, groups: (string | null)[]): string {
+  if (!replacement) return ''
+  if (replacement.indexOf('$') === -1 && replacement.indexOf('\\') === -1) {
+    return replacement
+  }
+  let result = ''
+  let i = 0
+  while (i < replacement.length) {
+    const ch = replacement[i]
+    if (ch === '\\') {
+      if (i + 1 < replacement.length) {
+        result += replacement[i + 1]
+        i += 2
+      } else {
+        result += '\\'
+        i++
+      }
+    } else if (ch === '$') {
+      let numStart = i + 1
+      let numEnd = numStart
+      while (numEnd < replacement.length) {
+        const c = replacement[numEnd]
+        if (c !== undefined && c >= '0' && c <= '9') {
+          numEnd++
+        } else {
+          break
+        }
+      }
+      if (numEnd > numStart) {
+        const numStr = replacement.substring(numStart, numEnd)
+        const num = parseInt(numStr, 10)
+        if (num >= 0 && num < groups.length) {
+          result += groups[num] || ''
+          i = numEnd
+        } else {
+          throw new Error('No group ' + num)
+        }
+      } else {
+        result += ch
+        i++
+      }
+    } else {
+      result += ch
+      i++
+    }
+  }
+  return result
 }
 
-function applyReplaceRuleSync(text: string, rule: PurifyRule, jsReplacementFn: JsReplacementFn | null): string {
-  try {
-    const replacement = rule.replacement || ''
-    const isJsReplace = replacement.startsWith('@js:') || replacement.startsWith('<js>')
-
-    if (rule.isRegex) {
-      const re = getCachedRegex(rule.pattern, 'g')
-      if (!re) return text
-      // 修复：每次 replace 前重置 lastIndex，避免全局正则残留状态
-      re.lastIndex = 0
-      const result = text.replace(re, (match) => {
-        if (isJsReplace) {
-          if (!jsReplacementFn) return match
-          try {
-            return jsReplacementFn(replacement, match)
-          } catch {
-            return match
-          }
-        }
-        return replacement
-      })
-      // 重置，避免影响后续使用
-      re.lastIndex = 0
-      return result
+function fallbackFindMatches(text: string, pattern: string, flags: string): RegexMatch[] {
+  const re = new RegExp(pattern, flags)
+  const matches: RegexMatch[] = []
+  re.lastIndex = 0
+  let m: RegExpExecArray | null
+  while ((m = re.exec(text)) !== null) {
+    const groups: (string | null)[] = []
+    for (let i = 0; i < m.length; i++) {
+      const v = m[i]
+      groups.push(v === undefined ? null : v)
     }
-
-    if (isJsReplace) {
-      if (!jsReplacementFn) return text
-      try {
-        return jsReplacementFn(replacement, text)
-      } catch {
-        return text
-      }
-    }
-
-    return text.split(rule.pattern).join(replacement)
-  } catch {
-    return text
+    matches.push({ index: m.index, length: m[0].length, groups })
+    if (m[0].length === 0) re.lastIndex++
   }
+  return matches
+}
+
+function isValidPattern(pattern: string, isRegex: boolean): boolean {
+  if (!pattern) return false
+  if (!isRegex) return true
+  try {
+    // eslint-disable-next-line no-new
+    new RegExp(pattern)
+  } catch {
+    return false
+  }
+  if (pattern.endsWith('|') && !pattern.endsWith('\\|')) {
+    return false
+  }
+  return true
 }
 
 function removeSameTitle(text: string, chapterTitle: string, bookName: string): string {
@@ -632,24 +727,22 @@ function removeSameTitle(text: string, chapterTitle: string, bookName: string): 
     const prefixPattern = getCachedRegex(pattern, 'u')
     if (!prefixPattern) return text
     prefixPattern.lastIndex = 0
-    const match = text.match(prefixPattern)
-    if (match && match[0]) return text.substring(match[0].length)
+    const matchResult = text.match(prefixPattern)
+    if (matchResult && matchResult[0]) return text.substring(matchResult[0].length)
   } catch {
     // ignore
   }
   return text
 }
 
-export interface PurifyOptions {
-  chapterTitle: string
-  bookName: string
-  reSegmentEnabled: boolean
-  purifyEnabled: boolean
-  rules: ReplaceRule[]
-  jsReplacementFn?: JsReplacementFn | null
-}
+// ─── 同步 API ───
 
-export function purifyText(rawText: string, options: PurifyOptions): string {
+/**
+ * 同步版预处理：去除重复标题 → reSegment → trim 每行。
+ * 不支持异步 convertFn（简繁转换由调用方在外部处理）。
+ */
+export function preprocessContentSync(rawText: string, options: PreprocessOptions): string {
+  if (!rawText) return rawText
   let text = rawText
   try {
     text = removeSameTitle(text, options.chapterTitle, options.bookName)
@@ -661,23 +754,233 @@ export function purifyText(rawText: string, options: PurifyOptions): string {
         text = text.replace(leadingNewlines, '')
       }
     }
-    if (options.purifyEnabled) {
-      const jsFn = options.jsReplacementFn ?? null
-      for (const rule of options.rules) {
-        if (!rule.isEnabled || !rule.pattern) continue
-        if (!rule.scopeContent && rule.scopeTitle) continue
-        const newText = applyReplaceRuleSync(text, {
-          pattern: rule.pattern,
-          replacement: rule.replacement || '',
-          isRegex: rule.isRegex,
-        }, jsFn)
-        if (newText) text = newText
+    text = text.split('\n').map((l) => l.trim()).join('\n')
+  } catch {
+    // ignore
+  }
+  return text
+}
+
+/**
+ * 同步版替换：只处理非 @js: 规则。
+ * @js: 规则由调用方异步执行后，通过 preprocessContentAsync / applyReplaceRules 处理。
+ */
+export function applyReplaceRulesSync(
+  text: string,
+  options: {
+    rules: ReplaceRule[]
+    jsReplacementFn?: JsReplacementFn | null
+  },
+): string {
+  if (!text) return text
+  const sortedRules = [...options.rules].sort((a, b) => (a.order ?? 0) - (b.order ?? 0))
+  let result = text
+  for (const rule of sortedRules) {
+    if (!rule.isEnabled || !rule.pattern) continue
+    if (!rule.scopeContent && rule.scopeTitle) continue
+    if (!isValidPattern(rule.pattern, rule.isRegex)) continue
+
+    const replacement = rule.replacement || ''
+    const isJs = replacement.startsWith('@js:')
+    const replacement1 = isJs ? replacement.substring(4) : replacement
+
+    if (rule.isRegex) {
+      let matches: RegexMatch[]
+      try {
+        matches = fallbackFindMatches(result, rule.pattern, 'g')
+      } catch {
+        continue
       }
+      let newResult = ''
+      let lastIndex = 0
+      for (const m of matches) {
+        newResult += result.substring(lastIndex, m.index)
+        const matchedText = m.groups[0] || ''
+        if (isJs) {
+          if (options.jsReplacementFn) {
+            try {
+              newResult += options.jsReplacementFn(replacement1, matchedText)
+            } catch {
+              newResult += matchedText
+            }
+          } else {
+            newResult += matchedText
+          }
+        } else {
+          try {
+            newResult += expandJavaReplacement(replacement1, m.groups)
+          } catch {
+            newResult = text
+            break
+          }
+        }
+        lastIndex = m.index + m.length
+      }
+      if (newResult) result = newResult + result.substring(lastIndex)
+    } else {
+      if (isJs) {
+        if (options.jsReplacementFn) {
+          try {
+            result = options.jsReplacementFn(replacement1, result)
+          } catch {
+            // ignore
+          }
+        }
+      } else {
+        result = result.split(rule.pattern).join(replacement)
+      }
+    }
+  }
+  return result
+}
+
+/**
+ * 兼容层：同步版的 purifyText。
+ *
+ * 保留原有同步语义：
+ * - 先 preprocessContentSync（removeSameTitle + reSegment + trim）
+ * - 再 applyReplaceRulesSync（非 @js: 规则）
+ * - @js: 规则若提供了 jsReplacementFn 则同步执行
+ *
+ * 对齐原项目的 purifyText 行为。
+ */
+export function purifyText(rawText: string, options: PurifyOptions): string {
+  let text = rawText
+  try {
+    text = preprocessContentSync(text, {
+      chapterTitle: options.chapterTitle,
+      bookName: options.bookName,
+      reSegmentEnabled: options.reSegmentEnabled,
+      convertFn: null,
+    })
+    if (options.purifyEnabled) {
+      text = applyReplaceRulesSync(text, {
+        rules: options.rules,
+        jsReplacementFn: options.jsReplacementFn ?? null,
+      })
     }
   } catch {
     // ignore
   }
   return text
+}
+
+// ─── 异步 API ───
+
+async function applySingleRuleAsync(
+  text: string,
+  rule: ReplaceRule,
+  options: ApplyReplaceRulesOptions,
+): Promise<string> {
+  const replacement = rule.replacement || ''
+  if (!rule.pattern) return text
+
+  const isJs = replacement.startsWith('@js:')
+  const replacement1 = isJs ? replacement.substring(4) : replacement
+
+  if (rule.isRegex) {
+    let matches: RegexMatch[]
+    try {
+      if (options.findMatches) {
+        matches = await options.findMatches(text, rule.pattern, 'g')
+      } else {
+        matches = fallbackFindMatches(text, rule.pattern, 'g')
+      }
+    } catch {
+      return text
+    }
+
+    let result = ''
+    let lastIndex = 0
+    for (const m of matches) {
+      result += text.substring(lastIndex, m.index)
+      const matchedText = m.groups[0] || ''
+      if (isJs) {
+        if (options.jsExecutor) {
+          try {
+            const repl = await options.jsExecutor(replacement1, matchedText, options.replaceContext, rule.name || '')
+            result += repl
+          } catch {
+            return text
+          }
+        } else {
+          result += matchedText
+        }
+      } else {
+        try {
+          result += expandJavaReplacement(replacement1, m.groups)
+        } catch {
+          return text
+        }
+      }
+      lastIndex = m.index + m.length
+    }
+    result += text.substring(lastIndex)
+    return result
+  }
+
+  if (isJs) {
+    if (options.jsExecutor) {
+      try {
+        const repl = await options.jsExecutor(replacement1, text, options.replaceContext, rule.name || '')
+        return repl || text
+      } catch {
+        return text
+      }
+    }
+    return text
+  }
+  return text.split(rule.pattern).join(replacement)
+}
+
+/**
+ * 异步版预处理：去除重复标题 → reSegment → 简繁转换 → trim 每行。
+ */
+export async function preprocessContent(rawText: string, options: PreprocessOptions): Promise<string> {
+  if (!rawText) return rawText
+  let text = rawText
+  try {
+    text = removeSameTitle(text, options.chapterTitle, options.bookName)
+    if (options.reSegmentEnabled) {
+      text = reSegment(text, options.chapterTitle)
+      const leadingNewlines = getCachedRegex('^\\n+')
+      if (leadingNewlines) {
+        leadingNewlines.lastIndex = 0
+        text = text.replace(leadingNewlines, '')
+      }
+    }
+    if (options.convertFn) {
+      try {
+        text = await options.convertFn(text)
+      } catch {
+        // ignore
+      }
+    }
+    text = text.split('\n').map((l) => l.trim()).join('\n')
+  } catch {
+    // ignore
+  }
+  return text
+}
+
+/**
+ * 异步版单循环执行替换规则，按 order 排序。
+ */
+export async function applyReplaceRules(text: string, options: ApplyReplaceRulesOptions): Promise<string> {
+  if (!text) return text
+  const sortedRules = [...options.rules].sort((a, b) => (a.order ?? 0) - (b.order ?? 0))
+  let result = text
+  for (const rule of sortedRules) {
+    if (!rule.isEnabled || !rule.pattern) continue
+    if (!rule.scopeContent && rule.scopeTitle) continue
+    if (!isValidPattern(rule.pattern, rule.isRegex)) continue
+    try {
+      result = await applySingleRuleAsync(result, rule, options)
+    } catch {
+      // ignore
+    }
+  }
+  return result
 }
 
 export function textToHtml(text: string): string {

@@ -17,7 +17,10 @@ import type { EngineBookSource, EngineBook, EngineChapter } from '@engine/types.
 import { NETWORK } from '@/constants/index.js'
 
 const MAX_CONTENT_PAGES = 20
-const MAX_CONCURRENT_PAGES = 5
+// 降低 BFS 每轮并发，避免瞬间发太多请求。
+// 原 5：一章 10 页会 2 轮并发发 10 个请求，峰值高。
+// 现在 2：一章 10 页分 5 轮，峰值低，总耗时略增但不抢网络。
+const MAX_CONCURRENT_PAGES = 2
 const BASE64_LENGTH_THRESHOLD = 2000
 const AES_MIN_LENGTH_RATIO = 0.3
 const HEX_MAX_LENGTH = 500
@@ -381,31 +384,6 @@ async function fetchAndDecryptPage(
   }
 }
 
-async function concurrentMap<T, R>(
-  items: T[],
-  fn: (item: T) => Promise<R | null>,
-  limit: number
-): Promise<R[]> {
-  const results: R[] = []
-  const queue = [...items]
-
-  async function worker() {
-    while (queue.length > 0) {
-      const item = queue.shift()
-      if (!item) break
-      const result = await fn(item)
-      if (result !== null) results.push(result)
-    }
-  }
-
-  const workers: Promise<void>[] = []
-  for (let i = 0; i < Math.min(limit, items.length); i++) {
-    workers.push(worker())
-  }
-  await Promise.all(workers)
-  return results
-}
-
 export interface GetContentOptions {
   bookKind?: string | undefined
   book?: Record<string, unknown>
@@ -416,6 +394,16 @@ export interface GetContentOptions {
   skipCache?: boolean
 }
 
+/**
+ * 抓取一章的正文（可能多页），拼成完整文本。
+ *
+ * BFS 队列 + 分批并发抓取。
+ *   - 队列初始 = [第 1 页 URL]
+ *   - while 队列非空且 pages.length < MAX_CONTENT_PAGES：
+ *       - 取队列头 MAX_CONCURRENT_PAGES 个，并发抓取
+ *       - 每抓一页，抓它的 nextUrls，加入队列
+ *   - nextUrlSet 防止重复抓取，不会无限循环
+ */
 export async function getContent(
   source: BookSource, chapterUrl: string,
   options: GetContentOptions = {}
@@ -438,6 +426,8 @@ export async function getContent(
   const nextChapterUrl = options.nextChapterUrl || ''
   const isComic = source.bookSourceType === 2
   const evaluator = createRuleEvaluator()
+  const engineSource = toEngineBookSource(source)
+  const ruleObj = contentRule as unknown as Record<string, unknown>
 
   let resolvedUrl = chapterUrl
   const chRecord = chapter as Record<string, unknown>
@@ -446,24 +436,37 @@ export async function getContent(
     chapter.url = resolvedUrl
   }
 
-  const contentList: string[] = []
+  const ctx = { source: engineSource, baseUrl: source.bookSourceUrl || '', book, chapter, nextChapterUrl, result: '' }
   const nextUrlSet = new Set<string>()
-  const ctx = { source: toEngineBookSource(source), baseUrl: source.bookSourceUrl || '', book, chapter, nextChapterUrl, result: '' }
+
+  // ─── 漫画：只抓第一页，不解密，直接返回 HTML ───
+  if (isComic) {
+    try {
+      const firstPage = await fetchAndDecryptPage(source, resolvedUrl, headers, book, ruleObj, ctx, chapter, nextChapterUrl)
+      if (!firstPage) return '正文获取失败'
+      if (firstPage.jsExecuted && firstPage.html.includes('<img src="')) {
+        let contentStr = firstPage.html
+        if (contentRule.imageStyle) contentStr = injectImageStyle(contentStr, contentRule.imageStyle)
+        logInfo('reader', 'frontend', `[正文] 漫画直接返回 ${contentStr.length} 字符`)
+        return contentStr
+      }
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e)
+      logError('reader', 'frontend', `[正文] 漫画获取异常: ${msg}`)
+      return '正文获取失败'
+    }
+  }
+
+  // ─── 普通文本：BFS 抓取所有页 ───
+  const pages: { url: string; content: string }[] = []
 
   try {
-    const ruleObj = contentRule as unknown as Record<string, unknown>
+    // 第一页
     const firstPage = await fetchAndDecryptPage(source, resolvedUrl, headers, book, ruleObj, ctx, chapter, nextChapterUrl)
     if (!firstPage) return '正文获取失败'
+    nextUrlSet.add(firstPage.redirectUrl)
 
-    if (isComic && firstPage.jsExecuted && firstPage.html.includes('<img src="')) {
-      let contentStr = firstPage.html
-      if (contentRule.imageStyle) contentStr = injectImageStyle(contentStr, contentRule.imageStyle)
-      logInfo('reader', 'frontend', `[正文] 漫画直接返回 ${contentStr.length} 字符`)
-      return contentStr
-    }
-
-    const engineSource = toEngineBookSource(source)
-    const { content: pageContent, nextUrls } = await parseContentPage(
+    const firstResult = await parseContentPage(
       book as Partial<EngineBook>,
       resolvedUrl,
       firstPage.redirectUrl,
@@ -473,39 +476,80 @@ export async function getContent(
       engineSource,
       nextChapterUrl,
       true,
-      evaluator
+      evaluator,
     )
-    if (pageContent && pageContent.trim()) contentList.push(pageContent.trim())
-    nextUrlSet.add(firstPage.redirectUrl)
-
-    const pageUrls: string[] = []
-    for (const u of nextUrls) {
-      if (!u || nextUrlSet.has(u)) continue
-      pageUrls.push(u)
+    if (firstResult.content && firstResult.content.trim()) {
+      pages.push({ url: firstPage.redirectUrl, content: firstResult.content.trim() })
     }
 
-    if (pageUrls.length > 0) {
-      const pageResults = await concurrentMap(
-        pageUrls.slice(0, MAX_CONTENT_PAGES),
-        async (nextUrl) => {
-          if (nextUrlSet.has(nextUrl)) return null
-          nextUrlSet.add(nextUrl)
-          const nextPage = await fetchAndDecryptPage(source, nextUrl, headers, book, ruleObj, ctx, chapter, nextChapterUrl)
-          if (!nextPage) return null
-          const { content: npc } = await parseContentPage(
-            book as Partial<EngineBook>, nextUrl, nextPage.redirectUrl, nextPage.html,
-            ruleObj as Parameters<typeof parseContentPage>[4],
-            chapter as Partial<EngineChapter>, engineSource, nextChapterUrl, nextUrls.length > 1,
-            evaluator
-          )
-          return npc && npc.trim() ? npc.trim() : null
-        },
-        MAX_CONCURRENT_PAGES
+    // BFS 队列：第一页的 nextUrls 作为下一轮
+    let pending: string[] = []
+    for (const u of firstResult.nextUrls) {
+      const trimmed = u.trim()
+      if (trimmed && !nextUrlSet.has(trimmed)) {
+        nextUrlSet.add(trimmed)
+        pending.push(trimmed)
+      }
+    }
+
+    // 循环抓取，直到没有下一页或达到 MAX_CONTENT_PAGES
+    while (pending.length > 0 && pages.length < MAX_CONTENT_PAGES) {
+      const batch = pending.slice(0, MAX_CONCURRENT_PAGES)
+      pending = pending.slice(MAX_CONCURRENT_PAGES)
+
+      const results = await Promise.all(
+        batch.map(async (nextUrl) => {
+          try {
+            const nextPage = await fetchAndDecryptPage(source, nextUrl, headers, book, ruleObj, ctx, chapter, nextChapterUrl)
+            if (!nextPage) return null
+            const parsed = await parseContentPage(
+              book as Partial<EngineBook>,
+              nextUrl,
+              nextPage.redirectUrl,
+              nextPage.html,
+              ruleObj as Parameters<typeof parseContentPage>[4],
+              chapter as Partial<EngineChapter>,
+              engineSource,
+              nextChapterUrl,
+              true,
+              evaluator,
+            )
+            return {
+              url: nextPage.redirectUrl,
+              content: parsed.content ? parsed.content.trim() : '',
+              nextUrls: parsed.nextUrls,
+            }
+          } catch (e: unknown) {
+            const msg = e instanceof Error ? e.message : String(e)
+            logWarn('reader', 'frontend', `[正文] 抓取分页失败 ${nextUrl}: ${msg}`)
+            return null
+          }
+        })
       )
-      for (const r of pageResults) contentList.push(r)
+
+      for (const r of results) {
+        if (!r) continue
+        if (r.content) pages.push({ url: r.url, content: r.content })
+
+        for (const u of r.nextUrls) {
+          const trimmed = u.trim()
+          if (trimmed && !nextUrlSet.has(trimmed)) {
+            nextUrlSet.add(trimmed)
+            pending.push(trimmed)
+          }
+        }
+
+        if (pages.length >= MAX_CONTENT_PAGES) break
+      }
     }
 
-    let contentStr = contentList.join('\n')
+    if (pages.length >= MAX_CONTENT_PAGES && pending.length > 0) {
+      logWarn('reader', 'frontend', `[正文] 达到 MAX_CONTENT_PAGES=${MAX_CONTENT_PAGES}，停止抓取`)
+    }
+
+    logInfo('reader', 'frontend', `[正文] 共抓取 ${pages.length} 页`)
+
+    let contentStr = pages.map((p) => p.content).join('\n')
 
     if (contentRule.replaceRegex) {
       try {

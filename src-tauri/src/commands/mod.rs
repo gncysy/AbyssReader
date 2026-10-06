@@ -2,6 +2,8 @@ pub mod bookshelf;
 pub mod cache;
 pub mod comic;
 pub mod engine;
+pub mod epub;
+pub mod epub_protocol;
 pub mod fetch;
 pub mod webview;
 pub mod rss;
@@ -15,6 +17,7 @@ pub use bookshelf::*;
 pub use cache::*;
 pub use comic::*;
 pub use engine::*;
+pub use epub::*;
 pub use fetch::*;
 pub use webview::*;
 pub use rss::*;
@@ -31,8 +34,6 @@ pub async fn cleanup_webviews() -> crate::error::Result<()> {
     crate::js_runtime::ops::cleanup_all_embedded_webviews();
     Ok(())
 }
-
-// ─── 验证码提交/取消（转发到 ops 层） ───
 
 #[tauri::command]
 pub fn submit_verification_code(code: String) -> String {

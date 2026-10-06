@@ -53,6 +53,94 @@ function stripJsTemplate(str: string): string | null {
 }
 
 /**
+ * 对 URL 里的所有 {{...}} 做 JS 求值替换。
+ *
+ * 支持两种形态：
+ * - 整个 URL 就是 {{...}}：求值后返回结果字符串
+ * - URL 里嵌了 {{...}}：例如 "https://x.com/{{page == 1 ? '' : page + '.html'}}"
+ *   把每个 {{...}} 求值后替换回原位置
+ *
+ * 求值失败时保留原文（避免破坏 URL 结构）。
+ * runtime 为 null 时直接返回原 URL（由调用方决定后续行为）。
+ */
+async function evaluateJsTemplates(
+  url: string,
+  runtime: JsRuntime | null,
+  source: EngineBookSource,
+  page: number,
+  key: string,
+): Promise<string> {
+  if (!url || !url.includes('{{') || !url.includes('}}')) return url
+  if (!runtime) return url
+
+  // 整个字符串是 {{...}}
+  if (isJsTemplate(url)) {
+    const jsCode = stripJsTemplate(url)
+    if (!jsCode || !jsCode.trim()) return url
+    try {
+      const result = await runtime.execute(jsCode.trim(), {
+        source,
+        baseUrl: source.bookSourceUrl || '',
+        book: {},
+        page,
+        key,
+      })
+      if (result === null || result === undefined) return ''
+      if (typeof result === 'string') return result
+      if (typeof result === 'number' && Number.isInteger(result)) return String(result)
+      if (typeof result === 'boolean') return String(result)
+      if (typeof result === 'object') {
+        try { return JSON.stringify(result) } catch { return '' }
+      }
+      return String(result)
+    } catch {
+      return url
+    }
+  }
+
+  // URL 里嵌 {{...}}：逐个替换
+  let processed = url
+  const templateRegex = /\{\{([\s\S]*?)\}\}/g
+  let match: RegExpExecArray | null
+  while ((match = templateRegex.exec(processed)) !== null) {
+    const jsCode = match[1]
+    if (!jsCode || !jsCode.trim()) continue
+
+    let replacement = ''
+    try {
+      const result = await runtime.execute(jsCode.trim(), {
+        source,
+        baseUrl: source.bookSourceUrl || '',
+        book: {},
+        page,
+        key,
+      })
+      if (result === null || result === undefined) {
+        replacement = ''
+      } else if (typeof result === 'string') {
+        replacement = result
+      } else if (typeof result === 'number' && Number.isInteger(result)) {
+        replacement = String(result)
+      } else if (typeof result === 'boolean') {
+        replacement = String(result)
+      } else if (typeof result === 'object') {
+        try { replacement = JSON.stringify(result) } catch { replacement = '' }
+      } else {
+        replacement = String(result)
+      }
+    } catch {
+      // 求值失败，保留原文（防止 URL 结构被破坏）
+      replacement = match[0]
+    }
+
+    processed = processed.substring(0, match.index) + replacement + processed.substring(match.index + match[0].length)
+    templateRegex.lastIndex = match.index + replacement.length
+  }
+
+  return processed
+}
+
+/**
  * 执行 exploreUrl 顶层 JS。
  * 对齐 Legado：整个 exploreUrl 是 @js: / <js> / {{...}} 时，
  * 执行 JS 并解析返回值为分类列表。
@@ -205,7 +293,23 @@ export async function getExploreBooks(
     html = categoryUrlOrHtml
     baseUrl = source.bookSourceUrl || ''
   } else {
-    let url = categoryUrlOrHtml.replace(/\{\{page\}\}/g, String(page))
+    // ─── URL 求值顺序 ───
+    // 1. 先处理 {{...}} JS 模板（例如 {{page == 1 ? "" : page + ".html"}}）
+    //    对齐 analyzeUrl（engine/url/index.ts）的行为。
+    //    分类 URL 来自 exploreUrl 或用户填写的分类，可能带 {{...}}。
+    //    Legado 语义：URL 里任何位置的 {{...}} 都是 JS 表达式，需先求值。
+    let url = await evaluateJsTemplates(
+      categoryUrlOrHtml,
+      runtime,
+      source,
+      page,
+      '',
+    )
+
+    // 2. 再处理 {{page}} 字面量（旧逻辑保留，兜底）
+    url = url.replace(/\{\{page\}\}/g, String(page))
+
+    // 3. 最后 resolveUrl（相对路径补全）
     if (!url.startsWith('http://') && !url.startsWith('https://')) {
       url = resolveUrl(url, source.bookSourceUrl)
     }

@@ -111,6 +111,47 @@ function toUint8Array(data) {
     return new Uint8Array(0);
 }
 
+/**
+ * 取当前沙箱的内容（与 java.getElements 一致）。
+ */
+function getSandboxContent() {
+    return globalThis.__sandbox_data ? (globalThis.__sandbox_data.result || '') : '';
+}
+
+/**
+ * 取当前沙箱的 baseUrl。
+ * 优先 __sandbox_data.baseUrl，其次 source.bookSourceUrl。
+ */
+function getSandboxBaseUrl() {
+    if (globalThis.__sandbox_data) {
+        if (globalThis.__sandbox_data.baseUrl) {
+            return String(globalThis.__sandbox_data.baseUrl);
+        }
+        const src = globalThis.__sandbox_data.source;
+        if (src && src.bookSourceUrl) {
+            return String(src.bookSourceUrl);
+        }
+    }
+    return '';
+}
+
+/**
+ * 把 str 解析为绝对路径。
+ * 依赖 dom.js 提供的 Element / Elements。
+ */
+function resolveAbsoluteUrl(str, baseUrl) {
+    if (!str) return str;
+    if (/^https?:\/\//i.test(str)) return str;
+    if (/^\/\//.test(str)) return 'https:' + str;
+    if (/^data:/i.test(str)) return str;
+    if (!baseUrl) return str;
+    try {
+        return new URL(str, baseUrl).href;
+    } catch (e) {
+        return str;
+    }
+}
+
 Object.assign(globalThis.java, {
     put: function(key, value) { return Deno.core.ops.op_java_put("default", String(key), String(value)); },
     get: function(key) { return Deno.core.ops.op_java_get("default", String(key)); },
@@ -314,10 +355,9 @@ Object.assign(globalThis.java, {
     },
 
     /**
-     * 修复：对齐 Legado 的 java.upLoginData(Map<String, Any?>?)
+     * 对齐 Legado 的 java.upLoginData(Map<String, Any?>?)
      * - data 为 null/undefined → 传空字符串（前端识别为"用 default 重建"）
      * - data 是对象 → JSON.stringify
-     * 原实现直接 String(i)，对象会变成 "[object Object]"
      */
     upLoginData: function(i) {
         var str;
@@ -335,7 +375,7 @@ Object.assign(globalThis.java, {
     },
 
     /**
-     * 新增：对齐 Legado 的 java.reLoginView(Boolean)
+     * 对齐 Legado 的 java.reLoginView(Boolean)
      * 触发前端重建登录界面。
      */
     reLoginView: function(deltaUp) {
@@ -540,24 +580,17 @@ Object.assign(globalThis.java, {
         };
     },
 
-    getStringList: function(rule, isUrl) {
-        try {
-            const data = globalThis.__sandbox_data ? (globalThis.__sandbox_data.result || '') : '';
-            const result = Deno.core.ops.op_jsoup_each_text(data, rule || '');
-            const texts = JSON.parse(result);
-            return makeIterable({
-                size: function() { return texts.length; },
-                get: function(i) { return texts[i] || ''; },
-                toArray: function() { return texts; }
-            });
-        } catch(e) {
-            return makeIterable({ size: function() { return 0; }, get: function() { return ''; }, toArray: function() { return []; } });
-        }
-    },
-
+    /**
+     * 对齐 Legado 的 java.getElements(rule, isUrl?)。
+     * 从当前沙箱内容取所有匹配元素，返回可迭代的 Elements 对象。
+     *
+     * 修复：原实现在 dom.js 里通过 Element 构造，但 core.js 先于 dom.js
+     * 加载，所以这里引用 Element 是在函数体内（延迟求值），运行时 dom.js
+     * 已加载完，安全。
+     */
     getElements: function(rule, isUrl) {
         try {
-            const data = globalThis.__sandbox_data ? (globalThis.__sandbox_data.result || '') : '';
+            const data = getSandboxContent();
             const result = Deno.core.ops.op_jsoup_select(data, rule || '');
             const elements = JSON.parse(result);
             return makeIterable({
@@ -575,6 +608,83 @@ Object.assign(globalThis.java, {
                 first: function() { return ''; },
                 last: function() { return ''; }
             });
+        }
+    },
+
+    /**
+     * 对齐 Legado 的 java.getElement(rule, isUrl?)。
+     * 从当前沙箱内容取首个匹配元素，返回 Element 对象；无匹配返回 null。
+     *
+     * 为什么返回 null 而不是空 Element：
+     * - 书源常用 `java.getElement(A) || java.getElement(B) || java.getElement(C)` 的
+     *   `||` 链式回退。若返回 truthy 空对象，链会停在第一个，回退失效。
+     * - Legado 的 getElement 返回 Java 引用，无匹配就是 null，语义对齐。
+     *
+     * Element 由 dom.js 提供（带 .select/.attr/.text/.html/.outerHtml/.tagName/.children）。
+     * core.js 先于 dom.js 加载，但此处是函数体，延迟到调用时才查找 Element，安全。
+     */
+    getElement: function(rule, isUrl) {
+        try {
+            const data = getSandboxContent();
+            const selector = rule || '';
+            const count = Deno.core.ops.op_jsoup_size(data, selector);
+            if (!count || count <= 0) {
+                return null;
+            }
+            const firstHtml = Deno.core.ops.op_jsoup_get(data, selector, 0);
+            if (!firstHtml) {
+                return null;
+            }
+            // Element 由 dom.js 提供，运行时已加载
+            return new globalThis.Element(firstHtml);
+        } catch(e) {
+            return null;
+        }
+    },
+
+    /**
+     * 对齐 Legado 的 java.getString(rule, isUrl?)。
+     * 从当前沙箱内容取首个匹配元素的文本；无匹配返回空字符串。
+     * isUrl 为 true 时解析为绝对路径。
+     *
+     * 语义对齐 Legado AnalyzeRule.getString：
+     * - 返回首个匹配元素的 text（不是 html）
+     * - isUrl 时走 resolveUrl
+     */
+    getString: function(rule, isUrl) {
+        try {
+            const data = getSandboxContent();
+            const selector = rule || '';
+            const count = Deno.core.ops.op_jsoup_size(data, selector);
+            if (!count || count <= 0) {
+                return '';
+            }
+            const firstHtml = Deno.core.ops.op_jsoup_get(data, selector, 0);
+            if (!firstHtml) {
+                return '';
+            }
+            const text = Deno.core.ops.op_jsoup_text(firstHtml);
+            if (isUrl === true) {
+                return resolveAbsoluteUrl(text, getSandboxBaseUrl());
+            }
+            return text;
+        } catch(e) {
+            return '';
+        }
+    },
+
+    getStringList: function(rule, isUrl) {
+        try {
+            const data = getSandboxContent();
+            const result = Deno.core.ops.op_jsoup_each_text(data, rule || '');
+            const texts = JSON.parse(result);
+            return makeIterable({
+                size: function() { return texts.length; },
+                get: function(i) { return texts[i] || ''; },
+                toArray: function() { return texts; }
+            });
+        } catch(e) {
+            return makeIterable({ size: function() { return 0; }, get: function() { return ''; }, toArray: function() { return []; } });
         }
     },
 

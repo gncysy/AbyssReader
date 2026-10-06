@@ -11,20 +11,15 @@ import { invoke } from '@tauri-apps/api/core'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import { initDomProvider } from './dom-provider.js'
 import { initEngineJsRuntime, resetEngineJsRuntime } from './engine.js'
+import { destroyRegexWorkerPool } from './regex-worker.js'
 import type { LoginExecutor, LoginResult } from '@engine/login/index.js'
 
 const WEBJS_TIMEOUT_SECS = 10
 
-// ─── 注入 DomProvider ───
 initDomProvider()
-
-// ─── 注入 Tauri 适配器 ───
 getGlobalHttpClient().setAdapter(tauriHttpAdapter)
-
-// ─── 注入 JsRuntime（幂等） ───
 initEngineJsRuntime()
 
-// ─── 注入 WebJsExecutor ───
 setWebJsExecutor(async (_html, jsCode, baseUrl) => {
   try {
     const result: string = await invoke('fetch_url', {
@@ -45,7 +40,6 @@ setWebJsExecutor(async (_html, jsCode, baseUrl) => {
   }
 })
 
-// ─── 注入 HTTP 日志拦截器 ───
 const http = getGlobalHttpClient()
 const interceptor = http.getInterceptor()
 interceptor.useRequest((config) => {
@@ -63,7 +57,6 @@ interceptor.useError((error) => {
   throw error
 })
 
-// ─── 日志桥接（幂等初始化） ───
 let logBridgeInitialized = false
 let logUnlisten: UnlistenFn | null = null
 
@@ -91,7 +84,6 @@ setLogBridge({
 
 engineInitLogBridge().catch(() => {})
 
-// ─── 注入登录执行器 ───
 const loginExecutor: LoginExecutor = {
   async executeLogin(source: unknown): Promise<LoginResult> {
     try {
@@ -157,7 +149,6 @@ const loginExecutor: LoginExecutor = {
 
 setLoginExecutor(loginExecutor)
 
-// ─── 导出服务 ───
 export { store } from './store.js'
 export { network, loginWebview } from './network.js'
 export { source } from './source.js'
@@ -167,6 +158,7 @@ export { rss } from './rss.js'
 export { getContent } from './content.js'
 export { explore } from './explore.js'
 export { fetchBookInfoForAdd } from './book-info.js'
+export { epub } from './epub.js'
 export {
   cache,
   getPreloadedContent,
@@ -179,6 +171,7 @@ export {
   setCachedContent,
 } from './cache.js'
 export { loadSingleImage, loadComicImages, prefetchComicImages } from './comic.js'
+export { getRegexWorkerPool, destroyRegexWorkerPool } from './regex-worker.js'
 export {
   DEFAULT_WEBDAV_CONFIG,
   encryptConfig,
@@ -192,14 +185,13 @@ export {
 } from './webdav.js'
 export { search, batchSearch } from './search.js'
 
-// ─── 清理函数 ───
 export function cleanupServices(): void {
   if (logUnlisten) {
     logUnlisten()
     logUnlisten = null
   }
   logBridgeInitialized = false
-  // 修复：清理注入的 WebJsExecutor 和 JsRuntime
+  destroyRegexWorkerPool()
   clearWebJsExecutor()
   resetEngineJsRuntime()
 }

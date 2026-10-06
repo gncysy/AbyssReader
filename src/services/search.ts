@@ -31,7 +31,15 @@ export interface BatchSearchOptions {
 }
 
 function toEngineBookSource(source: BookSource): EngineBookSource {
-  return source as unknown as EngineBookSource
+  // 用 JSON 深拷贝脱掉 Vue 响应式 Proxy，
+  // 避免 Tauri IPC 序列化 context 时触发无限递归
+  // (Maximum call stack size exceeded)。
+  // 书源是纯数据（不含函数），JSON 拷贝安全。
+  try {
+    return JSON.parse(JSON.stringify(source)) as EngineBookSource
+  } catch {
+    return source as unknown as EngineBookSource
+  }
 }
 
 function toBook(engineBook: EngineBook): Book {
@@ -53,8 +61,24 @@ export async function search(
 ): Promise<Book[]> {
   const page = options.page || 1
   const searchUrl = source.searchUrl || ''
+  const rule = source.ruleSearch
+  const bookListRule = rule?.bookList || ''
+
+  // 源级诊断日志
+  console.warn('[search] 源:', {
+    name: source.bookSourceName || '(无名)',
+    url: source.bookSourceUrl || '(无url)',
+    enabled: source.enabled,
+    searchUrl: searchUrl || '(空)',
+    bookList: bookListRule || '(空)',
+  })
+
   if (!searchUrl) {
     logError('search', 'frontend', '[搜索] searchUrl 为空')
+    return []
+  }
+  if (!rule || !bookListRule) {
+    console.warn('[search] 跳过：ruleSearch 或 bookList 为空')
     return []
   }
 
@@ -65,6 +89,8 @@ export async function search(
     key: keyword, page, source: engineSource, baseUrl: source.bookSourceUrl || '', headerMap,
   })
 
+  console.warn('[search] 解析后 URL:', urlAnalysis.url, '| method:', urlAnalysis.method)
+
   try {
     const html = await fetchWithWebviewFallback(urlAnalysis.url, {
       method: urlAnalysis.method,
@@ -74,11 +100,14 @@ export async function search(
       timeout: NETWORK.DEFAULT_TIMEOUT,
     })
 
-    if (!html) return []
+    console.warn('[search] HTML 长度:', html ? html.length : 0)
+
+    if (!html) {
+      console.warn('[search] HTML 为空，返回 []')
+      return []
+    }
 
     const baseUrl = source.bookSourceUrl || ''
-    const rule = source.ruleSearch
-    if (!rule || !rule.bookList) return []
 
     const ctx: ParseContext = { source: engineSource, baseUrl, key: keyword, page, book: {} }
     const evaluator = createRuleEvaluator()
@@ -88,7 +117,7 @@ export async function search(
       return book ? [toBook(book)] : []
     }
 
-    let listRule = rule.bookList || ''
+    let listRule = bookListRule
     let reverse = false
     if (listRule.startsWith('-')) { reverse = true; listRule = listRule.substring(1) }
     if (listRule.startsWith('+')) { listRule = listRule.substring(1) }
@@ -101,8 +130,11 @@ export async function search(
       collections = await getElements(html, listRule, ctx)
     }
 
+    console.warn('[search] bookList 匹配数:', Array.isArray(collections) ? collections.length : 'not-array')
+
     if (!Array.isArray(collections) || collections.length === 0) {
       if (!source.bookUrlPattern) {
+        console.warn('[search] bookList 空，尝试 parseInfoItem 降级')
         const book = await parseInfoItem(engineSource, baseUrl, html, keyword, page, evaluator)
         return book ? [toBook(book)] : []
       }
@@ -134,6 +166,8 @@ export async function search(
       }
     }
 
+    console.warn('[search] 解析成功书本数:', books.length, '/', collections.length)
+
     const seen = new Set<string>()
     const uniqueBooks: Book[] = []
     for (const book of books) {
@@ -143,6 +177,7 @@ export async function search(
     if (reverse) uniqueBooks.reverse()
     return uniqueBooks
   } catch (err) {
+    console.error('[search] 异常:', err)
     handleError(err, {
       module: 'search',
       operation: 'search',

@@ -306,7 +306,7 @@ pub fn op_jsoup_own_text(#[string] html: String) -> String {
 #[op2]
 #[string]
 pub fn op_java_cache_file(#[string] url: String) -> String {
-    let cache_key = format!("{:x}", md5::compute(url.as_bytes()));
+    let cache_key = crate::utils::md5_hex(url.as_bytes());
     if let Some(data) = cache::cache_get(CacheCategory::Lib, &cache_key) {
         return String::from_utf8_lossy(&data).to_string();
     }
@@ -337,7 +337,7 @@ pub fn op_java_cache_file(#[string] url: String) -> String {
 #[op2]
 #[string]
 pub fn op_java_download_file(#[string] url: String) -> String {
-    let cache_key = format!("{:x}", md5::compute(url.as_bytes()));
+    let cache_key = crate::utils::md5_hex(url.as_bytes());
     if cache::cache_get(CacheCategory::Lib, &cache_key).is_some() {
         return cache_key;
     }
@@ -502,7 +502,7 @@ pub fn op_java_unarchive_file(#[string] path: String) -> String {
             let out_dir = p
                 .parent()
                 .unwrap_or(&p)
-                .join(format!("_extracted_{:x}", md5::compute(path.as_bytes())));
+                .join(format!("_extracted_{}", crate::utils::md5_hex(path.as_bytes())));
             let _ = std::fs::create_dir_all(&out_dir);
             let file = match std::fs::File::open(&p) {
                 Ok(f) => f,
@@ -616,7 +616,7 @@ static FONT_CACHE: LazyLock<Mutex<HashMap<String, Vec<u8>>>> = LazyLock::new(|| 
 const FONT_CACHE_MAX: usize = 16;
 
 fn load_font_bytes(data: &str) -> Result<Vec<u8>, String> {
-    let cache_key = format!("{:x}", md5::compute(data.as_bytes()));
+    let cache_key = crate::utils::md5_hex(data.as_bytes());
     if let Some(bytes) = FONT_CACHE.lock().get(&cache_key) {
         return Ok(bytes.clone());
     }

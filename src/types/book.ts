@@ -62,9 +62,9 @@ export interface Book {
   syncTime?: number
   charset?: string | null
 
-  /** 内部字段：打开阅读器时强制跳转到的章节索引（从详情页点击章节时使用） */
+  /** 内部字段：打开阅读器时强制跳转到的章节索引 */
   _forceChapterIndex?: number
-  /** 内部字段：搜索结果里标记来源书源（用于换源和详情页） */
+  /** 内部字段：搜索结果里标记来源书源 */
   _sourceKey?: string
   /** 内部字段：换源候选项的来源书源名 */
   _sourceName?: string
@@ -72,4 +72,7 @@ export interface Book {
   _sourceUrl?: string
   /** 内部字段：封面加载失败标记 */
   _coverFailed?: boolean
+
+  /** 内部字段：EPUB 书籍的 bookId（用于读取章节缓存） */
+  _epubBookId?: string
 }

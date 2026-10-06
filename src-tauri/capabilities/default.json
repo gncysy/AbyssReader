@@ -28,6 +28,8 @@
     "core:webview:allow-set-webview-focus",
     "core:webview:allow-webview-close",
     "core:webview:allow-webview-show",
-    "core:webview:allow-webview-hide"
+    "core:webview:allow-webview-hide",
+    "dialog:default",
+    "store:default"
   ]
 }

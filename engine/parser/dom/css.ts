@@ -8,6 +8,9 @@ import { getDomProvider, type DomNode } from './provider.js'
 const RESULT_ATTRS = new Set(['text', 'textNodes', 'ownText', 'html', 'all'])
 const MAX_RECURSION_DEPTH = 10
 
+// jQuery 风格伪类（CSS 原生不支持，需手动剥离 + 按索引切片）
+const PSEUDO_OP_REGEX = /:(eq|lt|gt)\(\s*(-?\d+)\s*\)/
+
 function normalizeCssSelector(expression: string): string {
   return expression
     .replace(/@tag\.(\w[\w-]*)/g, '$1')
@@ -27,7 +30,106 @@ function safeCharAt(str: string, index: number): string {
   return ch !== undefined ? ch : ''
 }
 
+interface PseudoOp {
+  kind: 'eq' | 'lt' | 'gt'
+  n: number
+}
+
+function parsePseudoOps(selector: string): { segments: string[]; ops: PseudoOp[] } {
+  const segments: string[] = []
+  const ops: PseudoOp[] = []
+  const regex = new RegExp(PSEUDO_OP_REGEX.source, 'g')
+
+  let lastIndex = 0
+  let match: RegExpExecArray | null
+  while ((match = regex.exec(selector)) !== null) {
+    const before = selector.substring(lastIndex, match.index).trim()
+    segments.push(before)
+
+    const kind = match[1] as 'eq' | 'lt' | 'gt'
+    const nStr = match[2]
+    if (nStr === undefined) {
+      lastIndex = match.index + match[0].length
+      continue
+    }
+    ops.push({ kind, n: parseInt(nStr, 10) })
+    lastIndex = match.index + match[0].length
+  }
+  segments.push(selector.substring(lastIndex).trim())
+
+  return { segments, ops }
+}
+
+function applyPseudoOp(elements: DomNode[], kind: 'eq' | 'lt' | 'gt', n: number): DomNode[] {
+  const len = elements.length
+  const idx = n < 0 ? len + n : n
+
+  if (kind === 'eq') {
+    const el = elements[idx]
+    return idx >= 0 && idx < len && el ? [el] : []
+  }
+  if (kind === 'lt') {
+    return elements.slice(0, Math.max(0, idx))
+  }
+  return elements.slice(idx + 1)
+}
+
+function applyPseudoSegments(
+  parent: DomNode,
+  segments: string[],
+  ops: PseudoOp[],
+): DomNode[] {
+  if (segments.length !== ops.length + 1) return []
+
+  const firstSeg = segments[0] || ''
+  let current: DomNode[]
+  if (firstSeg) {
+    current = elementsSingleInner(parent, firstSeg)
+  } else {
+    current = parent.children ? [...parent.children] : []
+  }
+
+  for (let i = 0; i < ops.length; i++) {
+    const op = ops[i]
+    if (!op) break
+    current = applyPseudoOp(current, op.kind, op.n)
+    if (current.length === 0) return []
+
+    const nextSeg = segments[i + 1] || ''
+    if (nextSeg) {
+      const nextElements: DomNode[] = []
+      for (const el of current) {
+        const sub = elementsSingleInner(el, nextSeg)
+        for (const s of sub) nextElements.push(s)
+      }
+      current = nextElements
+      if (current.length === 0) return []
+    }
+  }
+
+  return current
+}
+
+function hasPseudoOps(selector: string): boolean {
+  return PSEUDO_OP_REGEX.test(selector)
+}
+
 function elementsSingle(parent: DomNode, rule: string): DomNode[] {
+  const trimmed = rule.trim()
+  if (!trimmed) return []
+
+  if (!hasPseudoOps(trimmed)) {
+    return elementsSingleInner(parent, trimmed)
+  }
+
+  const { segments, ops } = parsePseudoOps(trimmed)
+  if (ops.length === 0) {
+    return elementsSingleInner(parent, trimmed)
+  }
+  return applyPseudoSegments(parent, segments, ops)
+}
+
+function elementsSingleInner(parent: DomNode, rule: string): DomNode[] {
   const rus = rule.trim()
   if (!rus) return []
 
@@ -142,17 +244,6 @@ function finishSelect(
 
     switch (firstKey) {
       case 'children': elements = parent.children || []; break
-      case 'class': elements = parent.getElementsByClassName ? parent.getElementsByClassName(rest) : []; break
-      case 'tag': elements = parent.getElementsByTagName ? parent.getElementsByTagName(rest) : []; break
-      case 'id': {
-        const el = parent.querySelector ? parent.querySelector('#' + rest) : null
-        elements = el ? [el] : []
-        if (elements.length === 0 && parent.querySelectorAll) {
-          const all = parent.querySelectorAll('*')
-          elements = all.filter((e) => e.getAttribute && e.getAttribute('id') === rest)
-        }
-        break
-      }
       case 'text': {
         const searchText = rest
         const all = parent.querySelectorAll ? parent.querySelectorAll('*') : []
@@ -165,9 +256,22 @@ function finishSelect(
         })
         break
       }
+      case 'class':
+      case 'tag':
+      case 'id': {
+        const prefixMap: Record<string, string> = { class: '.', tag: '', id: '#' }
+        const cssSelector = prefixMap[firstKey] + rest
+        try {
+          elements = parent.querySelectorAll ? parent.querySelectorAll(cssSelector) : []
+        } catch {
+          elements = []
+        }
+        break
+      }
       default:
         try {
-          elements = parent.querySelectorAll ? parent.querySelectorAll(normalizeCssSelector(beforeRule)) : []
+          const selector = normalizeCssSelector(beforeRule)
+          elements = parent.querySelectorAll ? parent.querySelectorAll(selector) : []
         } catch {
           elements = []
         }
@@ -320,7 +424,18 @@ function getElementsRecursive(temp: DomNode, ruleStr: string, depth = 0): DomNod
   if (isCss) {
     const results: DomNode[][] = []
     for (const rs of validSegments) {
-      const els = temp.querySelectorAll ? temp.querySelectorAll(normalizeCssSelector(rs)) : []
+      const normalized = normalizeCssSelector(rs)
+      let els: DomNode[]
+      if (hasPseudoOps(normalized)) {
+        const { segments, ops } = parsePseudoOps(normalized)
+        if (ops.length > 0) {
+          els = applyPseudoSegments(temp, segments, ops)
+        } else {
+          els = temp.querySelectorAll ? temp.querySelectorAll(normalized) : []
+        }
+      } else {
+        els = temp.querySelectorAll ? temp.querySelectorAll(normalized) : []
+      }
       results.push(els)
       if (els.length > 0 && ruleAnalyzer.elementsType === '||') break
     }
@@ -395,13 +510,9 @@ export class AnalyzeByCSS {
       const html = typeof content === 'string' ? content : String(content)
       if (html.trimStart().startsWith('<?xml')) {
         const doc = provider.parseXML(html)
-        // 修复：优先 documentElement，保证 head 里的 meta/title/link 可选
         this.root = doc.documentElement || doc.body || doc as unknown as DomNode
       } else {
         const doc = provider.parseHTML(html)
-        // 修复：原实现用 doc.body 作为根，导致 <head> 里的 meta/title/link 无法被选择。
-        // 改用 documentElement（即 <html>），能覆盖 head + body。
-        // 对齐 Legado：Jsoup 的 Document 根就是 <html>，querySelectorAll 能命中 head 里的元素。
         this.root = doc.documentElement || doc.body || doc as unknown as DomNode
       }
     }
@@ -409,8 +520,29 @@ export class AnalyzeByCSS {
 
   getElements(rule: string): DomNode[] {
     if (!rule) return []
-    const elements = this.root.querySelectorAll ? this.root.querySelectorAll(rule) : []
-    return this.applyPseudo(elements, rule)
+
+    const { segments, ops } = hasPseudoOps(rule)
+      ? parsePseudoOps(rule)
+      : { segments: [rule], ops: [] as PseudoOp[] }
+
+    const baseSelector = ops.length > 0 ? (segments[0] || '') : rule
+    let elements: DomNode[]
+    try {
+      elements = this.root.querySelectorAll && baseSelector.trim()
+        ? this.root.querySelectorAll(baseSelector)
+        : []
+    } catch {
+      elements = []
+    }
+
+    if (ops.length === 0) return elements
+
+    let current = elements
+    for (const op of ops) {
+      current = applyPseudoOp(current, op.kind, op.n)
+      if (current.length === 0) break
+    }
+    return current
   }
 
   getString(rule: string): string {
@@ -448,34 +580,32 @@ export class AnalyzeByCSS {
 
   private evaluateSingleRule(rule: string): string[] {
     const atIndex = rule.lastIndexOf('@')
+
     if (atIndex === -1) {
-      const els = this.root.querySelectorAll ? this.root.querySelectorAll(rule) : []
-      return Array.from(els)
-        .map((el) => el.textContent?.trim() || '')
-        .filter(Boolean)
+      const els = elementsSingle(this.root, rule)
+      return els.map((el) => el.textContent?.trim() || '').filter(Boolean)
     }
 
     const rawSelector = rule.substring(0, atIndex)
-    const selector = normalizeCssSelector(rawSelector)
     const attr = rule.substring(atIndex + 1)
-    const els = this.root.querySelectorAll ? this.root.querySelectorAll(selector) : []
+    const els = elementsSingle(this.root, rawSelector)
 
     switch (attr) {
       case 'text':
-        return Array.from(els).map((el) => el.textContent?.trim() || '').filter(Boolean)
+        return els.map((el) => el.textContent?.trim() || '').filter(Boolean)
       case 'textNodes':
-        return Array.from(els).map((el) => {
+        return els.map((el) => {
           const tns = el.textNodes ? el.textNodes() : []
           return tns.join('\n')
         }).filter(Boolean)
       case 'ownText':
-        return Array.from(els).map((el) => el.ownText ? el.ownText() : (el.textContent?.trim() || '')).filter(Boolean)
+        return els.map((el) => el.ownText ? el.ownText() : (el.textContent?.trim() || '')).filter(Boolean)
       case 'html':
-        return Array.from(els).map((el) => el.outerHTML || '').filter(Boolean)
+        return els.map((el) => el.outerHTML || '').filter(Boolean)
       case 'all':
-        return Array.from(els).map((el) => el.outerHTML || '').filter(Boolean)
+        return els.map((el) => el.outerHTML || '').filter(Boolean)
       default:
-        return Array.from(els)
+        return els
           .map((el) => el.getAttribute ? el.getAttribute(attr) || '' : '')
           .filter(Boolean)
     }
@@ -512,35 +642,6 @@ export class AnalyzeByCSS {
     if (rule.includes('%%')) return '%%'
     if (rule.includes('||')) return '||'
     return '&&'
-  }
-
-  private applyPseudo(elements: DomNode[], rule: string): DomNode[] {
-    const ltMatch = rule.match(/:lt\((\d+)\)/)
-    if (ltMatch) {
-      const nStr = ltMatch[1]
-      if (nStr !== undefined) {
-        const n = parseInt(nStr)
-        return elements.slice(0, n)
-      }
-    }
-    const gtMatch = rule.match(/:gt\((\d+)\)/)
-    if (gtMatch) {
-      const nStr = gtMatch[1]
-      if (nStr !== undefined) {
-        const n = parseInt(nStr)
-        return elements.slice(n + 1)
-      }
-    }
-    const eqMatch = rule.match(/:eq\((\d+)\)/)
-    if (eqMatch) {
-      const nStr = eqMatch[1]
-      if (nStr !== undefined) {
-        const n = parseInt(nStr)
-        const el = elements[n]
-        return n >= 0 && n < elements.length && el ? [el] : []
-      }
-    }
-    return elements
   }
 }
 

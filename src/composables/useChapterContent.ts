@@ -2,7 +2,7 @@
 // useChapterContent — 章节正文加载 & 预加载
 // ============================================
 
-import { ref, computed } from 'vue'
+import { ref, computed, watch } from 'vue'
 import { useMessage } from 'naive-ui'
 import { getContent } from '@/services/content.js'
 import type { GetContentOptions } from '@/services/content.js'
@@ -11,7 +11,7 @@ import type { ComicImage } from '@engine/business/comic/index.js'
 import { loadComicImages } from '@/services/comic.js'
 import { getCachedContent, setCachedContent, getPreloadedContent, setPreloadedContent, getRawContent, setRawContent } from '@/services/cache.js'
 import { useErrorHandler } from '@/composables/useErrorHandler.js'
-import { logWarn } from '@engine/log/index.js'
+import { logWarn, logInfo } from '@engine/log/index.js'
 import type { Book, BookSource, Chapter } from '@/types'
 import { READER } from '@/constants/reader.js'
 
@@ -20,6 +20,12 @@ interface ReplaceRuleLike {
   pattern?: string
   [key: string]: unknown
 }
+
+// 预加载节流参数：
+//   - 单 worker：一次只抓一章，避免多个 worker 同时发请求
+//   - 每章抓取后暂停 PRELOAD_WORKER_DELAY_MS，降低单位时间请求密度
+const PRELOAD_WORKER_COUNT = 1
+const PRELOAD_WORKER_DELAY_MS = 500
 
 function isBookSourceArray(value: unknown): value is BookSource[] {
   return Array.isArray(value)
@@ -32,6 +38,10 @@ function escapeHtml(text: string): string {
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#39;')
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
 export function useChapterContent() {
@@ -49,6 +59,36 @@ export function useChapterContent() {
   let chaptersLoadPromise: Promise<void> | null = null
 
   const currentChapter = computed(() => chapters.value[chapterIndex.value] || null)
+
+  /**
+   * 目录变化时（SWR 后台刷新替换），按当前章节的 url 重算 chapterIndex。
+   * 这样即使新目录插入了新章节，阅读位置也不会错位。
+   */
+  watch(chapters, (newChapters, oldChapters) => {
+    if (!Array.isArray(newChapters) || newChapters.length === 0) return
+    if (!Array.isArray(oldChapters) || oldChapters.length === 0) return
+
+    const current = oldChapters[chapterIndex.value]
+    if (!current) return
+
+    // 优先用 url 匹配（title 可能重复或微调）
+    let newIdx = -1
+    if (current.url) {
+      newIdx = newChapters.findIndex((c) => c.url === current.url)
+    }
+    // url 匹配不到，回退 title 匹配
+    if (newIdx === -1 && current.title) {
+      newIdx = newChapters.findIndex((c) => c.title === current.title)
+    }
+    if (newIdx === -1) {
+      // 找不到，保持原索引（兜底）
+      return
+    }
+    if (newIdx !== chapterIndex.value) {
+      logInfo('reader', 'frontend', `[目录] 后台刷新后章节索引 ${chapterIndex.value} → ${newIdx}`)
+      chapterIndex.value = newIdx
+    }
+  })
 
   async function loadChaptersForBook(
     book: Book, source: BookSource | null,
@@ -198,10 +238,6 @@ export function useChapterContent() {
     }
   }
 
-  /**
-   * 预加载后续章节。
-   * 修复：用局部数组传递队列，避免 worker 共享响应式 ref 引发的竞态。
-   */
   function startPreload(
     book: Book,
     source: BookSource,
@@ -230,19 +266,21 @@ export function useChapterContent() {
     source: BookSource,
     queue: number[],
   ): Promise<void> {
-    // 修复：使用局部 queue，两个 worker 共享同一个 queue 引用
-    // 通过 shift() 原子性取项（JS 单线程保证），不会漏项
     async function preloadOne(): Promise<void> {
       while (queue.length > 0) {
         const idx = queue.shift()
         if (idx === undefined) continue
+
         const ch = chapters.value[idx]
         if (!ch) continue
+
         const cached = await getCachedContent(book, ch.id)
         if (cached) {
           setPreloadedContent(book, idx, cached)
+          await sleep(PRELOAD_WORKER_DELAY_MS)
           continue
         }
+
         try {
           const getOptions: GetContentOptions = {
             book: book as unknown as Record<string, unknown>,
@@ -260,12 +298,19 @@ export function useChapterContent() {
           }
         } catch (e: unknown) {
           const msg = e instanceof Error ? e.message : String(e)
-          // 修复：预加载失败记录日志，便于诊断
           logWarn('reader', 'frontend', `[预加载] 章节 ${idx} 失败: ${msg}`)
         }
+
+        await sleep(PRELOAD_WORKER_DELAY_MS)
       }
     }
-    await Promise.all([preloadOne(), preloadOne()])
+
+    const workers: Promise<void>[] = []
+    for (let i = 0; i < PRELOAD_WORKER_COUNT; i++) {
+      workers.push(preloadOne())
+    }
+    await Promise.all(workers)
+    logInfo('reader', 'frontend', `[预加载] 队列完成`)
   }
 
   function prevChapter(): void { if (chapterIndex.value > 0) { chapterIndex.value--; scrollPercent.value = 0 } }

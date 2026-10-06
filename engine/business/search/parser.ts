@@ -138,6 +138,9 @@ export async function parseSearchItem(
   filter?: ((name: string, author: string, kind: string | null) => boolean) | null,
 ): Promise<EngineBook | null> {
   const bookPlaceholder: Partial<EngineBook> = {}
+  // result 保持 DomNode：CSS 规则需要在它上面跑 querySelectorAll。
+  // DomNode 的循环引用由 engine.ts 的 toPlainContext / sanitizeValue 处理，
+  // 在传给 Tauri IPC 前转成字符串，避免栈溢出。
   const itemCtx: ParseContext = { source, baseUrl, result: item, book: bookPlaceholder, key, page }
 
   const rawName = ruleName ? await evaluator.getString(item, ruleName, itemCtx) : ''

@@ -58,6 +58,36 @@ function buildDoc(): DomDocument {
     return result
   }
 
+  // 修复：toDomNode 会把 doc.body 作为 DomNode 返回，
+  // AnalyzeByCSS 构造时会直接把 bodyNode 当 root。
+  // 真实 provider 的 document.body.querySelectorAll 是原生实现，
+  // mock 里 elem 默认返回空数组，必须为 bodyNode 单独赋值，
+  // 否则 CSS 选择器永远返回空。
+  bodyNode.querySelector = (sel: string) => findNodes(sel)[0] || null
+  bodyNode.querySelectorAll = (sel: string) => findNodes(sel)
+  bodyNode.getElementsByTagName = (name: string) => {
+    const result: DomNode[] = []
+    const walk = (nodes: DomNode[]) => {
+      for (const n of nodes) {
+        if (n.tag === name) result.push(n)
+        if (n.children.length > 0) walk(n.children)
+      }
+    }
+    walk([bodyNode])
+    return result
+  }
+  bodyNode.getElementsByClassName = (name: string) => {
+    const result: DomNode[] = []
+    const walk = (nodes: DomNode[]) => {
+      for (const n of nodes) {
+        if ((n.attrs.class || '').split(' ').includes(name)) result.push(n)
+        if (n.children.length > 0) walk(n.children)
+      }
+    }
+    walk([bodyNode])
+    return result
+  }
+
   return {
     querySelector: (sel: string) => findNodes(sel)[0] || null,
     querySelectorAll: (sel: string) => findNodes(sel),

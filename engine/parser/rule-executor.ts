@@ -131,7 +131,9 @@ export class RuleExecutor {
     if (!ruleStr) return []
     this.lastContext = context || null
     const ruleList = this.parser.splitSourceRuleCacheString(ruleStr, this.cache.getRuleCache())
-    return (await this.getStringListInternal(ruleList, context)) || []
+    // 修复：把 context.isUrl 传给 getStringListInternal，
+    // 让 URL 类型的规则（如 nextContentUrl / nextTocUrl）自动 resolveUrl 成绝对路径。
+    return (await this.getStringListInternal(ruleList, context, context?.isUrl === true)) || []
   }
 
   async getElements(ruleStr: string | null, context?: ParseContext): Promise<unknown[]> {
@@ -258,8 +260,11 @@ export class RuleExecutor {
     if (lastIndex > 0) {
       const list = cssAnalyzer.getStringList(rs)
       if (list && list.length > 0) {
-        const first = list[0]
-        return first !== undefined ? [first] : null
+        // 修复：返回完整的 list，而不是只返回第一个。
+        // 原实现丢掉了除第一个之外的所有段落，
+        // 导致 @css:.con p@text 只拿到 1 个 <p> 的文本，
+        // 长度 < CONTENT_MIN_LENGTH 被 parseContentPage 置空。
+        return list
       }
       return null
     }

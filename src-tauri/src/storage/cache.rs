@@ -246,7 +246,7 @@ pub fn get_category_dir(cat: CacheCategory) -> PathBuf {
 }
 
 pub fn cache_key(url: &str) -> String {
-    format!("{:x}", md5::compute(url.as_bytes()))
+    crate::utils::md5_hex(url.as_bytes())
 }
 
 pub fn cache_put(cat: CacheCategory, url: &str, data: &[u8]) -> Result<PathBuf> {

@@ -3,9 +3,7 @@ use std::collections::HashMap;
 use std::sync::LazyLock;
 use parking_lot::Mutex;
 
-/// 修复：对齐 Java `Base64.getEncoder().encodeToString(byte[])`。
-/// - 原实现用 `STANDARD_NO_PAD`，与 Java `NO_WRAP`（带 padding）不一致
-/// - 也与 `op_java_base64_decode` 的 `STANDARD` 不匹配，自己编自己解都失败
+/// 对齐 Java `Base64.getEncoder().encodeToString(byte[])`。
 #[op2]
 #[string]
 pub fn op_java_base64_encode(#[string] input: String) -> String {
@@ -14,7 +12,6 @@ pub fn op_java_base64_encode(#[string] input: String) -> String {
 }
 
 /// 字节级 base64 编码。
-/// 对齐 Java `Base64.getEncoder().encodeToString(byte[])`。
 #[op2]
 #[string]
 pub fn op_java_base64_encode_bytes(#[buffer] input: &[u8]) -> String {
@@ -34,7 +31,6 @@ pub fn op_java_base64_decode(#[string] input: String) -> String {
     .to_string()
 }
 
-// 修复：移除 #[serde]，让 Vec<u8> 映射为 Uint8Array（而不是 JSON 数组）
 #[op2]
 pub fn op_java_base64_decode_bytes(#[string] input: String) -> Vec<u8> {
     use base64::Engine;
@@ -46,7 +42,7 @@ pub fn op_java_base64_decode_bytes(#[string] input: String) -> Vec<u8> {
 #[op2]
 #[string]
 pub fn op_java_md5_encode(#[string] input: String) -> String {
-    format!("{:x}", md5::compute(input.as_bytes()))
+    crate::utils::md5_hex(input.as_bytes())
 }
 
 #[op2]
@@ -84,6 +80,75 @@ pub fn op_java_random_bytes(#[smi] len: u32) -> Vec<u8> {
     let mut buf = vec![0u8; len as usize];
     rand::rngs::OsRng.fill_bytes(&mut buf);
     buf
+}
+
+/// HMAC 摘要，返回小写 hex 字符串。
+/// 对齐 Legado JsEncodeUtils.HMacHex(data, algorithm, key)。
+/// algorithm 支持：md5 / sha1 / sha256 / sha384 / sha512。
+#[op2]
+#[string]
+pub fn op_java_hmac_hex(
+    #[string] data: String,
+    #[string] algorithm: String,
+    #[string] key: String,
+) -> String {
+    use hmac::{Hmac, Mac};
+    use sha1::Sha1;
+    use sha2::{Sha256, Sha384, Sha512};
+    use md5::Md5;
+
+    let algo = algorithm.to_lowercase().replace('-', "");
+    let key_bytes = key.as_bytes();
+    let data_bytes = data.as_bytes();
+
+    let hex: String = match algo.as_str() {
+        "md5" => {
+            let mut mac = match Hmac::<Md5>::new_from_slice(key_bytes) {
+                Ok(m) => m,
+                Err(_) => return String::new(),
+            };
+            mac.update(data_bytes);
+            let result = mac.finalize().into_bytes();
+            result.iter().map(|b| format!("{:02x}", b)).collect()
+        }
+        "sha1" => {
+            let mut mac = match Hmac::<Sha1>::new_from_slice(key_bytes) {
+                Ok(m) => m,
+                Err(_) => return String::new(),
+            };
+            mac.update(data_bytes);
+            let result = mac.finalize().into_bytes();
+            result.iter().map(|b| format!("{:02x}", b)).collect()
+        }
+        "sha384" => {
+            let mut mac = match Hmac::<Sha384>::new_from_slice(key_bytes) {
+                Ok(m) => m,
+                Err(_) => return String::new(),
+            };
+            mac.update(data_bytes);
+            let result = mac.finalize().into_bytes();
+            result.iter().map(|b| format!("{:02x}", b)).collect()
+        }
+        "sha512" => {
+            let mut mac = match Hmac::<Sha512>::new_from_slice(key_bytes) {
+                Ok(m) => m,
+                Err(_) => return String::new(),
+            };
+            mac.update(data_bytes);
+            let result = mac.finalize().into_bytes();
+            result.iter().map(|b| format!("{:02x}", b)).collect()
+        }
+        _ => {
+            let mut mac = match Hmac::<Sha256>::new_from_slice(key_bytes) {
+                Ok(m) => m,
+                Err(_) => return String::new(),
+            };
+            mac.update(data_bytes);
+            let result = mac.finalize().into_bytes();
+            result.iter().map(|b| format!("{:02x}", b)).collect()
+        }
+    };
+    hex
 }
 
 // 解析 key/iv 字节，支持 hex 编码
@@ -239,9 +304,11 @@ pub fn op_java_des_base64_encode(#[string] data: String, #[string] key: String) 
 
 use rsa::{RsaPrivateKey, RsaPublicKey, Pkcs1v15Encrypt};
 use rsa::pkcs8::{DecodePrivateKey, DecodePublicKey};
-use rsa::pkcs1v15::SigningKey;
-use rsa::signature::{Signer, SignatureEncoding};
+use rsa::pkcs1v15::{SigningKey, VerifyingKey};
+use rsa::signature::{Signer, SignatureEncoding, Verifier};
 use sha2::Sha256;
+use sha1::Sha1 as Sha1Hasher;
+use md5::Md5;
 
 static RSA_KEY_STORE: LazyLock<Mutex<HashMap<String, (Option<RsaPrivateKey>, Option<RsaPublicKey>)>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
@@ -339,9 +406,30 @@ pub fn op_java_rsa_decrypt(#[string] source: String, #[string] data: String) -> 
     }
 }
 
+/// 归一化算法名：SHA256withRSA / SHA256 / sha256 → "sha256"
+fn normalize_sign_algorithm(algorithm: &str) -> String {
+    let s = algorithm.to_lowercase().replace('-', "").replace('_', "");
+    // SHA256withRSA → sha256
+    if s.contains("sha256") || s.contains("rsa256") {
+        return "sha256".into();
+    }
+    if s.contains("sha1") || s.contains("rsa1") {
+        return "sha1".into();
+    }
+    if s.contains("md5") {
+        return "md5".into();
+    }
+    "sha256".into()
+}
+
+/// RSA 签名。
+/// 对齐 Legado 的 Sign.sign(data)，algorithm 决定哈希算法。
+/// - SHA256withRSA / SHA256 / sha256 → SHA-256 + PKCS#1 v1.5
+/// - SHA1withRSA / SHA1 / sha1 → SHA-1 + PKCS#1 v1.5
+/// - MD5withRSA / MD5 / md5 → MD5 + PKCS#1 v1.5
 #[op2]
 #[string]
-pub fn op_java_sign(#[string] source: String, #[string] data: String, #[string] _algorithm: String) -> String {
+pub fn op_java_sign(#[string] source: String, #[string] data: String, #[string] algorithm: String) -> String {
     use base64::Engine;
     let store = RSA_KEY_STORE.lock();
     let entry = match store.get(&source) {
@@ -352,21 +440,97 @@ pub fn op_java_sign(#[string] source: String, #[string] data: String, #[string] 
         Some(k) => k,
         None => return "error: no private key".into(),
     };
-    let signing_key = SigningKey::<Sha256>::new(priv_key.clone());
-    match signing_key.try_sign(data.as_bytes()) {
-        Ok(sig) => base64::engine::general_purpose::STANDARD.encode(sig.to_bytes()),
-        Err(e) => format!("error: {}", e),
+
+    let algo = normalize_sign_algorithm(&algorithm);
+    let result: std::result::Result<Vec<u8>, String> = match algo.as_str() {
+        "sha1" => {
+            let signing_key = SigningKey::<Sha1Hasher>::new(priv_key.clone());
+            match signing_key.try_sign(data.as_bytes()) {
+                Ok(sig) => Ok(sig.to_bytes().to_vec()),
+                Err(e) => Err(format!("error: {}", e)),
+            }
+        }
+        "md5" => {
+            let signing_key = SigningKey::<Md5>::new(priv_key.clone());
+            match signing_key.try_sign(data.as_bytes()) {
+                Ok(sig) => Ok(sig.to_bytes().to_vec()),
+                Err(e) => Err(format!("error: {}", e)),
+            }
+        }
+        _ => {
+            let signing_key = SigningKey::<Sha256>::new(priv_key.clone());
+            match signing_key.try_sign(data.as_bytes()) {
+                Ok(sig) => Ok(sig.to_bytes().to_vec()),
+                Err(e) => Err(format!("error: {}", e)),
+            }
+        }
+    };
+
+    match result {
+        Ok(bytes) => base64::engine::general_purpose::STANDARD.encode(&bytes),
+        Err(e) => e,
+    }
+}
+
+/// RSA 验签。
+/// 对齐 Legado 的 Sign.verify(data, sign)，algorithm 决定哈希算法。
+/// 返回 "true" / "false" / "error: ..."
+#[op2]
+#[string]
+pub fn op_java_rsa_verify(
+    #[string] source: String,
+    #[string] data: String,
+    #[string] signature_b64: String,
+    #[string] algorithm: String,
+) -> String {
+    use base64::Engine;
+    use rsa::pkcs1v15::Signature;
+
+    let store = RSA_KEY_STORE.lock();
+    let entry = match store.get(&source) {
+        Some(e) => e,
+        None => return "error: no key set".into(),
+    };
+    let pub_key = match &entry.1 {
+        Some(k) => k,
+        None => return "error: no public key".into(),
+    };
+
+    let sig_bytes = match base64::engine::general_purpose::STANDARD.decode(&signature_b64) {
+        Ok(b) => b,
+        Err(e) => return format!("error: base64 decode: {}", e),
+    };
+
+    let sig = match Signature::try_from(sig_bytes.as_slice()) {
+        Ok(s) => s,
+        Err(e) => return format!("error: signature parse: {}", e),
+    };
+
+    let algo = normalize_sign_algorithm(&algorithm);
+    let result: std::result::Result<(), rsa::signature::Error> = match algo.as_str() {
+        "sha1" => {
+            let verifying_key = VerifyingKey::<Sha1Hasher>::new(pub_key.clone());
+            verifying_key.verify(data.as_bytes(), &sig)
+        }
+        "md5" => {
+            let verifying_key = VerifyingKey::<Md5>::new(pub_key.clone());
+            verifying_key.verify(data.as_bytes(), &sig)
+        }
+        _ => {
+            let verifying_key = VerifyingKey::<Sha256>::new(pub_key.clone());
+            verifying_key.verify(data.as_bytes(), &sig)
+        }
+    };
+
+    match result {
+        Ok(_) => "true".into(),
+        Err(_) => "false".into(),
     }
 }
 
 // ─── 字节级 AES-CBC 加密/解密（返回原始字节） ───
 //
-// 修复：原实现无条件用 Aes256 并把 key 补 0 到 32 字节，
-// 与 Java SecretKeySpec(key, "AES") 根据 key 长度自动选 AES-128/192/256 的语义不符。
-// 书源大量使用 16 字节 AES-128 key（如番茄的 FQ_REG_KEY），
-// 用 AES-256 加密结果完全错，导致服务端拒绝。
-//
-// 现在根据 key.len() 动态分派。
+// 根据 key.len() 动态分派 AES-128/192/256。
 
 fn aes_encrypt_by_keylen(data: &[u8], key: &[u8], iv: &[u8]) -> Vec<u8> {
     use cbc::cipher::block_padding::Pkcs7;
@@ -376,13 +540,11 @@ fn aes_encrypt_by_keylen(data: &[u8], key: &[u8], iv: &[u8]) -> Vec<u8> {
     let mut buf = data.to_vec();
     buf.resize(buf.len() + block_size, 0);
 
-    // 归一化 IV 到 16 字节
     let mut iv_arr = [0u8; 16];
     let iv_len = iv.len().min(16);
     iv_arr[..iv_len].copy_from_slice(&iv[..iv_len]);
 
     match key.len() {
-        // 16 字节 key → AES-128
         16 => {
             let mut k = [0u8; 16];
             k.copy_from_slice(&key[..16]);
@@ -392,7 +554,6 @@ fn aes_encrypt_by_keylen(data: &[u8], key: &[u8], iv: &[u8]) -> Vec<u8> {
                 Err(_) => Vec::new(),
             }
         }
-        // 24 字节 key → AES-192
         24 => {
             let mut k = [0u8; 24];
             k.copy_from_slice(&key[..24]);
@@ -402,7 +563,6 @@ fn aes_encrypt_by_keylen(data: &[u8], key: &[u8], iv: &[u8]) -> Vec<u8> {
                 Err(_) => Vec::new(),
             }
         }
-        // 其他（含 32）→ AES-256，不足补 0，超出截断
         _ => {
             let mut k = [0u8; 32];
             let klen = key.len().min(32);

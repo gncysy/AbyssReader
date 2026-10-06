@@ -4,7 +4,10 @@
       <div class="header-actions">
         <SearchInput v-model="searchText" placeholder="搜索书名..." name="bookshelf-search" />
         <button class="btn-secondary" @click="showAddUrlModal = true">添加网址</button>
-        <button class="btn-secondary" @click="triggerImport">导入 TXT</button>
+        <button class="btn-secondary" @click="triggerImportTxt">导入 TXT</button>
+        <button class="btn-secondary" :disabled="importingEpub" @click="importEpubNative">
+          {{ importingEpub ? '导入中...' : '导入 EPUB' }}
+        </button>
         <button class="btn-secondary" @click="refreshBooks">刷新</button>
       </div>
     </header>
@@ -12,7 +15,7 @@
       <button v-for="group in displayGroups" :key="group.groupId" class="group-tab" :class="{ active: bookshelfStore.activeGroup === group.groupId }" @click="switchGroup(group.groupId)" @contextmenu.prevent.stop="editGroupMenu(group)">{{ group.groupName }}</button>
       <button class="group-tab group-tab-add" title="添加分组" @click="addGroup">+</button>
     </div>
-    <input ref="fileInput" type="file" accept=".txt" class="hidden" @change="onImport" />
+    <input ref="fileInput" type="file" accept=".txt" class="hidden" @change="onImportTxt" />
     <n-modal v-model:show="showAddUrlModal" preset="dialog" title="添加网址" positive-text="添加" @positive-click="addUrlBook">
       <div style="display:flex;flex-direction:column;gap:14px;padding:4px 0">
         <div><label>书籍链接</label><n-input v-model:value="addUrl" placeholder="输入书籍详情页或目录页链接..." /></div>
@@ -29,7 +32,7 @@
       :books="bookshelfStore.filteredBooks"
       :loading="bookshelfStore.loading"
       empty-title="书架空空如也"
-      empty-description="导入 TXT、添加网址或搜索添加书籍"
+      empty-description="导入 TXT、导入 EPUB、添加网址或搜索添加书籍"
       @click-book="openBook"
       @contextmenu-book="handleBookContextMenu"
     />
@@ -41,18 +44,21 @@
     </ContextMenu>
     <BookDetail v-if="bookshelfStore.showDetail" :book="bookshelfStore.detailBook" :source="bookshelfStore.detailSource" @close="bookshelfStore.closeDetail()" />
     <Reader v-if="bookshelfStore.showReader" :book="bookshelfStore.readerBook" :source="bookshelfStore.readerSource" :initial-chapters="bookshelfStore.readerChapters as Chapter[]" @close="bookshelfStore.closeReader()" />
+    <EpubReader v-if="bookshelfStore.showEpubReader" :book="bookshelfStore.epubReaderBook" @close="bookshelfStore.closeEpubReader()" />
   </div></template>
 
 <script setup lang="ts">
 import { ref, computed, watch, onMounted } from 'vue'
 import { NModal, NInput, useMessage, useDialog } from 'naive-ui'
+import { open as openDialog } from '@tauri-apps/plugin-dialog'
 import { useBookshelfStore } from '@/stores/bookshelf.js'
-import { store, reader as readerApi } from '@/services'
+import { store, reader as readerApi, epub as epubApi } from '@/services'
 import { fetchBookInfoForAdd } from '@/services/book-info.js'
 import SearchInput from '@/components/common/SearchInput.vue'
 import BookGrid from '@/components/book/BookGrid.vue'
 import BookDetail from '@/components/book/BookDetail.vue'
 import Reader from '@/components/reader/Reader.vue'
+import EpubReader from '@/components/reader/EpubReader.vue'
 import { ContextMenu, ContextMenuItem } from '@/components/common/ContextMenu/index.js'
 import type { BookSource, Book, Chapter } from '@/types'
 
@@ -77,6 +83,7 @@ const groups = ref<GroupItem[]>([])
 const showGroupDialog = ref(false)
 const editingGroup = ref<GroupItem | null>(null)
 const groupForm = ref({ groupName: '' })
+const importingEpub = ref(false)
 
 function isBookSourceArray(value: unknown): value is BookSource[] {
   return Array.isArray(value)
@@ -165,6 +172,10 @@ async function deleteGroup(group: GroupItem): Promise<void> {
 function hideContextMenu(): void { ctxMenuRef.value?.close() }
 
 function openBook(book: Book): void {
+  if (book.bookUrl.startsWith('epub://')) {
+    bookshelfStore.openEpubReader(book)
+    return
+  }
   const source = sources.value.find((s) => s.bookSourceName === book.originName)
   bookshelfStore.openDetail(book, source || null)
 }
@@ -201,9 +212,9 @@ async function refreshBooks(): Promise<void> {
   msg.success('已刷新')
 }
 
-function triggerImport(): void { fileInput.value?.click() }
+function triggerImportTxt(): void { fileInput.value?.click() }
 
-async function onImport(event: Event): Promise<void> {
+async function onImportTxt(event: Event): Promise<void> {
   const input = event.target as HTMLInputElement
   const file = input.files?.[0]
   if (!file) return
@@ -219,6 +230,59 @@ async function onImport(event: Event): Promise<void> {
     msg.error('导入失败: ' + e.message)
   } finally {
     input.value = ''
+  }
+}
+
+/**
+ * 导入 EPUB —— 原生文件选择器 + Rust 直读路径。
+ * 不走 base64 IPC，50MB 文件也能秒开。
+ */
+async function importEpubNative(): Promise<void> {
+  if (importingEpub.value) return
+  let selected: string | string[] | null = null
+  try {
+    selected = await openDialog({
+      multiple: false,
+      directory: false,
+      filters: [{ name: 'EPUB', extensions: ['epub'] }],
+    })
+  } catch (err: unknown) {
+    const e = err as Error
+    msg.error('打开文件选择器失败: ' + (e?.message || String(err)))
+    return
+  }
+  if (!selected) return
+  const path = Array.isArray(selected) ? selected[0] : selected
+  if (!path) return
+
+  importingEpub.value = true
+  try {
+    const result = await epubApi.parse(path)
+    const fileName = path.replace(/^.*[\\/]/, '').replace(/\.epub$/i, '')
+    const newBook: Book = {
+      name: result.metadata.title || fileName,
+      author: result.metadata.author,
+      bookUrl: 'epub://' + result.bookId,
+      coverUrl: null,
+      customCoverUrl: result.coverDataUrl,
+      intro: result.metadata.description,
+      kind: `本地 EPUB · ${result.chapterCount} 章`,
+      lastChapter: null,
+      tocUrl: null,
+      origin: '',
+      originName: '本地文件',
+      group: 0,
+      order: 0,
+      type: 4,
+      _epubBookId: result.bookId,
+    }
+    await bookshelfStore.addBook(newBook)
+    msg.success(`已导入《${newBook.name}》`)
+  } catch (err: unknown) {
+    const e = err as Error
+    msg.error('导入 EPUB 失败: ' + (e?.message || String(err)))
+  } finally {
+    importingEpub.value = false
   }
 }
 

@@ -44,8 +44,29 @@ pub async fn execute_js_rule(
     ).await;
 
     match timeout_result {
-        Ok(Ok(result)) => Ok(JsExecutionResponse { success: true, result, error: None }),
-        Ok(Err(e)) => Ok(JsExecutionResponse { success: false, result: String::new(), error: Some(e) }),
+        Ok(Ok(result)) => {
+            // 修复：识别 wrap_user_code 返回的错误 JSON。
+            // 之前不管是否错误，都返回 success: true，导致上层把错误信息当结果用。
+            // 现在解析错误 JSON，提取 __message，返回 success: false。
+            if let Some(err_msg) = runtime::extract_js_error(&result) {
+                Ok(JsExecutionResponse {
+                    success: false,
+                    result: String::new(),
+                    error: Some(err_msg),
+                })
+            } else {
+                Ok(JsExecutionResponse {
+                    success: true,
+                    result,
+                    error: None,
+                })
+            }
+        }
+        Ok(Err(e)) => Ok(JsExecutionResponse {
+            success: false,
+            result: String::new(),
+            error: Some(e),
+        }),
         Err(_) => Ok(JsExecutionResponse {
             success: false,
             result: String::new(),
@@ -111,7 +132,17 @@ pub async fn dict_query(
         let ctx = serde_json::json!({ "result": "", "key": key, "baseUrl": "", "source": {}, "book": {} });
         let ctx_json = serde_json::to_string(&ctx).unwrap_or_default();
         match runtime::execute(&js_code, &ctx_json) {
-            Ok(result) => result.trim().to_string(),
+            Ok(result) => {
+                // 修复：识别错误 JSON
+                if let Some(err_msg) = runtime::extract_js_error(&result) {
+                    return Ok(JsExecutionResponse {
+                        success: false,
+                        result: String::new(),
+                        error: Some(format!("urlRule 执行失败: {}", err_msg)),
+                    });
+                }
+                result.trim().to_string()
+            }
             Err(e) => return Ok(JsExecutionResponse {
                 success: false,
                 result: String::new(),
@@ -180,7 +211,17 @@ pub async fn dict_query(
             });
             let ctx_json = serde_json::to_string(&ctx).unwrap_or_default();
             match runtime::execute(&js_code, &ctx_json) {
-                Ok(result) => return Ok(JsExecutionResponse { success: true, result, error: None }),
+                Ok(result) => {
+                    // 修复：识别错误 JSON
+                    if let Some(err_msg) = runtime::extract_js_error(&result) {
+                        return Ok(JsExecutionResponse {
+                            success: false,
+                            result: String::new(),
+                            error: Some(format!("showRule JS 执行失败: {}", err_msg)),
+                        });
+                    }
+                    return Ok(JsExecutionResponse { success: true, result, error: None });
+                }
                 Err(e) => return Ok(JsExecutionResponse {
                     success: false,
                     result: String::new(),

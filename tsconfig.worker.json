@@ -6,22 +6,16 @@
     "strict": true,
     "noImplicitOverride": true,
     "noFallthroughCasesInSwitch": true,
-    "jsx": "preserve",
     "resolveJsonModule": true,
     "isolatedModules": true,
     "esModuleInterop": true,
-    "lib": ["ES2021", "DOM", "DOM.Iterable"],
+    "lib": ["ES2021", "WebWorker"],
     "skipLibCheck": true,
     "noEmit": true,
     "forceConsistentCasingInFileNames": true,
     "allowImportingTsExtensions": true,
-    "paths": {
-      "@/*": ["./src/*"],
-      "@engine/*": ["./engine/*"]
-    },
-    "baseUrl": "."
+    "types": []
   },
-  "include": ["src/**/*.ts", "src/**/*.d.ts", "src/**/*.vue", "engine/**/*.ts"],
-  "exclude": ["src/workers/**/*"],
-  "references": [{ "path": "./tsconfig.node.json" }]
+  "include": ["src/workers/**/*.ts"],
+  "exclude": []
 }

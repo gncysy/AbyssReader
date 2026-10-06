@@ -50,7 +50,7 @@ fn make_data_url(bytes: &[u8]) -> String {
 }
 
 fn make_cache_key(comic_id: &str, url: &str) -> String {
-    format!("{}/{}", comic_id, format!("{:x}", md5::compute(url.as_bytes())))
+    format!("{}/{}", comic_id, crate::utils::md5_hex(url.as_bytes()))
 }
 
 #[tauri::command]

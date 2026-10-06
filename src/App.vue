@@ -43,7 +43,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch, onMounted, onUnmounted, onErrorCaptured, nextTick } from 'vue'
+import { ref, computed, watch, onMounted, onUnmounted, onErrorCaptured } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { NConfigProvider, NMessageProvider, NNotificationProvider, NDialogProvider, NIcon, zhCN, dateZhCN } from 'naive-ui'
 import { BookOutline, SearchOutline, CompassOutline, ShareSocialOutline, SettingsOutline, AppsOutline } from '@vicons/ionicons5'
@@ -133,7 +133,6 @@ let unlistenShowPhoto: (() => void) | null = null
 let unlistenRefreshExplore: (() => void) | null = null
 let unlistenRefreshBookInfo: (() => void) | null = null
 let unlistenJsSearchBook: (() => void) | null = null
-let unlistenJavaToast: (() => void) | null = null
 
 function safeUnlisten(fn: (() => void) | null): void {
   if (!fn) return
@@ -195,7 +194,6 @@ onUnmounted(() => {
   safeUnlisten(unlistenRefreshExplore)
   safeUnlisten(unlistenRefreshBookInfo)
   safeUnlisten(unlistenJsSearchBook)
-  safeUnlisten(unlistenJavaToast)
 })
 watch(() => readingStore.theme, (val) => applyThemeToDOM(val))
 </script>

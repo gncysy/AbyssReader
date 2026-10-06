@@ -124,6 +124,8 @@ export async function parseContentPage(
     }
   }
 
+  // 对齐 Legado ContentHelp：content 规则为空或太短时，用 stripHtml 兜底。
+  // 兜底后不再判断长度阈值，避免短内容被再次清空。
   if (!content || content.length < CONTENT_MIN_LENGTH) {
     content = stripHtml(workingBody)
   }
@@ -145,7 +147,7 @@ export async function parseContentPage(
   const nextContentUrlRule = contentRule.nextContentUrl || ''
   if (getNextPageUrl && nextContentUrlRule) {
     try {
-      const r = await evaluator.getElements(workingBody, nextContentUrlRule, { ...ctx, isUrl: true })
+      const r = await evaluator.getStringList(workingBody, nextContentUrlRule, { ...ctx, isUrl: true })
       if (Array.isArray(r)) {
         for (const u of r) {
           if (u && typeof u === 'string' && u.trim()) nextUrls.push(u.trim())

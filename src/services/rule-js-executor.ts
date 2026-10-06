@@ -89,14 +89,19 @@ export async function executeJsSegment(
       if (typeof raw === 'string') {
         const trimmed = raw.trim()
 
-        if (trimmed.startsWith('{') && trimmed.includes('"error":true')) {
+        // 修复：wrap_user_code 捕获异常时返回 {"__error":true,...}，
+        // 原实现检查 "error":true（少了下划线），永远不命中。
+        // 现在检查 "__error":true，正确识别错误 JSON，返回空字符串。
+        if (trimmed.startsWith('{') && trimmed.includes('"__error":true')) {
           try {
             const parsed = JSON.parse(trimmed) as Record<string, unknown>
-            const errorMsg = typeof parsed.message === 'string' ? parsed.message : '未知 JS 错误'
+            const errorMsg = typeof parsed.__message === 'string'
+              ? parsed.__message
+              : (typeof parsed.message === 'string' ? parsed.message : '未知 JS 错误')
             logError('engine', 'frontend', `[规则] JS 执行错误: ${errorMsg}`, ruleTag)
             return ''
           } catch {
-            // 不是合法 JSON
+            // 不是合法 JSON，继续走下面的处理
           }
         }
         if (trimmed === 'undefined' || trimmed === 'null') {
