@@ -528,7 +528,9 @@ export class AnalyzeByCSS {
     const baseSelector = ops.length > 0 ? (segments[0] || '') : rule
     let elements: DomNode[]
     try {
-      elements = this.root.querySelectorAll && baseSelector.trim()
+      // 修复 TS2774：DomNode.querySelectorAll 类型上必存在，
+      // 不能用它做真值判断。改为只判断 baseSelector 是否为空。
+      elements = baseSelector.trim()
         ? this.root.querySelectorAll(baseSelector)
         : []
     } catch {

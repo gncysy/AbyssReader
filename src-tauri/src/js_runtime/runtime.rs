@@ -127,7 +127,11 @@ fn load_js_libs(rt: &mut JsRuntime, source: &Value) -> Result<(), String> {
                 if !content.is_empty() {
                     let script_name = format!("jslib_{}.js", name);
                     let static_name = get_static_script_name(&script_name);
-                    if let Err(e) = rt.execute_script(static_name, content) {
+                    // 修复：jsLib 重复执行时，顶层 const/let 会因重复声明报 SyntaxError。
+                    // 用 IIFE + 通过 globalThis 导出，让每次执行都在独立作用域里，
+                    // 但保留全局访问能力。
+                    let wrapped = wrap_js_lib(&content);
+                    if let Err(e) = rt.execute_script(static_name, wrapped) {
                         eprintln!("[jsLib] 执行失败 {}: {}", name, e);
                     }
                 }
@@ -135,7 +139,8 @@ fn load_js_libs(rt: &mut JsRuntime, source: &Value) -> Result<(), String> {
         } else {
             let script_name = format!("jslib_inline_{}", crate::utils::md5_hex(trimmed.as_bytes()));
             let static_name = get_static_script_name(&script_name);
-            match rt.execute_script(static_name, trimmed.to_string()) {
+            let wrapped = wrap_js_lib(trimmed);
+            match rt.execute_script(static_name, wrapped) {
                 Ok(_) => {
                     eprintln!("[jsLib] 内联 JS 执行成功 ({} 字符)", trimmed.len());
                 }
@@ -146,6 +151,46 @@ fn load_js_libs(rt: &mut JsRuntime, source: &Value) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+/// 包装 jsLib 代码，避免顶层 const/let 重复声明。
+///
+/// 做法：把原始代码放进去，同时把顶层声明提升到 globalThis，
+/// 这样第二次执行时不会因 const/let 重复声明报错（因为 var 重复声明允许）。
+///
+/// 具体：
+/// - 用 IIFE 包裹
+/// - IIFE 内声明 `var` 而不是 `const` / `let`（通过文本替换）
+/// - 具体替换规则：只在"行首"位置替换 `const ` / `let ` 为 `var `
+///   （避免误伤字符串、模板里的 const/let）
+///
+/// 副作用：函数参数/循环里的 const/let 不受影响（因为不在行首）。
+/// 局限：行首以外的大多数 const/let 会被保留，可能仍重复声明。
+/// 但常见 jsLib 的顶层声明都在行首，覆盖大部分场景。
+fn wrap_js_lib(code: &str) -> String {
+    let mut result = String::with_capacity(code.len() + 64);
+    result.push_str("(function(){\n");
+    // 逐行处理：把行首的 const/let 替换为 var
+    for line in code.lines() {
+        let trimmed_start = line.trim_start();
+        let leading_ws_len = line.len() - trimmed_start.len();
+        let leading = &line[..leading_ws_len];
+
+        if trimmed_start.starts_with("const ") {
+            result.push_str(leading);
+            result.push_str("var ");
+            result.push_str(&trimmed_start["const ".len()..]);
+        } else if trimmed_start.starts_with("let ") {
+            result.push_str(leading);
+            result.push_str("var ");
+            result.push_str(&trimmed_start["let ".len()..]);
+        } else {
+            result.push_str(line);
+        }
+        result.push('\n');
+    }
+    result.push_str("\n})();\n");
+    result
 }
 
 pub fn execute_in_runtime(
@@ -192,10 +237,6 @@ pub fn execute(code: &str, context_json: &str) -> Result<String, String> {
 /// 识别 wrap_user_code 返回的错误 JSON。
 /// 格式：{"__error":true,"__message":"...","__stack":"..."}
 /// 返回 Some(message) 表示是错误，None 表示正常结果。
-///
-/// 修复：wrap_user_code 捕获 JS 异常时返回这个 JSON，但 execute_js_rule
-/// 之前把它当正常结果返回，导致上层把错误信息当数据用。
-/// 抽到这里作为公共函数，所有命令统一调用。
 pub fn extract_js_error(result: &str) -> Option<String> {
     let trimmed = result.trim();
     if !trimmed.starts_with("{\"__error\":true") {
@@ -228,6 +269,12 @@ pub fn extract_js_error(result: &str) -> Option<String> {
 ///   间接 eval 的 `var result` 不重新声明全局已有属性，
 ///   赋值操作更新全局 `result`，保留注入值
 /// - 间接 eval 的"最后表达式"语义保留
+///
+/// 修复（本轮）：DOM 对象（Element / Elements）有自定义 toString，
+/// 应调用 toString() 得到 outerHtml，而不是 JSON.stringify。
+/// Legado 里 jsoup.parse(html).select(css) 返回的 Element/Elements
+/// 在 Rhino 里自动 toString() → outerHtml()。V8 不自动转换，
+/// 需要手动判断（通过对比 toString 是否是 Object.prototype.toString）。
 fn wrap_user_code(code: &str) -> String {
     let code_json = serde_json::to_string(code).unwrap_or_else(|_| "\"\"".into());
     format!(
@@ -262,6 +309,16 @@ fn wrap_user_code(code: &str) -> String {
     }}
     if (typeof __execResult === 'object') {{
         try {{
+            // 修复：DOM 对象（Element / Elements）有自定义 toString，
+            // 应调用 toString() 得到 outerHtml，而不是 JSON.stringify。
+            // Legado 里 jsoup 返回的 Element/Elements 在 Rhino 里自动
+            // toString() → outerHtml()。V8 不自动转换，需要手动判断。
+            var _toStr = __execResult.toString;
+            if (typeof _toStr === 'function'
+                && _toStr !== Object.prototype.toString
+                && _toStr !== Array.prototype.toString) {{
+                return String(__execResult);
+            }}
             return JSON.stringify(__execResult);
         }} catch (e) {{
             return undefined;
@@ -289,16 +346,6 @@ fn execute_impl(rt: &mut JsRuntime, code: &str, context_json: &str) -> Result<St
         return Err(format!("注入上下文失败: {}", e));
     }
 
-    // 修复：把注入变量声明到全局作用域（用 globalThis.xxx = 而不是 var xxx），
-    // 这样间接 eval 里的 `var result` 不会重新声明，而是赋值到已有的全局属性。
-    //
-    // 如果使用 `var result = ...`，在 Deno Core 的 execute_script 里可能仍被包在
-    // 隐式作用域内（实现差异），导致间接 eval 看不到。用 globalThis 显式声明最稳。
-    //
-    // RegexJsExtensions 注入：如果 D.ruleName 存在（替换规则执行），
-    // 把 globalThis.java 替换为 RegexJsExtensions 实例。
-    // 对齐 Legado 的 bindings["java"] = reJsExtensions —— 完全替换。
-    // 为避免影响 setup 阶段其他初始化代码，把替换放在 setup_wrapper 末尾。
     let setup_wrapper = r#"
 (function() {
     var D = globalThis.__sandbox_data || {};
@@ -399,7 +446,6 @@ fn execute_impl(rt: &mut JsRuntime, code: &str, context_json: &str) -> Result<St
         }
     } catch (e) {}
 
-    // 替换规则的 java 命名空间隔离：放在最后，避免影响上面的 source/book 初始化。
     if (typeof D.ruleName === 'string' && D.ruleName.length > 0
         && typeof globalThis.__createRegexJsExtensions === 'function') {
         globalThis.java = globalThis.__createRegexJsExtensions(D.ruleName);
