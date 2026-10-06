@@ -2,14 +2,9 @@
 // polyfill_packages — Packages.java.* 命名空间
 // ============================================
 //
-// 背景：番茄书源 jsLib 用 Packages.java.math.BigInteger 等 Java 路径。
-// 本项目无 JVM，用 JS 模拟这些类，底层复用已有 Rust op。
-//
-// 依赖：
-// - globalThis.BigInteger（bigint.js 提供）
-// - globalThis.sm3（sm3.js 提供）
-// - Deno.core.ops.*（Rust op）
-// - globalThis.__sandbox_data（runtime 注入）
+// 本文件只负责 java / javax 命名空间。
+// org.jsoup 由 dom.js 设置，com.jayway.jsonpath 由 jsonpath.js 设置。
+// 三者通过 globalThis.Packages 合并，互不覆盖。
 
 (function() {
   'use strict';
@@ -513,11 +508,7 @@
     return new Uint8Array(0);
   };
 
-  // ─── 组装 Packages ───
-
-  var existingPackages = globalThis.Packages || {};
-  var existingOrg = existingPackages.org || {};
-  var existingCom = existingPackages.com || {};
+  // ─── 组装 java / javax 命名空间 ───
 
   var java = {
     lang: {
@@ -569,20 +560,16 @@
     }
   };
 
-  globalThis.Packages = {
-    java: java,
-    javax: javax,
-    org: existingOrg,
-    com: existingCom
-  };
+  // 合并到共享 Packages（org / com 由 dom.js / jsonpath.js 提供）
+  globalThis.Packages = globalThis.Packages || {};
+  globalThis.Packages.java = java;
+  globalThis.Packages.javax = javax;
+  globalThis.Packages.org = globalThis.Packages.org || {};
+  globalThis.Packages.com = globalThis.Packages.com || {};
 })();
 
 // ============================================
 // RegexJsExtensions — 替换规则的 java 命名空间
-// 对齐 Legado 的 io.legado.app.help.RegexJsExtensions + JsEncodeUtils
-//
-// 用法：在替换规则的 JS 里，globalThis.java 被替换为此对象。
-// 提供与 Legado 一致的 API，只暴露安全的编解码 + 加解密方法。
 // ============================================
 
 (function() {
@@ -633,7 +620,6 @@
     return Deno.core.ops.op_java_base64_decode_bytes(String(str));
   }
 
-  // digestHex 支持 SM3，其他走 Rust op
   function digestHex(data, algorithm) {
     var algo = String(algorithm || 'sha256').toUpperCase().replace('-', '');
     if (algo === 'SM3') {
@@ -655,8 +641,6 @@
     return '';
   }
 
-  // 对齐 Legado：HMacHex(data, algorithm, key)
-  // 注意：Rust op op_java_hmac_hex 的参数顺序是 (data, algorithm, key)
   function HMacHex(data, algorithm, key) {
     var algo = String(algorithm || 'sha256').toLowerCase().replace('-', '');
     var algoMap = {
@@ -672,9 +656,6 @@
     }
     return Deno.core.ops.op_java_hmac_hex(String(data), mapped, String(key));
   }
-
-  // ─── SymmetricCrypto 包装 ───
-  // 对齐 Legado 的 SymmetricCrypto 接口
 
   function makeSymmetricCrypto(transformation, key, iv) {
     var algo = String(transformation || 'AES/CBC/PKCS5Padding');
@@ -735,8 +716,6 @@
     };
   }
 
-  // ─── 工厂函数 ───
-
   globalThis.__createRegexJsExtensions = function(name) {
     var originalJava = globalThis.java;
     var storageKey = 'regex_rule_' + String(name);
@@ -749,8 +728,6 @@
     }
 
     return {
-      // ─── RegexJsExtensions 自有方法 ───
-
       log: function(msg) {
         Deno.core.ops.op_java_emit_log('debug', '替换净化规则 ' + name + ' 输出: ' + String(msg));
         return msg;
@@ -788,18 +765,12 @@
         return value;
       },
 
-      // ─── JsEncodeUtils 代理：MD5 ───
-
       md5Encode: proxy('md5Encode'),
       md5Encode16: proxy('md5Encode16'),
-
-      // ─── 对称加解密 ───
 
       createSymmetricCrypto: function(transformation, key, iv) {
         return makeSymmetricCrypto(transformation, key, iv);
       },
-
-      // ─── 非对称加解密（仅 RSA） ───
 
       createAsymmetricCrypto: function(transformation) {
         var algo = String(transformation || 'RSA').toUpperCase();
@@ -831,8 +802,6 @@
         };
       },
 
-      // ─── 签名 ───
-
       createSign: function(algorithm) {
         return {
           sign: function(data) {
@@ -840,8 +809,6 @@
           }
         };
       },
-
-      // ─── AES 旧接口（Deprecated，web 需要） ───
 
       aesDecodeToByteArray: function(str, key, transformation, iv) {
         return makeSymmetricCrypto(transformation, key, iv).decrypt(str);
@@ -876,8 +843,6 @@
         return makeSymmetricCrypto('AES/' + mode + '/' + padding, key, iv).encryptBase64(data);
       },
 
-      // ─── DES 旧接口 ───
-
       desDecodeToString: function(data, key, transformation, iv) {
         return makeSymmetricCrypto(transformation, key, iv).decryptStr(data);
       },
@@ -892,8 +857,6 @@
         return makeSymmetricCrypto(transformation, key, iv).encryptBase64(data);
       },
 
-      // ─── 3DES 旧接口 ───
-
       tripleDESDecodeStr: function(data, key, mode, padding, iv) {
         return makeSymmetricCrypto('DESede/' + mode + '/' + padding, key, iv).decryptStr(data);
       },
@@ -906,8 +869,6 @@
       tripleDESEncodeArgsBase64Str: function(data, key, mode, padding, iv) {
         return makeSymmetricCrypto('DESede/' + mode + '/' + padding, base64ToU8(key), toU8(iv)).encryptBase64(data);
       },
-
-      // ─── 摘要 / HMAC（对齐 JsEncodeUtils） ───
 
       digestHex: function(data, algorithm) {
         return digestHex(data, algorithm);
@@ -925,8 +886,6 @@
         if (!hex) return '';
         return u8ToBase64(hexToU8(hex));
       },
-
-      // ─── JsEncodeUtils 里其他基础方法 ───
 
       base64Encode: proxy('base64Encode'),
       base64Decode: proxy('base64Decode'),

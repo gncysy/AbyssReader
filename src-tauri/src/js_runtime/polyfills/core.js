@@ -1,6 +1,9 @@
 // ============================================
 // polyfill_core — java 骨架（对齐 Legado JsExtensions）
 // ============================================
+//
+// 沙箱上下文（HTML 内容 + baseUrl）通过懒解析缓存为 (handle, rootNodeId)，
+// java.getElement/getString 等复用该句柄，避免重复解析。
 
 globalThis.java = globalThis.java || {};
 globalThis.__dictMemoryCache = globalThis.__dictMemoryCache || {};
@@ -112,15 +115,24 @@ function toUint8Array(data) {
 }
 
 /**
- * 取当前沙箱的内容（与 java.getElements 一致）。
+ * 沙箱上下文缓存：把 __sandbox_data.result 解析成句柄，复用。
+ * 内容变化时重新解析。
  */
-function getSandboxContent() {
-    return globalThis.__sandbox_data ? (globalThis.__sandbox_data.result || '') : '';
+var __sandboxCtx = null;
+var __sandboxHtmlSnapshot = null;
+
+function getSandboxContext() {
+    var html = (globalThis.__sandbox_data && globalThis.__sandbox_data.result) || '';
+    if (__sandboxCtx === null || __sandboxHtmlSnapshot !== html) {
+        var parsed = Deno.core.ops.op_jsoup_parse(String(html));
+        __sandboxCtx = { handle: parsed[0], root: parsed[1] };
+        __sandboxHtmlSnapshot = html;
+    }
+    return __sandboxCtx;
 }
 
 /**
  * 取当前沙箱的 baseUrl。
- * 优先 __sandbox_data.baseUrl，其次 source.bookSourceUrl。
  */
 function getSandboxBaseUrl() {
     if (globalThis.__sandbox_data) {
@@ -137,7 +149,6 @@ function getSandboxBaseUrl() {
 
 /**
  * 把 str 解析为绝对路径。
- * 依赖 dom.js 提供的 Element / Elements。
  */
 function resolveAbsoluteUrl(str, baseUrl) {
     if (!str) return str;
@@ -171,7 +182,6 @@ Object.assign(globalThis.java, {
 
     encodeURI: function(str, enc) {
         try {
-            if (enc) return encodeURIComponent(String(str));
             return encodeURIComponent(String(str));
         } catch(e) { return ""; }
     },
@@ -354,11 +364,6 @@ Object.assign(globalThis.java, {
         return undefined;
     },
 
-    /**
-     * 对齐 Legado 的 java.upLoginData(Map<String, Any?>?)
-     * - data 为 null/undefined → 传空字符串（前端识别为"用 default 重建"）
-     * - data 是对象 → JSON.stringify
-     */
     upLoginData: function(i) {
         var str;
         if (i === null || i === undefined) {
@@ -374,10 +379,6 @@ Object.assign(globalThis.java, {
         return undefined;
     },
 
-    /**
-     * 对齐 Legado 的 java.reLoginView(Boolean)
-     * 触发前端重建登录界面。
-     */
     reLoginView: function(deltaUp) {
         Deno.core.ops.op_java_re_login_view(!!deltaUp);
         return undefined;
@@ -581,89 +582,44 @@ Object.assign(globalThis.java, {
     },
 
     /**
-     * 对齐 Legado 的 java.getElements(rule, isUrl?)。
-     * 从当前沙箱内容取所有匹配元素，返回可迭代的 Elements 对象。
-     *
-     * 修复：原实现在 dom.js 里通过 Element 构造，但 core.js 先于 dom.js
-     * 加载，所以这里引用 Element 是在函数体内（延迟求值），运行时 dom.js
-     * 已加载完，安全。
+     * 对齐 Legado java.getElements(rule, isUrl?)。
+     * 返回真正的 Elements（句柄式），而不是字符串数组。
      */
     getElements: function(rule, isUrl) {
         try {
-            const data = getSandboxContent();
-            const result = Deno.core.ops.op_jsoup_select(data, rule || '');
-            const elements = JSON.parse(result);
-            return makeIterable({
-                size: function() { return elements.length; },
-                get: function(i) { return elements[i] || ''; },
-                toArray: function() { return elements; },
-                first: function() { return elements.length > 0 ? elements[0] : ''; },
-                last: function() { return elements.length > 0 ? elements[elements.length - 1] : ''; }
-            });
+            var ctx = getSandboxContext();
+            var nodeIds = Deno.core.ops.op_jsoup_select_in_subtree(ctx.handle, ctx.root, String(rule || ''));
+            return new globalThis.Elements(ctx.handle, nodeIds);
         } catch(e) {
-            return makeIterable({
-                size: function() { return 0; },
-                get: function() { return ''; },
-                toArray: function() { return []; },
-                first: function() { return ''; },
-                last: function() { return ''; }
-            });
+            return new globalThis.Elements(0, []);
         }
     },
 
     /**
-     * 对齐 Legado 的 java.getElement(rule, isUrl?)。
-     * 从当前沙箱内容取首个匹配元素，返回 Element 对象；无匹配返回 null。
-     *
-     * 为什么返回 null 而不是空 Element：
-     * - 书源常用 `java.getElement(A) || java.getElement(B) || java.getElement(C)` 的
-     *   `||` 链式回退。若返回 truthy 空对象，链会停在第一个，回退失效。
-     * - Legado 的 getElement 返回 Java 引用，无匹配就是 null，语义对齐。
-     *
-     * Element 由 dom.js 提供（带 .select/.attr/.text/.html/.outerHtml/.tagName/.children）。
-     * core.js 先于 dom.js 加载，但此处是函数体，延迟到调用时才查找 Element，安全。
+     * 对齐 Legado java.getElement(rule, isUrl?)。
+     * 无匹配返回 null（支持 || 链式回退）。
      */
     getElement: function(rule, isUrl) {
         try {
-            const data = getSandboxContent();
-            const selector = rule || '';
-            const count = Deno.core.ops.op_jsoup_size(data, selector);
-            if (!count || count <= 0) {
-                return null;
-            }
-            const firstHtml = Deno.core.ops.op_jsoup_get(data, selector, 0);
-            if (!firstHtml) {
-                return null;
-            }
-            // Element 由 dom.js 提供，运行时已加载
-            return new globalThis.Element(firstHtml);
+            var ctx = getSandboxContext();
+            var nodeIds = Deno.core.ops.op_jsoup_select_in_subtree(ctx.handle, ctx.root, String(rule || ''));
+            if (nodeIds.length === 0) return null;
+            return new globalThis.Element(ctx.handle, nodeIds[0]);
         } catch(e) {
             return null;
         }
     },
 
     /**
-     * 对齐 Legado 的 java.getString(rule, isUrl?)。
-     * 从当前沙箱内容取首个匹配元素的文本；无匹配返回空字符串。
-     * isUrl 为 true 时解析为绝对路径。
-     *
-     * 语义对齐 Legado AnalyzeRule.getString：
-     * - 返回首个匹配元素的 text（不是 html）
-     * - isUrl 时走 resolveUrl
+     * 对齐 Legado java.getString(rule, isUrl?)。
+     * 返回首个匹配元素的文本；isUrl 时解析为绝对路径。
      */
     getString: function(rule, isUrl) {
         try {
-            const data = getSandboxContent();
-            const selector = rule || '';
-            const count = Deno.core.ops.op_jsoup_size(data, selector);
-            if (!count || count <= 0) {
-                return '';
-            }
-            const firstHtml = Deno.core.ops.op_jsoup_get(data, selector, 0);
-            if (!firstHtml) {
-                return '';
-            }
-            const text = Deno.core.ops.op_jsoup_text(firstHtml);
+            var ctx = getSandboxContext();
+            var nodeIds = Deno.core.ops.op_jsoup_select_in_subtree(ctx.handle, ctx.root, String(rule || ''));
+            if (nodeIds.length === 0) return '';
+            var text = Deno.core.ops.op_jsoup_text(ctx.handle, nodeIds[0]) || '';
             if (isUrl === true) {
                 return resolveAbsoluteUrl(text, getSandboxBaseUrl());
             }
@@ -675,9 +631,8 @@ Object.assign(globalThis.java, {
 
     getStringList: function(rule, isUrl) {
         try {
-            const data = getSandboxContent();
-            const result = Deno.core.ops.op_jsoup_each_text(data, rule || '');
-            const texts = JSON.parse(result);
+            var ctx = getSandboxContext();
+            var texts = Deno.core.ops.op_jsoup_each_text(ctx.handle, ctx.root, String(rule || ''));
             return makeIterable({
                 size: function() { return texts.length; },
                 get: function(i) { return texts[i] || ''; },
@@ -692,26 +647,7 @@ Object.assign(globalThis.java, {
         globalThis.__sandbox_data = globalThis.__sandbox_data || {};
         globalThis.__sandbox_data.result = html;
         globalThis.__sandbox_data.baseUrl = baseUrl || "";
-    },
-
-    upLoginData: function(i) {
-        var str;
-        if (i === null || i === undefined) {
-            str = '';
-        } else {
-            try {
-                str = JSON.stringify(i);
-            } catch (e) {
-                str = '';
-            }
-        }
-        Deno.core.ops.op_java_up_login_data(str);
-        return undefined;
-    },
-
-    reLoginView: function(deltaUp) {
-        Deno.core.ops.op_java_re_login_view(!!deltaUp);
-        return undefined;
+        // 内容变化，下一轮 getSandboxContext 会重新 parse
     },
 
     eventListener: false,

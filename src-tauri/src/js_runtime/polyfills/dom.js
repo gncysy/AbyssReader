@@ -1,180 +1,295 @@
 // ============================================
-// polyfill_dom — Jsoup DOM API + JsonPath（对齐 Legado）
+// polyfill_dom — Jsoup DOM API（句柄式）
 // ============================================
+//
+// 对齐 Jsoup 语义：
+// - Element 持有 (tree_handle, node_id)，不是 HTML 字符串
+// - 所有操作通过 op 传递句柄，Rust 侧在树上直接执行
+// - 零拷贝：一次 parse，多次操作
+//
+// JSONPath 已拆出到 jsonpath.js，本文件只管 DOM。
 
 (function() {
+  'use strict';
+
   function makeIterable(obj) {
     obj[Symbol.iterator] = function() {
-        const self = this;
-        let i = 0;
-        return {
-            next: function() {
-                if (i < self.size()) {
-                    return { value: self.get(i++), done: false };
-                }
-                return { done: true };
-            }
-        };
+      var self = this;
+      var i = 0;
+      return {
+        next: function() {
+          if (i < self.size()) {
+            return { value: self.get(i++), done: false };
+          }
+          return { done: true };
+        }
+      };
     };
     return obj;
   }
 
-  function Elements(html, css) {
-    this._html = html || "";
-    this._css = css || "";
-    this._childElements = null;
+  // ─── Element ───
+
+  function Element(treeHandle, nodeId) {
+    this._treeHandle = treeHandle;
+    this._nodeId = nodeId;
+  }
+
+  Element.prototype.select = function(css) {
+    var nodeIds = Deno.core.ops.op_jsoup_select_in_subtree(this._treeHandle, this._nodeId, String(css || ''));
+    return new Elements(this._treeHandle, nodeIds);
+  };
+
+  Element.prototype.text = function() {
+    return Deno.core.ops.op_jsoup_text(this._treeHandle, this._nodeId) || '';
+  };
+
+  Element.prototype.ownText = function() {
+    return Deno.core.ops.op_jsoup_own_text(this._treeHandle, this._nodeId) || '';
+  };
+
+  Element.prototype.html = function() {
+    return Deno.core.ops.op_jsoup_inner_html(this._treeHandle, this._nodeId) || '';
+  };
+
+  Element.prototype.outerHtml = function() {
+    return Deno.core.ops.op_jsoup_outer_html(this._treeHandle, this._nodeId) || '';
+  };
+
+  Element.prototype.toString = function() {
+    return this.outerHtml();
+  };
+
+  Element.prototype.attr = function(name) {
+    return Deno.core.ops.op_jsoup_attr(this._treeHandle, this._nodeId, String(name)) || '';
+  };
+
+  Element.prototype.hasAttr = function(name) {
+    return !!Deno.core.ops.op_jsoup_has_attr(this._treeHandle, this._nodeId, String(name));
+  };
+
+  Element.prototype.tagName = function() {
+    return Deno.core.ops.op_jsoup_tag_name(this._treeHandle, this._nodeId) || '';
+  };
+
+  Element.prototype.children = function() {
+    var nodeIds = Deno.core.ops.op_jsoup_children(this._treeHandle, this._nodeId);
+    return new Elements(this._treeHandle, nodeIds);
+  };
+
+  Element.prototype.child = function(index) {
+    var nodeId = Deno.core.ops.op_jsoup_child(this._treeHandle, this._nodeId, index >>> 0);
+    if (nodeId === 0) return null;
+    return new Element(this._treeHandle, nodeId);
+  };
+
+  Element.prototype.childNodeSize = function() {
+    return Deno.core.ops.op_jsoup_child_count(this._treeHandle, this._nodeId);
+  };
+
+  Element.prototype.parent = function() {
+    var nodeId = Deno.core.ops.op_jsoup_parent(this._treeHandle, this._nodeId);
+    if (nodeId === 0) return null;
+    return new Element(this._treeHandle, nodeId);
+  };
+
+  Element.prototype.nextElementSibling = function() {
+    var nodeId = Deno.core.ops.op_jsoup_next_sibling(this._treeHandle, this._nodeId);
+    if (nodeId === 0) return null;
+    return new Element(this._treeHandle, nodeId);
+  };
+
+  Element.prototype.previousElementSibling = function() {
+    var nodeId = Deno.core.ops.op_jsoup_prev_sibling(this._treeHandle, this._nodeId);
+    if (nodeId === 0) return null;
+    return new Element(this._treeHandle, nodeId);
+  };
+
+  Element.prototype.firstElementSibling = function() {
+    var nodeId = Deno.core.ops.op_jsoup_first_sibling(this._treeHandle, this._nodeId);
+    if (nodeId === 0) return null;
+    return new Element(this._treeHandle, nodeId);
+  };
+
+  Element.prototype.lastElementSibling = function() {
+    var nodeId = Deno.core.ops.op_jsoup_last_sibling(this._treeHandle, this._nodeId);
+    if (nodeId === 0) return null;
+    return new Element(this._treeHandle, nodeId);
+  };
+
+  Element.prototype.siblingElements = function() {
+    var nodeIds = Deno.core.ops.op_jsoup_siblings(this._treeHandle, this._nodeId);
+    return new Elements(this._treeHandle, nodeIds);
+  };
+
+  Element.prototype.before = function(content) {
+    Deno.core.ops.op_jsoup_before(this._treeHandle, this._nodeId, String(content));
+    return this;
+  };
+
+  Element.prototype.after = function(content) {
+    Deno.core.ops.op_jsoup_after(this._treeHandle, this._nodeId, String(content));
+    return this;
+  };
+
+  Element.prototype.prepend = function(content) {
+    Deno.core.ops.op_jsoup_prepend(this._treeHandle, this._nodeId, String(content));
+    return this;
+  };
+
+  Element.prototype.append = function(content) {
+    Deno.core.ops.op_jsoup_append(this._treeHandle, this._nodeId, String(content));
+    return this;
+  };
+
+  Element.prototype.remove = function() {
+    Deno.core.ops.op_jsoup_detach(this._treeHandle, this._nodeId);
+    return this;
+  };
+
+  Element.prototype.eachText = function() {
+    var t = this.text();
+    return makeIterable({
+      size: function() { return 1; },
+      get: function(i) { return i === 0 ? t : ''; },
+      toArray: function() { return [t]; }
+    });
+  };
+
+  Element.prototype.isEmpty = function() {
+    return this._nodeId === 0;
+  };
+
+  Element.prototype.add = function(_el) { return this; };
+  Element.prototype.addAll = function(_el) { return this; };
+
+  // ─── Elements ───
+
+  function Elements(treeHandle, nodeIds) {
+    this._treeHandle = treeHandle;
+    this._nodeIds = nodeIds || [];
     makeIterable(this);
   }
 
   Elements.prototype.size = function() {
-    if (this._childElements !== null) return this._childElements.length;
-    return Deno.core.ops.op_jsoup_size(this._html, this._css);
+    return this._nodeIds.length;
   };
 
   Elements.prototype.get = function(i) {
-    if (this._childElements !== null) {
-      return new Element(this._childElements[i] || "");
-    }
-    return new Element(Deno.core.ops.op_jsoup_get(this._html, this._css, i));
+    if (i < 0 || i >= this._nodeIds.length) return null;
+    return new Element(this._treeHandle, this._nodeIds[i]);
+  };
+
+  Elements.prototype.eq = function(i) {
+    if (i < 0 || i >= this._nodeIds.length) return null;
+    return new Element(this._treeHandle, this._nodeIds[i]);
   };
 
   Elements.prototype.first = function() {
-    return this.get(0);
+    if (this._nodeIds.length === 0) return null;
+    return new Element(this._treeHandle, this._nodeIds[0]);
   };
 
   Elements.prototype.last = function() {
-    const s = this.size();
-    return s > 0 ? this.get(s - 1) : new Element("");
+    if (this._nodeIds.length === 0) return null;
+    return new Element(this._treeHandle, this._nodeIds[this._nodeIds.length - 1]);
+  };
+
+  Elements.prototype.isEmpty = function() {
+    return this._nodeIds.length === 0;
   };
 
   Elements.prototype.text = function() {
-    if (this._childElements !== null) {
-      let t = "";
-      for (let i = 0; i < this._childElements.length; i++) {
-        t += Deno.core.ops.op_jsoup_text(this._childElements[i]);
-      }
-      return t;
+    var parts = [];
+    for (var i = 0; i < this._nodeIds.length; i++) {
+      var t = Deno.core.ops.op_jsoup_text(this._treeHandle, this._nodeIds[i]) || '';
+      if (t) parts.push(t);
     }
-    return Deno.core.ops.op_jsoup_text(this._html);
+    return parts.join(' ');
   };
 
   Elements.prototype.html = function() {
-    if (this._childElements !== null) {
-      return this._childElements.join("");
+    var parts = [];
+    for (var i = 0; i < this._nodeIds.length; i++) {
+      parts.push(Deno.core.ops.op_jsoup_inner_html(this._treeHandle, this._nodeIds[i]) || '');
     }
-    return Deno.core.ops.op_jsoup_html(this._html);
+    return parts.join('\n');
   };
 
   Elements.prototype.outerHtml = function() {
-    if (this._childElements !== null) {
-      return this._childElements.join("");
+    var parts = [];
+    for (var i = 0; i < this._nodeIds.length; i++) {
+      parts.push(Deno.core.ops.op_jsoup_outer_html(this._treeHandle, this._nodeIds[i]) || '');
     }
-    return Deno.core.ops.op_jsoup_outer_html(this._html);
+    return parts.join('\n');
   };
 
-  // 修复：toString 返回 outerHtml，避免 [object Object]
   Elements.prototype.toString = function() {
     return this.outerHtml();
   };
 
   Elements.prototype.attr = function(name) {
-    if (this._childElements !== null) {
-      if (this._childElements.length > 0) {
-        return Deno.core.ops.op_jsoup_attr(this._childElements[0], name);
+    for (var i = 0; i < this._nodeIds.length; i++) {
+      var id = this._nodeIds[i];
+      if (Deno.core.ops.op_jsoup_has_attr(this._treeHandle, id, String(name))) {
+        return Deno.core.ops.op_jsoup_attr(this._treeHandle, id, String(name)) || '';
       }
-      return "";
     }
-    return Deno.core.ops.op_jsoup_attr(this._html, name);
+    return '';
   };
 
-  Elements.prototype.eachText = function() {
-    if (this._childElements !== null) {
-      const texts = [];
-      for (let i = 0; i < this._childElements.length; i++) {
-        texts.push(Deno.core.ops.op_jsoup_text(this._childElements[i]));
+  Elements.prototype.hasAttr = function(name) {
+    for (var i = 0; i < this._nodeIds.length; i++) {
+      if (Deno.core.ops.op_jsoup_has_attr(this._treeHandle, this._nodeIds[i], String(name))) {
+        return true;
       }
-      return makeIterable({
-        size: function() { return texts.length; },
-        get: function(i) { return texts[i] || ""; },
-        toArray: function() { return texts; }
-      });
     }
-    const decoded = Deno.core.ops.op_jsoup_each_text(this._html, this._css);
-    const texts2 = JSON.parse(decoded);
-    return makeIterable({
-      size: function() { return texts2.length; },
-      get: function(i) { return texts2[i] || ""; },
-      toArray: function() { return texts2; }
-    });
+    return false;
   };
 
   Elements.prototype.select = function(css) {
-    if (this._childElements !== null) {
-      let allSelected = [];
-      for (let i = 0; i < this._childElements.length; i++) {
-        const subHtml = Deno.core.ops.op_jsoup_select(this._childElements[i], css);
-        try {
-          const parsed = JSON.parse(subHtml);
-          allSelected = allSelected.concat(parsed);
-        } catch(e) {}
+    var all = [];
+    for (var i = 0; i < this._nodeIds.length; i++) {
+      var sub = Deno.core.ops.op_jsoup_select_in_subtree(this._treeHandle, this._nodeIds[i], String(css || ''));
+      for (var j = 0; j < sub.length; j++) {
+        if (all.indexOf(sub[j]) === -1) all.push(sub[j]);
       }
-      const result = new Elements("", "");
-      result._childElements = allSelected;
-      return result;
     }
-    return new Elements(this._html, css);
+    return new Elements(this._treeHandle, all);
+  };
+
+  Elements.prototype.eachText = function() {
+    var texts = [];
+    for (var i = 0; i < this._nodeIds.length; i++) {
+      texts.push(Deno.core.ops.op_jsoup_text(this._treeHandle, this._nodeIds[i]) || '');
+    }
+    return makeIterable({
+      size: function() { return texts.length; },
+      get: function(i) { return texts[i] || ''; },
+      toArray: function() { return texts; }
+    });
   };
 
   Elements.prototype.remove = function(css) {
-    const result = Deno.core.ops.op_jsoup_remove(this._html, css || this._css);
-    this._html = result;
+    if (css) {
+      for (var i = 0; i < this._nodeIds.length; i++) {
+        Deno.core.ops.op_jsoup_remove_in_subtree(this._treeHandle, this._nodeIds[i], String(css));
+      }
+    } else {
+      for (var i = 0; i < this._nodeIds.length; i++) {
+        Deno.core.ops.op_jsoup_detach(this._treeHandle, this._nodeIds[i]);
+      }
+    }
     return this;
-  };
-
-  Elements.prototype.before = function(content) {
-    const result = Deno.core.ops.op_jsoup_before(this._html, this._css, String(content));
-    this._html = result;
-    return this;
-  };
-
-  Elements.prototype.after = function(content) {
-    const result = Deno.core.ops.op_jsoup_after(this._html, this._css, String(content));
-    this._html = result;
-    return this;
-  };
-
-  Elements.prototype.prepend = function(content) {
-    const result = Deno.core.ops.op_jsoup_prepend(this._html, this._css, String(content));
-    this._html = result;
-    return this;
-  };
-
-  Elements.prototype.append = function(content) {
-    const result = Deno.core.ops.op_jsoup_append(this._html, this._css, String(content));
-    this._html = result;
-    return this;
-  };
-
-  Elements.prototype.eq = function(i) {
-    return this.get(i);
-  };
-
-  Elements.prototype.isEmpty = function() {
-    return this.size() === 0;
   };
 
   Elements.prototype.add = function(el) {
     if (el instanceof Elements) {
-      const combined = new Elements("", "");
-      const all = [];
-      for (let i = 0; i < this.size(); i++) {
-        all.push(this.get(i)._html);
+      var combined = this._nodeIds.slice();
+      for (var i = 0; i < el._nodeIds.length; i++) {
+        if (combined.indexOf(el._nodeIds[i]) === -1) combined.push(el._nodeIds[i]);
       }
-      for (let j = 0; j < el.size(); j++) {
-        all.push(el.get(j)._html);
-      }
-      combined._childElements = all;
-      return combined;
+      return new Elements(this._treeHandle, combined);
     }
     return this;
   };
@@ -184,403 +299,60 @@
   };
 
   Elements.prototype.toArray = function() {
-    const arr = [];
-    for (let i = 0; i < this.size(); i++) arr.push(this.get(i));
+    var arr = [];
+    for (var i = 0; i < this._nodeIds.length; i++) arr.push(this.get(i));
     return arr;
   };
 
   Elements.prototype.forEach = function(fn) {
-    for (let i = 0; i < this.size(); i++) fn(this.get(i), i);
+    for (var i = 0; i < this._nodeIds.length; i++) fn(this.get(i), i);
   };
 
-  function Element(html) {
-    this._html = html || "";
-  }
+  // ─── Jsoup 命名空间 ───
 
-  Element.prototype.select = function(css) {
-    return new Elements(this._html, css);
-  };
-
-  Element.prototype.text = function() {
-    return Deno.core.ops.op_jsoup_text(this._html);
-  };
-
-  Element.prototype.ownText = function() {
-    return Deno.core.ops.op_jsoup_own_text(this._html);
-  };
-
-  Element.prototype.html = function() {
-    return Deno.core.ops.op_jsoup_html(this._html);
-  };
-
-  Element.prototype.outerHtml = function() {
-    return Deno.core.ops.op_jsoup_outer_html(this._html);
-  };
-
-  Element.prototype.toString = function() {
-    return this.outerHtml();
-  };
-
-  Element.prototype.attr = function(name) {
-    return Deno.core.ops.op_jsoup_attr(this._html, name);
-  };
-
-  Element.prototype.tagName = function() {
-    return Deno.core.ops.op_jsoup_tag_name(this._html);
-  };
-
-  Element.prototype.children = function() {
-    const decoded = Deno.core.ops.op_jsoup_children(this._html);
-    const childElements = JSON.parse(decoded);
-    const result = new Elements("", "");
-    result._childElements = childElements;
-    return result;
-  };
-
-  Element.prototype.before = function(content) {
-    const result = Deno.core.ops.op_jsoup_before(this._html, "", String(content));
-    this._html = result;
-    return this;
-  };
-
-  Element.prototype.after = function(content) {
-    const result = Deno.core.ops.op_jsoup_after(this._html, "", String(content));
-    this._html = result;
-    return this;
-  };
-
-  Element.prototype.prepend = function(content) {
-    const result = Deno.core.ops.op_jsoup_prepend(this._html, "", String(content));
-    this._html = result;
-    return this;
-  };
-
-  Element.prototype.append = function(content) {
-    const result = Deno.core.ops.op_jsoup_append(this._html, "", String(content));
-    this._html = result;
-    return this;
-  };
-
-  Element.prototype.remove = function() {
-    return this;
-  };
-
-  Element.prototype.eachText = function() {
-    const t = this.text();
-    return makeIterable({
-      size: function() { return 1; },
-      get: function(i) { return i === 0 ? t : ""; },
-      toArray: function() { return [t]; }
-    });
-  };
-
-  Element.prototype.isEmpty = function() {
-    return false;
-  };
-
-  Element.prototype.add = function(el) {
-    return this;
-  };
-
-  Element.prototype.addAll = function(el) {
-    return this;
-  };
-
-  // ─── JsonPath 实现（对齐 com.jayway.jsonpath） ───
-
-  function SimpleJsonPathQuery(data, path) {
-    this._data = data;
-    this._path = path;
-  }
-
-  SimpleJsonPathQuery.prototype.read = function(path) {
-    if (path === undefined || path === null) return null;
-    const actualPath = typeof path === 'string' ? path : this._path;
-    const result = jsonPathQuery(this._data, actualPath);
-    if (result === undefined || result === null) return null;
-    return result;
-  };
-
-  function jsonPathQuery(data, path) {
-    if (!path || typeof path !== 'string') return null;
-    const trimmed = path.trim();
-    if (!trimmed.startsWith('$')) return null;
-
-    if (trimmed === '$') return data;
-
-    const segments = parseJsonPath(trimmed);
-    if (segments.length === 0) return null;
-
-    let current = [data];
-    for (let si = 0; si < segments.length; si++) {
-      const seg = segments[si];
-      if (seg === undefined) continue;
-      const next = [];
-      for (let ci = 0; ci < current.length; ci++) {
-        const item = current[ci];
-        if (item === null || item === undefined) continue;
-        const resolved = resolveJsonPathSegment(item, seg);
-        if (Array.isArray(resolved)) {
-          for (let ri = 0; ri < resolved.length; ri++) {
-            if (resolved[ri] !== undefined && resolved[ri] !== null) {
-              next.push(resolved[ri]);
-            }
-          }
-        } else if (resolved !== undefined && resolved !== null) {
-          next.push(resolved);
-        }
-      }
-      current = next;
-    }
-    return current.length === 0 ? null : (current.length === 1 ? current[0] : current);
-  }
-
-  function parseJsonPath(path) {
-    let normalized = path.replace(/^\$/, '');
-    if (!normalized) return [];
-    normalized = normalized.replace(/^\./, '');
-    normalized = normalized.replace(/^\[/, '');
-
-    const segments = [];
-    let current = '';
-    let inBracket = false;
-    let bracketContent = '';
-
-    for (let i = 0; i < normalized.length; i++) {
-      const ch = normalized[i];
-      if (ch === '[') {
-        if (current) { segments.push(current); current = ''; }
-        inBracket = true;
-        bracketContent = '';
-      } else if (ch === ']') {
-        if (bracketContent) { segments.push(bracketContent); bracketContent = ''; }
-        inBracket = false;
-      } else if (ch === '.' && !inBracket) {
-        if (current) { segments.push(current); current = ''; }
-      } else if (inBracket) {
-        bracketContent += ch;
-      } else {
-        current += ch;
-      }
-    }
-    if (current) segments.push(current);
-    if (inBracket && bracketContent) segments.push(bracketContent);
-
-    // 处理递归下降语法 $..xxx
-    return segments.filter(function(s) { return s && s.trim(); });
-  }
-
-  function resolveJsonPathSegment(data, segment) {
-    if (data === null || data === undefined) return null;
-
-    if (segment === '*') {
-      if (Array.isArray(data)) {
-        return data.length > 0 ? data : null;
-      }
-      if (typeof data === 'object') {
-        const values = Object.values(data);
-        return values.length > 0 ? values : null;
-      }
-      return null;
-    }
-
-    // 递归下降标记
-    if (segment.startsWith('..')) {
-      const propName = segment.substring(2);
-      return recursiveFind(data, propName);
-    }
-
-    if (/^-?\d+$/.test(segment)) {
-      const index = parseInt(segment, 10);
-      if (Array.isArray(data)) {
-        const actualIndex = index < 0 ? data.length + index : index;
-        if (actualIndex >= 0 && actualIndex < data.length) {
-          return data[actualIndex];
-        }
-      }
-      return null;
-    }
-
-    // 切片 [:2] / [1:] / [1:3]
-    const sliceMatch = segment.match(/^(-?\d*):(-?\d*)$/);
-    if (sliceMatch) {
-      if (Array.isArray(data)) {
-        const start = sliceMatch[1] ? parseInt(sliceMatch[1], 10) : 0;
-        const end = sliceMatch[2] ? parseInt(sliceMatch[2], 10) : data.length;
-        const s = start < 0 ? Math.max(0, data.length + start) : Math.min(start, data.length);
-        const e = end < 0 ? Math.max(0, data.length + end) : Math.min(end, data.length);
-        return data.slice(s, e);
-      }
-      return null;
-    }
-
-    // 多索引 [0,1,2]
-    if (segment.indexOf(',') !== -1) {
-      const indexes = segment.split(',').map(function(s) { return s.trim(); });
-      if (Array.isArray(data)) {
-        const result = [];
-        for (let i = 0; i < indexes.length; i++) {
-          const idx = parseInt(indexes[i], 10);
-          if (!isNaN(idx) && idx >= 0 && idx < data.length) {
-            result.push(data[idx]);
-          }
-        }
-        return result.length > 0 ? result : null;
-      }
-      return null;
-    }
-
-    if (typeof data === 'object') {
-      return data[segment];
-    }
-    return null;
-  }
-
-  function recursiveFind(obj, prop) {
-    const results = [];
-    const visited = new WeakSet();
-
-    function traverse(item) {
-      if (item === null || item === undefined) return;
-      if (typeof item === 'object') {
-        if (visited.has(item)) return;
-        visited.add(item);
-      }
-      if (Array.isArray(item)) {
-        for (let i = 0; i < item.length; i++) {
-          traverse(item[i]);
-        }
-        return;
-      }
-      if (typeof item === 'object') {
-        if (prop in item && item[prop] !== undefined) {
-          results.push(item[prop]);
-        }
-        for (const key in item) {
-          if (item.hasOwnProperty(key)) {
-            traverse(item[key]);
-          }
-        }
-      }
-    }
-    traverse(obj);
-    return results.length > 0 ? results : null;
-  }
-
-  // ─── Configuration + Option ───
-
-  function Configuration() {}
-  Configuration.prototype.options = function() { return this; };
-  Configuration.prototype.build = function() { return this; };
-
-  const Option = {
-    SUPPRESS_EXCEPTIONS: 'SUPPRESS_EXCEPTIONS',
-    DEFAULT_PATH_LEAF_TO_NULL: 'DEFAULT_PATH_LEAF_TO_NULL',
-    ALWAYS_RETURN_LIST: 'ALWAYS_RETURN_LIST',
-    AS_PATH_LIST: 'AS_PATH_LIST',
-    REQUIRE_PROPERTIES: 'REQUIRE_PROPERTIES'
-  };
-
-  // ─── JsonPath ───
-
-  const JsonPath = {
-    using: function(config) {
-      return {
-        parse: function(jsonStr) {
-          let data;
-          if (typeof jsonStr === 'string') {
-            try {
-              data = JSON.parse(jsonStr);
-            } catch (e) {
-              data = {};
-            }
-          } else {
-            data = jsonStr;
-          }
-          return new SimpleJsonPathQuery(data, '$');
-        }
-      };
+  var Jsoup = {
+    parse: function(html) {
+      var parsed = Deno.core.ops.op_jsoup_parse(String(html == null ? '' : html));
+      return new Element(parsed[0], parsed[1]);
     },
-    parse: function(jsonStr) {
-      let data;
-      if (typeof jsonStr === 'string') {
-        try {
-          data = JSON.parse(jsonStr);
-        } catch (e) {
-          data = {};
-        }
-      } else {
-        data = jsonStr;
-      }
-      return new SimpleJsonPathQuery(data, '$');
+    parseBodyFragment: function(html) {
+      var parsed = Deno.core.ops.op_jsoup_parse_fragment(String(html == null ? '' : html));
+      return new Element(parsed[0], parsed[1]);
     },
-    read: function(jsonStr, path) {
-      let data;
-      if (typeof jsonStr === 'string') {
-        try {
-          data = JSON.parse(jsonStr);
-        } catch (e) {
-          data = {};
-        }
-      } else {
-        data = jsonStr;
-      }
-      return jsonPathQuery(data, path);
-    }
+    parseFragment: function(html) {
+      var parsed = Deno.core.ops.op_jsoup_parse_fragment(String(html == null ? '' : html));
+      return new Element(parsed[0], parsed[1]);
+    },
+    clean: function(html) { return String(html == null ? '' : html); }
   };
 
-  const docElementStub = {
-    nodeType: 1,
-    nodeName: "HTML",
-    tagName: "HTML"
+  // ─── 挂到全局 ───
+
+  globalThis.Element = Element;
+  globalThis.Elements = Elements;
+
+  globalThis.__abyss_is_dom_object = function(v) {
+    return v instanceof Element || v instanceof Elements;
   };
 
-  globalThis.document = globalThis.document || {
-    documentElement: docElementStub,
-    createElement: function(tag) { return new Element("<" + tag + "></" + tag + ">"); },
-    createTextNode: function(text) { return new Element(text); },
-    getElementById: function(id) { return null; },
-    getElementsByTagName: function(name) { return []; },
-    getElementsByClassName: function(name) { return []; },
-    querySelector: function(sel) { return null; },
-    querySelectorAll: function(sel) { return []; },
-    body: docElementStub,
-    head: docElementStub
-  };
-
-  const Packages = {
-    org: {
-      jsoup: {
-        Jsoup: {
-          parse: function(html) {
-            return new Element(String(html));
-          }
-        },
-        select: {
-          Elements: function() {
-            const e = new Elements("", "");
-            return e;
-          },
-          Element: function(tag) { return new Element("<" + tag + "></" + tag + ">"); }
-        },
-        nodes: {
-          Element: function(tag) { return new Element("<" + tag + "></" + tag + ">"); }
-        }
+  // 合并到 Packages（与 jsonpath.js / packages.js 协作，不覆盖已存在字段）
+  globalThis.Packages = globalThis.Packages || {};
+  globalThis.Packages.org = globalThis.Packages.org || {};
+  globalThis.Packages.org.jsoup = {
+    Jsoup: Jsoup,
+    select: {
+      Elements: function() { return new Elements(0, []); },
+      Element: function(tag) {
+        var parsed = Deno.core.ops.op_jsoup_parse_fragment('<' + tag + '></' + tag + '>');
+        return new Element(parsed[0], parsed[1]);
       }
     },
-    com: {
-      jayway: {
-        jsonpath: {
-          JsonPath: JsonPath,
-          Configuration: Configuration,
-          Option: Option,
-          ReadContext: SimpleJsonPathQuery
-        }
+    nodes: {
+      Element: function(tag) {
+        var parsed = Deno.core.ops.op_jsoup_parse_fragment('<' + tag + '></' + tag + '>');
+        return new Element(parsed[0], parsed[1]);
       }
     }
   };
-
-  globalThis.Packages = Packages;
-  globalThis.org = Packages.org;
-  globalThis.com = Packages.com;
+  globalThis.org = globalThis.Packages.org;
 })();

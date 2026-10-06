@@ -5,8 +5,11 @@ use std::collections::HashMap;
 use std::sync::Mutex;
 use serde_json::Value;
 
+use crate::js_runtime::ops::dom::handle::{next_exec_id, ExecutionGuard};
+
 const POLYFILL_CORE: &str = include_str!("polyfills/core.js");
 const POLYFILL_NET: &str = include_str!("polyfills/net.js");
+const POLYFILL_JSONPATH: &str = include_str!("polyfills/jsonpath.js");
 const POLYFILL_DOM: &str = include_str!("polyfills/dom.js");
 const POLYFILL_BIGINT: &str = include_str!("polyfills/bigint.js");
 const POLYFILL_SM3: &str = include_str!("polyfills/sm3.js");
@@ -50,6 +53,8 @@ pub fn create_fresh_runtime() -> JsRuntime {
         .expect("polyfill_core.js 加载失败");
     rt.execute_script("polyfill_net.js", POLYFILL_NET)
         .expect("polyfill_net.js 加载失败");
+    rt.execute_script("polyfill_jsonpath.js", POLYFILL_JSONPATH)
+        .expect("polyfill_jsonpath.js 加载失败");
     rt.execute_script("polyfill_dom.js", POLYFILL_DOM)
         .expect("polyfill_dom.js 加载失败");
     rt.execute_script("polyfill_bigint.js", POLYFILL_BIGINT)
@@ -127,9 +132,6 @@ fn load_js_libs(rt: &mut JsRuntime, source: &Value) -> Result<(), String> {
                 if !content.is_empty() {
                     let script_name = format!("jslib_{}.js", name);
                     let static_name = get_static_script_name(&script_name);
-                    // 修复：jsLib 重复执行时，顶层 const/let 会因重复声明报 SyntaxError。
-                    // 用 IIFE + 通过 globalThis 导出，让每次执行都在独立作用域里，
-                    // 但保留全局访问能力。
                     let wrapped = wrap_js_lib(&content);
                     if let Err(e) = rt.execute_script(static_name, wrapped) {
                         eprintln!("[jsLib] 执行失败 {}: {}", name, e);
@@ -153,24 +155,9 @@ fn load_js_libs(rt: &mut JsRuntime, source: &Value) -> Result<(), String> {
     Ok(())
 }
 
-/// 包装 jsLib 代码，避免顶层 const/let 重复声明。
-///
-/// 做法：把原始代码放进去，同时把顶层声明提升到 globalThis，
-/// 这样第二次执行时不会因 const/let 重复声明报错（因为 var 重复声明允许）。
-///
-/// 具体：
-/// - 用 IIFE 包裹
-/// - IIFE 内声明 `var` 而不是 `const` / `let`（通过文本替换）
-/// - 具体替换规则：只在"行首"位置替换 `const ` / `let ` 为 `var `
-///   （避免误伤字符串、模板里的 const/let）
-///
-/// 副作用：函数参数/循环里的 const/let 不受影响（因为不在行首）。
-/// 局限：行首以外的大多数 const/let 会被保留，可能仍重复声明。
-/// 但常见 jsLib 的顶层声明都在行首，覆盖大部分场景。
 fn wrap_js_lib(code: &str) -> String {
     let mut result = String::with_capacity(code.len() + 64);
     result.push_str("(function(){\n");
-    // 逐行处理：把行首的 const/let 替换为 var
     for line in code.lines() {
         let trimmed_start = line.trim_start();
         let leading_ws_len = line.len() - trimmed_start.len();
@@ -234,9 +221,6 @@ pub fn execute(code: &str, context_json: &str) -> Result<String, String> {
     }
 }
 
-/// 识别 wrap_user_code 返回的错误 JSON。
-/// 格式：{"__error":true,"__message":"...","__stack":"..."}
-/// 返回 Some(message) 表示是错误，None 表示正常结果。
 pub fn extract_js_error(result: &str) -> Option<String> {
     let trimmed = result.trim();
     if !trimmed.starts_with("{\"__error\":true") {
@@ -256,25 +240,8 @@ pub fn extract_js_error(result: &str) -> Option<String> {
 
 /// 将用户代码包装在 IIFE 中。
 ///
-/// 书源代码里常见
-/// `var result = "undefined" != typeof result && result ? result : {};`
-/// 这类"保留外部注入值"的写法。
-///
-/// V8 的 sloppy 直接 eval 里，`var result` 声明提升会遮蔽外层注入的 `result`，
-/// 导致书源读到空对象。对齐 Rhino 语义：`var x` 不遮蔽已有绑定。
-///
-/// 解决方案：
-/// - 用间接 eval `(0, eval)(code)`，在全局作用域执行用户代码
-/// - `setup_wrapper` 里的 `var result` 等已在全局作用域声明，
-///   间接 eval 的 `var result` 不重新声明全局已有属性，
-///   赋值操作更新全局 `result`，保留注入值
-/// - 间接 eval 的"最后表达式"语义保留
-///
-/// 修复（本轮）：DOM 对象（Element / Elements）有自定义 toString，
-/// 应调用 toString() 得到 outerHtml，而不是 JSON.stringify。
-/// Legado 里 jsoup.parse(html).select(css) 返回的 Element/Elements
-/// 在 Rhino 里自动 toString() → outerHtml()。V8 不自动转换，
-/// 需要手动判断（通过对比 toString 是否是 Object.prototype.toString）。
+/// DOM 对象（Element / Elements）通过 __abyss_is_dom_object 检测，
+/// 走 toString() 路径返回 outerHtml 字符串，而不是 JSON.stringify。
 fn wrap_user_code(code: &str) -> String {
     let code_json = serde_json::to_string(code).unwrap_or_else(|_| "\"\"".into());
     format!(
@@ -308,17 +275,16 @@ fn wrap_user_code(code: &str) -> String {
         }}
     }}
     if (typeof __execResult === 'object') {{
-        try {{
-            // 修复：DOM 对象（Element / Elements）有自定义 toString，
-            // 应调用 toString() 得到 outerHtml，而不是 JSON.stringify。
-            // Legado 里 jsoup 返回的 Element/Elements 在 Rhino 里自动
-            // toString() → outerHtml()。V8 不自动转换，需要手动判断。
-            var _toStr = __execResult.toString;
-            if (typeof _toStr === 'function'
-                && _toStr !== Object.prototype.toString
-                && _toStr !== Array.prototype.toString) {{
+        // DOM 对象优先：走 toString() 得到 outerHtml
+        if (typeof globalThis.__abyss_is_dom_object === 'function'
+            && globalThis.__abyss_is_dom_object(__execResult)) {{
+            try {{
                 return String(__execResult);
+            }} catch (e) {{
+                return undefined;
             }}
+        }}
+        try {{
             return JSON.stringify(__execResult);
         }} catch (e) {{
             return undefined;
@@ -336,6 +302,9 @@ fn safe_truncate(s: &str, max_chars: usize) -> String {
 }
 
 fn execute_impl(rt: &mut JsRuntime, code: &str, context_json: &str) -> Result<String, String> {
+    // RAII guard：进入作用域设置 CURRENT_EXEC_ID，退出时释放该 execution 的所有 DOM 句柄。
+    let _exec_guard = ExecutionGuard::new(next_exec_id());
+
     let sanitized_context = context_json
         .replace('\u{2028}', "\\u2028")
         .replace('\u{2029}', "\\u2029");

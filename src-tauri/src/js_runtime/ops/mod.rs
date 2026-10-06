@@ -9,7 +9,6 @@ pub mod webview_manager;
 pub use ajax::*;
 pub use common::*;
 pub use crypto::*;
-pub use dom::*;
 pub use io::*;
 pub use storage::*;
 pub use webview_manager::*;
@@ -177,8 +176,22 @@ deno_core::extension!(
         crypto::op_java_aes_decrypt_bytes_nopad,
         crypto::op_java_des_decrypt_bytes, crypto::op_java_des_encrypt_bytes,
         crypto::op_java_des_decrypt_bytes_nopad,
-        dom::op_jsoup_before, dom::op_jsoup_after, dom::op_jsoup_prepend, dom::op_jsoup_append,
-        io::op_jsoup_parse, io::op_jsoup_select, io::op_jsoup_text, io::op_jsoup_own_text, io::op_jsoup_attr, io::op_jsoup_html, io::op_jsoup_outer_html, io::op_jsoup_remove, io::op_jsoup_size, io::op_jsoup_get, io::op_jsoup_each_text, io::op_jsoup_children, io::op_jsoup_tag_name, io::op_java_cache_file, io::op_java_download_file,
+        dom::parse::op_jsoup_parse, dom::parse::op_jsoup_parse_fragment,
+        dom::query::op_jsoup_select_in_subtree, dom::query::op_jsoup_select_all,
+        dom::query::op_jsoup_size, dom::query::op_jsoup_each_text,
+        dom::extract::op_jsoup_text, dom::extract::op_jsoup_own_text,
+        dom::extract::op_jsoup_inner_html, dom::extract::op_jsoup_outer_html,
+        dom::extract::op_jsoup_attr, dom::extract::op_jsoup_has_attr,
+        dom::extract::op_jsoup_tag_name,
+        dom::navigate::op_jsoup_children, dom::navigate::op_jsoup_child,
+        dom::navigate::op_jsoup_child_count, dom::navigate::op_jsoup_parent,
+        dom::navigate::op_jsoup_next_sibling, dom::navigate::op_jsoup_prev_sibling,
+        dom::navigate::op_jsoup_first_sibling, dom::navigate::op_jsoup_last_sibling,
+        dom::navigate::op_jsoup_siblings,
+        dom::mutate::op_jsoup_before, dom::mutate::op_jsoup_after,
+        dom::mutate::op_jsoup_prepend, dom::mutate::op_jsoup_append,
+        dom::mutate::op_jsoup_detach, dom::mutate::op_jsoup_remove_in_subtree,
+        io::op_java_cache_file, io::op_java_download_file,
         io::op_java_read_txt_file, io::op_java_read_file_bytes_base64,
         io::op_java_delete_file, io::op_java_get_txt_in_folder,
         io::op_java_file_exists, io::op_java_unarchive_file, io::op_java_zip_content,
