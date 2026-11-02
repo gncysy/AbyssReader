@@ -4,7 +4,7 @@
 
 import { analyzeUrl } from '@engine/url/index.js'
 import { logInfo, logError, logWarn } from '@engine/log/index.js'
-import { parseContentPage, injectImageStyle } from '@engine/business/content/fetcher-parser.js'
+import { parseContentPage, injectImageStyle, normalizeUrlKey } from '@engine/business/content/fetcher-parser.js'
 import type { RuleEvaluator } from '@engine/business/book/index.js'
 import { getString, getStringList, getElements } from '@engine/parser/index.js'
 import { getJsRuntime } from '@engine/parser/js-executor.js'
@@ -459,6 +459,17 @@ export async function getContent(
 
   // ─── 普通文本：BFS 抓取所有页 ───
   const pages: { url: string; content: string }[] = []
+  const nextChapterKey = nextChapterUrl ? normalizeUrlKey(nextChapterUrl) : ''
+  const seenContent = new Set<string>()
+
+  // 同一章的不同分页偶尔会被站点返回相同正文（或重定向到同一地址），
+  // 这里按正文去重，避免阅读时内容重复。
+  function addPage(url: string, rawContent: string): void {
+    const trimmed = rawContent.trim()
+    if (!trimmed || seenContent.has(trimmed)) return
+    seenContent.add(trimmed)
+    pages.push({ url, content: trimmed })
+  }
 
   try {
     // 第一页
@@ -478,9 +489,7 @@ export async function getContent(
       true,
       evaluator,
     )
-    if (firstResult.content && firstResult.content.trim()) {
-      pages.push({ url: firstPage.redirectUrl, content: firstResult.content.trim() })
-    }
+    if (firstResult.content) addPage(firstPage.redirectUrl, firstResult.content)
 
     // BFS 队列：第一页的 nextUrls 作为下一轮
     let pending: string[] = []
@@ -492,8 +501,10 @@ export async function getContent(
       }
     }
 
+    let reachedNextChapter = false
+
     // 循环抓取，直到没有下一页或达到 MAX_CONTENT_PAGES
-    while (pending.length > 0 && pages.length < MAX_CONTENT_PAGES) {
+    while (pending.length > 0 && pages.length < MAX_CONTENT_PAGES && !reachedNextChapter) {
       const batch = pending.slice(0, MAX_CONCURRENT_PAGES)
       pending = pending.slice(MAX_CONCURRENT_PAGES)
 
@@ -516,7 +527,7 @@ export async function getContent(
             )
             return {
               url: nextPage.redirectUrl,
-              content: parsed.content ? parsed.content.trim() : '',
+              content: parsed.content || '',
               nextUrls: parsed.nextUrls,
             }
           } catch (e: unknown) {
@@ -529,7 +540,16 @@ export async function getContent(
 
       for (const r of results) {
         if (!r) continue
-        if (r.content) pages.push({ url: r.url, content: r.content })
+
+        // 第二道防线：即使规则没能过滤掉，抓到的页面如果就是下一章，
+        // 也立即停止，避免把下一章内容拼进本章。
+        if (nextChapterKey && normalizeUrlKey(r.url) === nextChapterKey) {
+          logInfo('reader', 'frontend', '[正文] 已到达下一章，停止分页抓取')
+          reachedNextChapter = true
+          continue
+        }
+
+        addPage(r.url, r.content)
 
         for (const u of r.nextUrls) {
           const trimmed = u.trim()

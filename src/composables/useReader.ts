@@ -5,8 +5,8 @@
 import { ref, computed } from 'vue'
 import { useReaderStore } from '@/stores/reader.js'
 import { READER } from '@/constants/reader.js'
+import { scrollPercentToChapterPos } from '@/utils/reading-position.js'
 
-const SCROLL_PERCENT_MULTIPLIER = 10000
 const SAVE_DEBOUNCE_MS = 800
 // 修复：翻页时立即写入（不 debounce），滚动时 debounce
 const IMMEDIATE_SAVE_ON_CHAPTER = true
@@ -49,7 +49,7 @@ export function useReader(bookUrl: string, bookName: string, author: string) {
   function flushPendingSave(): void {
     if (pendingSave) {
       const { chapterId, scrollPercent, chapterTitle } = pendingSave
-      const chapterPos = Math.round(scrollPercent * SCROLL_PERCENT_MULTIPLIER)
+      const chapterPos = scrollPercentToChapterPos(scrollPercent)
       readerStore.saveProgress(bookUrl, bookName, author, chapterId, chapterPos, chapterTitle)
         .catch(() => {})
       lastSavedChapterId = chapterId
@@ -66,7 +66,7 @@ export function useReader(bookUrl: string, bookName: string, author: string) {
     if (IMMEDIATE_SAVE_ON_CHAPTER && lastSavedChapterId !== null && lastSavedChapterId !== chapterId) {
       flushPendingSave()
       // 立即写入新章节
-      const chapterPos = Math.round(scrollPercent * SCROLL_PERCENT_MULTIPLIER)
+      const chapterPos = scrollPercentToChapterPos(scrollPercent)
       lastSavedChapterId = chapterId
       return readerStore.saveProgress(bookUrl, bookName, author, chapterId, chapterPos, chapterTitle)
         .catch(() => {})

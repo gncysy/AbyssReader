@@ -24,6 +24,8 @@ export interface ReadConfig {
   _fontSize?: number
   /** 内部字段：书籍独立转换类型 */
   _converterType?: number
+  /** 内部字段：书籍独立段落间距（em） */
+  _paragraphSpacing?: number
 }
 
 export interface Book {
@@ -64,6 +66,11 @@ export interface Book {
 
   /** 内部字段：打开阅读器时强制跳转到的章节索引 */
   _forceChapterIndex?: number
+  /**
+   * 内部字段：打开阅读器时是否恢复到上次阅读位置。
+   * 「继续阅读」为 true；从目录点选具体章节时为 false。
+   */
+  _restoreReadingPosition?: boolean
   /** 内部字段：搜索结果里标记来源书源 */
   _sourceKey?: string
   /** 内部字段：换源候选项的来源书源名 */

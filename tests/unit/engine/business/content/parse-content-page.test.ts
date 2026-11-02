@@ -119,4 +119,60 @@ describe('parseContentPage 纯文本路径', () => {
 
     expect(result.content).toBe('')
   })
+
+  it('分页链接指向下一章时被过滤，不会把下一章拼进来', async () => {
+    const book = { name: '测试书', author: '测试作者' }
+    const chapter = { id: 0, title: '第一章', url: 'https://example.com/ch/1', index: 0 }
+
+    // 模拟书源最后一页：第三个数量的「下一页」实际是「下一章」
+    const evaluator = {
+      getString: async () => '<p>' + '正文'.repeat(40) + '</p>',
+      getStringList: async () => [
+        'https://example.com/ch/1-2.html',
+        'https://example.com/ch/2.html',
+      ],
+      getElements: async () => [],
+    } as unknown as Parameters<typeof parseContentPage>[9]
+
+    const result = await parseContentPage(
+      book,
+      'https://example.com',
+      'https://example.com/ch/1',
+      '<div class="con"><p>' + '正文'.repeat(40) + '</p></div>',
+      { content: '@css:.con p@text', sourceRegex: '', imageStyle: null, nextContentUrl: '@css:.prenext span:eq(2) a@href' },
+      chapter,
+      mockSource,
+      'https://example.com/ch/2.html',
+      true,
+      evaluator
+    )
+
+    expect(result.nextUrls).toEqual(['https://example.com/ch/1-2.html'])
+  })
+
+  it('nextChapterUrl 末尾带斜杠也能匹配过滤', async () => {
+    const book = { name: '测试书', author: '测试作者' }
+    const chapter = { id: 0, title: '第一章', url: 'https://example.com/ch/1', index: 0 }
+
+    const evaluator = {
+      getString: async () => '<p>' + '正文'.repeat(40) + '</p>',
+      getStringList: async () => ['https://example.com/ch/2.html'],
+      getElements: async () => [],
+    } as unknown as Parameters<typeof parseContentPage>[9]
+
+    const result = await parseContentPage(
+      book,
+      'https://example.com',
+      'https://example.com/ch/1',
+      '<div class="con"><p>' + '正文'.repeat(40) + '</p></div>',
+      { content: '@css:.con p@text', sourceRegex: '', imageStyle: null, nextContentUrl: '@css:.prenext span:eq(2) a@href' },
+      chapter,
+      mockSource,
+      'https://example.com/ch/2.html/',
+      true,
+      evaluator
+    )
+
+    expect(result.nextUrls).toEqual([])
+  })
 })

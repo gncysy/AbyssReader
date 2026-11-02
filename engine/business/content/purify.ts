@@ -983,22 +983,19 @@ export async function applyReplaceRules(text: string, options: ApplyReplaceRules
   return result
 }
 
+/**
+ * 文本转 HTML：每个非空行生成一个独立段落。
+ *
+ * 正文规则（formatKeepImg）会把 </p>、<br> 等块级标签统一格式化成单个换行，
+ * 所以这里不能只按「双换行」分段，否则整章会挤进一个 <p> 里，
+ * 段落间距设置也就只作用于文末。
+ */
 export function textToHtml(text: string): string {
   const INDENT = '\u3000\u3000'
-  text = text
+  const paragraphs = text
     .split('\n')
-    .map((l) => (l.trim() ? INDENT + l.trim() : ''))
-    .join('\n')
-  const doubleNewlines = getCachedRegex('\\n\\n', 'g')
-  const singleNewlines = getCachedRegex('\\n', 'g')
-  let result = '<p>' + text
-  if (doubleNewlines) {
-    doubleNewlines.lastIndex = 0
-    result = result.replace(doubleNewlines, '</p><p>')
-  }
-  if (singleNewlines) {
-    singleNewlines.lastIndex = 0
-    result = result.replace(singleNewlines, '<br>')
-  }
-  return result + '</p>'
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0)
+    .map((line) => '<p>' + INDENT + line + '</p>')
+  return paragraphs.length > 0 ? paragraphs.join('') : '<p></p>'
 }

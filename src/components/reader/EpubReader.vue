@@ -369,12 +369,14 @@ async function buildSrcdoc(rawXhtml: string, rawCss: string): Promise<string> {
   `
 
   const epubStyle = rawCss
+  // 段落间距放在 EPUB 自带样式之后，保证用户设置生效
+  const paragraphStyle = `p { margin: 0 0 ${readerStore.paragraphSpacing}em; }`
 
   const bridgeHash = await getBridgeHash()
   const csp = `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src epub: data: http://epub.localhost https://epub.localhost; style-src 'unsafe-inline'; font-src epub: data: http://epub.localhost https://epub.localhost; script-src 'sha256-${bridgeHash}'; connect-src 'none';">`
 
   return `<!DOCTYPE html>
-<html><head><meta charset="utf-8">${csp}<style>${baseStyle}</style><style>${epubStyle}</style></head>
+<html><head><meta charset="utf-8">${csp}<style>${baseStyle}</style><style>${epubStyle}</style><style>${paragraphStyle}</style></head>
 <body>${sanitized}${BRIDGE_SCRIPT}</body></html>`
 }
 
@@ -579,6 +581,7 @@ watch(chapterIndex, () => { loadChapter() })
 watch(effectiveTheme, () => { loadChapter() })
 watch(() => readerStore.fontSize, () => { loadChapter() })
 watch(() => readerStore.lineHeight, () => { loadChapter() })
+watch(() => readerStore.paragraphSpacing, () => { loadChapter() })
 watch(() => props.book, (val) => {
   if (val) {
     chapterIndex.value = 0

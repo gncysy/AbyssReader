@@ -8,12 +8,16 @@
           <div v-else class="comic-placeholder"><LoadingSpinner /><span>第 {{ i + 1 }} 页加载中...</span></div>
         </div>
       </div>
-      <!-- 修复：v-memo 缓存正文渲染，仅当内容/字号/行距变化时重新渲染 -->
+      <!-- 修复：v-memo 缓存正文渲染，仅当内容/字号/行距/段距变化时重新渲染 -->
       <div
         v-else
-        v-memo="[sanitizedContent, fontSize, lineHeight]"
+        v-memo="[sanitizedContent, fontSize, lineHeight, paragraphSpacing]"
         class="content-inner"
-        :style="{ fontSize: fontSize + 'px', lineHeight: lineHeight }"
+        :style="{
+          fontSize: fontSize + 'px',
+          lineHeight: lineHeight,
+          '--reader-paragraph-spacing': paragraphSpacing + 'em',
+        }"
         v-html="sanitizedContent"
       ></div>
       <div v-if="!isComic && !loadingContent && totalChapters > 0" class="content-nav">
@@ -44,6 +48,7 @@ defineProps<{
   loadingContent: boolean
   fontSize: number
   lineHeight: number
+  paragraphSpacing: number
   chapterIndex: number
   totalChapters: number
   canPrev: boolean
@@ -76,6 +81,8 @@ defineExpose({ contentRef })
 .reader-content { position: absolute; inset: 0; overflow-y: auto; overflow-x: hidden; user-select: text; scrollbar-width: none; -ms-overflow-style: none; }
 .reader-content::-webkit-scrollbar { display: none !important; }
 .content-inner { max-width: 720px; margin: 0 auto; padding: 28px 36px 12px; }
+/* 段落间距由阅读设置控制，首段不留额外上边距 */
+.content-inner :deep(p) { margin: 0 0 var(--reader-paragraph-spacing, 0em); }
 .content-comic { width: 100%; }
 .comic-page { width: 100%; min-height: 100px; }
 .comic-placeholder { display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 60px 20px; color: var(--text-muted); font-size: 14px; min-height: 200px; }

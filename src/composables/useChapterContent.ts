@@ -9,7 +9,7 @@ import type { GetContentOptions } from '@/services/content.js'
 import { extractImageUrls, createComicImages } from '@engine/business/comic/index.js'
 import type { ComicImage } from '@engine/business/comic/index.js'
 import { loadComicImages } from '@/services/comic.js'
-import { getCachedContent, setCachedContent, getPreloadedContent, setPreloadedContent, getRawContent, setRawContent } from '@/services/cache.js'
+import { getCachedContent, setCachedContent, getPreloadedContent, setPreloadedContent, getRawContent, setRawContent, clearChapterMemory, deleteCachedContent } from '@/services/cache.js'
 import { useErrorHandler } from '@/composables/useErrorHandler.js'
 import { logWarn, logInfo } from '@engine/log/index.js'
 import type { Book, BookSource, Chapter } from '@/types'
@@ -38,6 +38,13 @@ function escapeHtml(text: string): string {
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#39;')
+}
+
+// getContent 在失败时返回的是提示文案而不是异常，这些文案不能写入缓存。
+const CONTENT_ERROR_TEXTS = new Set(['正文获取失败', '章节链接无效', '书源缺少正文规则'])
+
+function isContentErrorText(raw: string): boolean {
+  return CONTENT_ERROR_TEXTS.has(raw.trim())
 }
 
 function sleep(ms: number): Promise<void> {
@@ -199,7 +206,11 @@ export function useChapterContent() {
     comicImages.value = []
     scrollPercent.value = 0
 
-    if (!forceRefresh) {
+    if (forceRefresh) {
+      // 刷新：清掉内存与磁盘缓存，确保这次一定走网络重新抓取。
+      clearChapterMemory(book, chapterIndex.value)
+      await deleteCachedContent(book, ch.id)
+    } else {
       const rawCached = getRawContent(book, chapterIndex.value)
       if (rawCached) {
         content.value = rawCached
@@ -222,7 +233,8 @@ export function useChapterContent() {
         }
       }
 
-      if (!forceRefresh) {
+      // 抓取成功才写缓存；失败提示语不能被缓存，否则下次打开还是错误文案。
+      if (raw && !isContentErrorText(raw)) {
         await setCachedContent(book, ch.id, raw)
       }
     } catch (err: unknown) {

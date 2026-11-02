@@ -60,18 +60,57 @@ function parsePseudoOps(selector: string): { segments: string[]; ops: PseudoOp[]
   return { segments, ops }
 }
 
-function applyPseudoOp(elements: DomNode[], kind: 'eq' | 'lt' | 'gt', n: number): DomNode[] {
-  const len = elements.length
-  const idx = n < 0 ? len + n : n
+/**
+ * 元素在其父节点中的兄弟索引（仅计元素节点，对齐 JSoup elementSiblingIndex）。
+ *
+ * 注意：DomProvider 每次访问都会新建节点包装对象，因此不能依赖
+ * `parent.children.indexOf(el)` 的对象同一性；这里先走快速路径，
+ * 取不到时回退到 previousSibling 链计数。
+ */
+function elementSiblingIndex(el: DomNode): number {
+  const parent = el.parentNode
+  if (!parent) return -1
 
-  if (kind === 'eq') {
-    const el = elements[idx]
-    return idx >= 0 && idx < len && el ? [el] : []
+  if (Array.isArray(parent.children)) {
+    const idx = parent.children.indexOf(el)
+    if (idx >= 0) return idx
   }
-  if (kind === 'lt') {
-    return elements.slice(0, Math.max(0, idx))
+
+  let idx = 0
+  let sib: DomNode | null = el.previousSibling
+  while (sib) {
+    if (sib.tag !== '#text') idx++
+    sib = sib.previousSibling
   }
-  return elements.slice(idx + 1)
+  return idx
+}
+
+/**
+ * jQuery / JSoup 风格索引伪类。
+ *
+ * 注意：JSoup 的 `:eq(n)` / `:lt(n)` / `:gt(n)` 匹配的是「同级兄弟索引」，
+ * 而不是「匹配结果列表里的下标」。Legado 使用 JSoup，书源规则也是按前者的
+ * 语义编写的（例如 `.prenext span:eq(2) a@href` 取父节点下第 3 个子元素中的
+ * span，而不是第二个 span）。
+ *
+ * 早期实现按结果列表下标切片，遇到父子结构里夹着其它标签的规则会取不到元素，
+ * 典型表现是 nextContentUrl 为空、正文只抓到第一页。
+ */
+export function applyPseudoOp(elements: DomNode[], kind: 'eq' | 'lt' | 'gt', n: number): DomNode[] {
+  return elements.filter((el) => {
+    const siblings = el.parentNode && Array.isArray(el.parentNode.children)
+      ? el.parentNode.children
+      : null
+    const idx = elementSiblingIndex(el)
+    if (idx < 0) return false
+
+    // 负数按下标从末尾数（JSoup 不保证支持，这里作为兼容扩展）。
+    const target = n < 0 ? (siblings ? siblings.length : 0) + n : n
+
+    if (kind === 'eq') return idx === target
+    if (kind === 'lt') return idx < target
+    return idx > target
+  })
 }
 
 function applyPseudoSegments(

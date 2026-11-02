@@ -124,6 +124,12 @@ pub async fn cache_get_content(book_url: String) -> Result<Option<String>> {
 }
 
 #[tauri::command]
+pub async fn cache_delete_content(book_url: String) -> Result<()> {
+    cache::cache_delete(CacheCategory::Content, &book_url)?;
+    Ok(())
+}
+
+#[tauri::command]
 pub async fn cache_has_cover(url: String) -> Result<bool> {
     Ok(cache::cache_exists(CacheCategory::Cover, &url, 7 * 24 * 3600))
 }

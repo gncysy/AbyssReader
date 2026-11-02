@@ -187,3 +187,25 @@ export async function setCachedContent(
     // ignore
   }
 }
+
+/**
+ * 清掉某章的内存缓存（原始正文 + 预加载正文）。
+ * 磁盘缓存由下一次抓取覆盖写入。
+ */
+export function clearChapterMemory(book: Book, chapterIndex: number): void {
+  const key = getChapterCacheKey(book, chapterIndex)
+  chapterContents.delete(key)
+  chapterContents.delete(key + '::raw')
+}
+
+/**
+ * 删除某章的磁盘缓存，配合「刷新本章」使用，确保下次一定重新抓取。
+ */
+export async function deleteCachedContent(book: Book, chapterId: number): Promise<void> {
+  try {
+    const key = getBookCacheKey(book) + '/' + chapterId
+    await invoke('cache_delete_content', { bookUrl: key })
+  } catch {
+    // ignore
+  }
+}

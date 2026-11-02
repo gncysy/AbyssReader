@@ -13,6 +13,15 @@
           <button class="btn-icon-header" title="阅读设置" @click.stop="openSettings">
             <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
           </button>
+          <button
+            class="btn-icon-header btn-refresh"
+            :class="{ spinning: refreshingChapter }"
+            :disabled="loadingContent || refreshingChapter"
+            title="刷新本章"
+            @click.stop="refreshChapter"
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><polyline points="21 3 21 9 15 9"/></svg>
+          </button>
         </header>
       </Transition>
 
@@ -24,6 +33,7 @@
           :loading-content="loadingContent"
           :font-size="effectiveFontSize"
           :line-height="effectiveLineHeight"
+          :paragraph-spacing="effectiveParagraphSpacing"
           :chapter-index="chapterIndex"
           :total-chapters="chapters.length"
           :can-prev="chapterIndex > 0"
@@ -72,6 +82,7 @@ import TocPopup from './TocPopup.vue'
 import DictPanel from './DictPanel.vue'
 import LoadingSpinner from '@/components/common/LoadingSpinner.vue'
 import { ContextMenu, ContextMenuItem } from '@/components/common/ContextMenu/index.js'
+import { chapterPosToPercent } from '@/utils/reading-position.js'
 import type { Book, BookSource, Chapter } from '@/types'
 
 const props = defineProps<{ book: Book | null; source?: BookSource | null; initialChapters?: Chapter[] }>()
@@ -86,9 +97,9 @@ const rc = useReaderContent(props.book, sourceValue, props.initialChapters)
 const {
   loadingContent, chapterIndex, chapters, isComic, comicImages, scrollPercent, currentChapter,
   dictVisible, dictRules, dictActiveTab, dictLoading, dictContents, showControls,
-  effectiveTheme, effectiveFontSize, effectiveLineHeight, sanitizedContent,
+  effectiveTheme, effectiveFontSize, effectiveLineHeight, effectiveParagraphSpacing, sanitizedContent,
   tocPopupRef, settingsRef, readerCtxRef,
-  loadChaptersForBook, loadChapter,
+  loadChaptersForBook, loadChapter, refreshChapter, refreshingChapter,
   prevChapter, nextChapter, retryComicImage, handleClose, handleKeydown,
   openToc, openSettings, onTocSelect, handleContentClick, handleTextSelect,
   copySelectionFromCtx, openDictFromCtx, switchDictTab,
@@ -122,17 +133,33 @@ onMounted(async () => {
   replaceRuleStore.loadRules()
   if (props.book && sourceValue) {
     await loadChaptersForBook(props.book, sourceValue, props.initialChapters)
-    const forcedIndex = (props.book as unknown as Record<string, unknown>)._forceChapterIndex
+
+    const meta = props.book as unknown as Record<string, unknown>
+    const forcedIndex = meta._forceChapterIndex
+    const progress = await readerStore.loadProgress(props.book.bookUrl, props.book.name, props.book.author)
+
     if (typeof forcedIndex === 'number' && forcedIndex >= 0 && forcedIndex < chapters.value.length) {
       chapterIndex.value = forcedIndex
-    } else {
-      const progress = await readerStore.loadProgress(props.book.bookUrl, props.book.name, props.book.author)
-      if (progress) {
-        const idx = chapters.value.findIndex((ch) => Number(ch.id) === Number(progress.chapterId))
-        if (idx !== -1) chapterIndex.value = idx
-      }
+    } else if (progress) {
+      const idx = chapters.value.findIndex((ch) => Number(ch.id) === Number(progress.chapterId))
+      if (idx !== -1) chapterIndex.value = idx
     }
-    await loadChapter()
+
+    // 「继续阅读」恢复到上次关闭时的章节内位置；
+    // 从目录明确点选章节（_restoreReadingPosition === false）则从章节开头开始。
+    let restorePercent = 0
+    const targetChapter = chapters.value[chapterIndex.value]
+    const restoreAllowed = meta._restoreReadingPosition !== false
+    if (
+      restoreAllowed &&
+      progress &&
+      targetChapter &&
+      Number(targetChapter.id) === Number(progress.chapterId)
+    ) {
+      restorePercent = chapterPosToPercent(progress.chapterPos)
+    }
+
+    await loadChapter(false, restorePercent)
   }
   window.addEventListener('keydown', handleKeydown)
 })
@@ -202,6 +229,10 @@ onUnmounted(async () => {
 .reader-title.clickable:hover { color: var(--text-primary); }
 .btn-icon-header { width: 38px; height: 38px; border: none; background: transparent; color: var(--text-muted); cursor: pointer; border-radius: var(--radius-sm); display: flex; align-items: center; justify-content: center; -webkit-app-region: no-drag; margin-left: auto; flex-shrink: 0; }
 .btn-icon-header:hover { background: var(--bg-hover); color: var(--text-primary); }
+.btn-icon-header:disabled { opacity: 0.45; cursor: default; }
+.btn-refresh { margin-left: 4px; }
+.btn-refresh.spinning svg { animation: reader-refresh-spin 0.9s linear infinite; }
+@keyframes reader-refresh-spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
 .reader-body {
   flex: 1;
   padding-top: 48px;

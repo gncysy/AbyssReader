@@ -226,14 +226,11 @@ describe('purifyText — 正文净化', () => {
   })
 })
 
-describe('textToHtml — 文本转HTML（实际行为）', () => {
-  it('应该生成一个 <p> 标签包裹整个文本', () => {
+describe('textToHtml — 文本转HTML', () => {
+  it('应该为每个非空行生成独立段落', () => {
     const input = '第一段。\n第二段。'
     const result = textToHtml(input)
-    expect(result).toContain('<p>')
-    expect(result).toContain('</p>')
-    const pCount = (result.match(/<p>/g) || []).length
-    expect(pCount).toBe(1)
+    expect(result).toBe('<p>\u3000\u3000第一段。</p><p>\u3000\u3000第二段。</p>')
   })
 
   it('应该正确缩进每段', () => {
@@ -242,10 +239,11 @@ describe('textToHtml — 文本转HTML（实际行为）', () => {
     expect(result).toContain('\u3000\u3000')
   })
 
-  it('应该将换行转换为 <br>', () => {
-    const input = '第一行\n第二行'
+  it('应该跳过空行，不再用 <br> 分段', () => {
+    const input = '第一行\n\n第二行\n   \n第三行'
     const result = textToHtml(input)
-    expect(result).toContain('<br>')
+    expect(result).not.toContain('<br>')
+    expect(result.match(/<p>/g)).toHaveLength(3)
   })
 
   it('应该正确处理空字符串', () => {

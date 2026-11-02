@@ -63,6 +63,7 @@ export const useReaderStore = defineStore('reader', () => {
   const readerTheme = ref<string>(DEFAULT_THEME)
   const fontSize = ref<number>(READER.FONT_SIZE_DEFAULT)
   const lineHeight = ref<number>(READER.LINE_HEIGHT_DEFAULT)
+  const paragraphSpacing = ref<number>(READER.PARAGRAPH_SPACING_DEFAULT)
   const chineseConverterType = ref<number>(0)
   const reSegment = ref<boolean>(false)
   const todayReadCount = ref<number>(loadTodayCount())
@@ -78,6 +79,7 @@ export const useReaderStore = defineStore('reader', () => {
         if (typeof settingsRaw.readerTheme === 'string') readerTheme.value = settingsRaw.readerTheme
         if (typeof settingsRaw.fontSize === 'number') fontSize.value = settingsRaw.fontSize
         if (typeof settingsRaw.lineHeight === 'number') lineHeight.value = settingsRaw.lineHeight
+        if (typeof settingsRaw.paragraphSpacing === 'number') paragraphSpacing.value = settingsRaw.paragraphSpacing
         if (typeof settingsRaw.chineseConverterType === 'number') chineseConverterType.value = settingsRaw.chineseConverterType
         if (typeof settingsRaw.reSegment === 'boolean') reSegment.value = settingsRaw.reSegment
       }
@@ -97,6 +99,7 @@ export const useReaderStore = defineStore('reader', () => {
       readerTheme: readerTheme.value,
       fontSize: fontSize.value,
       lineHeight: lineHeight.value,
+      paragraphSpacing: paragraphSpacing.value,
       chineseConverterType: chineseConverterType.value,
       reSegment: reSegment.value,
     })
@@ -145,10 +148,22 @@ export const useReaderStore = defineStore('reader', () => {
     saveSettings()
   }
 
+  function setParagraphSpacing(val: number): void {
+    // 保留一位小数，避免 0.2 步进的浮点误差累积
+    const rounded = Math.round(val * 10) / 10
+    paragraphSpacing.value = Math.max(
+      READER.PARAGRAPH_SPACING_MIN,
+      Math.min(READER.PARAGRAPH_SPACING_MAX, rounded),
+    )
+    saveSettings()
+  }
+
   function increaseFontSize(): void { setFontSize(fontSize.value + 1) }
   function decreaseFontSize(): void { setFontSize(fontSize.value - 1) }
   function increaseLineHeight(): void { setLineHeight(lineHeight.value + 0.2) }
   function decreaseLineHeight(): void { setLineHeight(lineHeight.value - 0.2) }
+  function increaseParagraphSpacing(): void { setParagraphSpacing(paragraphSpacing.value + READER.PARAGRAPH_SPACING_STEP) }
+  function decreaseParagraphSpacing(): void { setParagraphSpacing(paragraphSpacing.value - READER.PARAGRAPH_SPACING_STEP) }
 
   function setChineseConverterType(val: number): void {
     chineseConverterType.value = val
@@ -213,12 +228,13 @@ export const useReaderStore = defineStore('reader', () => {
   }
 
   return {
-    readerTheme, fontSize, lineHeight, chineseConverterType, reSegment,
+    readerTheme, fontSize, lineHeight, paragraphSpacing, chineseConverterType, reSegment,
     todayReadCount, loaded, bookSettings,
     loadSettings, saveSettings, saveBookSettings, getBookSettings, hasBookSettings, clearBookSettings,
-    setReaderTheme, setFontSize, setLineHeight,
+    setReaderTheme, setFontSize, setLineHeight, setParagraphSpacing,
     increaseFontSize, decreaseFontSize,
     increaseLineHeight, decreaseLineHeight,
+    increaseParagraphSpacing, decreaseParagraphSpacing,
     setChineseConverterType, setReSegment,
     incrementTodayReadCount,
     saveProgress, loadProgress, resetProgressCache,

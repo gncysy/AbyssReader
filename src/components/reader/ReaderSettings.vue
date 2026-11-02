@@ -35,6 +35,14 @@
               </div>
             </div>
             <div class="setting-row">
+              <span class="setting-label">段落间距</span>
+              <div class="stepper">
+                <button class="stepper-btn" @click="adjustParagraphSpacing(-1)">−</button>
+                <span class="stepper-value">{{ paragraphSpacingPx }}px</span>
+                <button class="stepper-btn" @click="adjustParagraphSpacing(1)">+</button>
+              </div>
+            </div>
+            <div class="setting-row">
               <span class="setting-label">简繁转换</span>
               <div class="option-group">
                 <button v-for="opt in converterOptions" :key="opt.value" class="option-btn" :class="{ active: localConverterType === opt.value }" @click="setLocalConverterType(opt.value)">{{ opt.label }}</button>
@@ -68,9 +76,9 @@
 </template>
 
 <script setup lang="ts">
-import { ref, watch } from 'vue'
+import { ref, watch, computed } from 'vue'
 import { useReaderStore, useBookshelfStore } from '@/stores'
-import { READER_THEMES } from '@/constants/index.js'
+import { READER, READER_THEMES } from '@/constants/index.js'
 import CustomDropdown from '@/components/settings/CustomDropdown.vue'
 
 const readerStore = useReaderStore()
@@ -90,6 +98,7 @@ const useGlobal = ref(true)
 
 const localTheme = ref('dark')
 const localFontSize = ref(18)
+const localParagraphSpacing = ref<number>(READER.PARAGRAPH_SPACING_DEFAULT)
 const localConverterType = ref(0)
 const localUseReplaceRule = ref(true)
 const localReSegment = ref(false)
@@ -122,6 +131,18 @@ function adjustFontSize(delta: number): void {
   scheduleApplyToStore()
 }
 
+// 段间距按 em 存储，界面按当前字号折算成 px 展示
+const paragraphSpacingPx = computed(() => Math.round(localParagraphSpacing.value * localFontSize.value))
+
+function adjustParagraphSpacing(delta: number): void {
+  const next = localParagraphSpacing.value + delta * READER.PARAGRAPH_SPACING_STEP
+  localParagraphSpacing.value = Math.max(
+    READER.PARAGRAPH_SPACING_MIN,
+    Math.min(READER.PARAGRAPH_SPACING_MAX, Math.round(next * 10) / 10),
+  )
+  scheduleApplyToStore()
+}
+
 function scheduleApplyToStore(): void {
   if (saveTimer) clearTimeout(saveTimer)
   saveTimer = setTimeout(() => {
@@ -139,12 +160,14 @@ function applyToStore(): void {
   if (useGlobal.value) {
     readerStore.setReaderTheme(localTheme.value)
     readerStore.setFontSize(localFontSize.value)
+    readerStore.setParagraphSpacing(localParagraphSpacing.value)
     readerStore.setReSegment(localReSegment.value)
     readerStore.setChineseConverterType(localConverterType.value)
   } else {
     Object.assign(settings, {
       _theme: localTheme.value,
       _fontSize: localFontSize.value,
+      _paragraphSpacing: localParagraphSpacing.value,
       _converterType: localConverterType.value,
       reSegment: localReSegment.value,
       reverseToc: localReverseToc.value,
@@ -168,6 +191,7 @@ function applyToStore(): void {
 function loadGlobalSettings(): void {
   localTheme.value = readerStore.readerTheme
   localFontSize.value = readerStore.fontSize
+  localParagraphSpacing.value = readerStore.paragraphSpacing
   localReSegment.value = readerStore.reSegment
   localConverterType.value = readerStore.chineseConverterType
   const saved = readerStore.getBookSettings(_bookUrl.value)
@@ -182,6 +206,9 @@ function loadLocalSettings(): void {
   const settings = readerStore.getBookSettings(_bookUrl.value)
   localTheme.value = typeof settings._theme === 'string' ? settings._theme : readerStore.readerTheme
   localFontSize.value = typeof settings._fontSize === 'number' ? settings._fontSize : readerStore.fontSize
+  localParagraphSpacing.value = typeof settings._paragraphSpacing === 'number'
+    ? settings._paragraphSpacing
+    : readerStore.paragraphSpacing
   localConverterType.value = typeof settings._converterType === 'number' ? settings._converterType : readerStore.chineseConverterType
   localUseReplaceRule.value = typeof settings.useReplaceRule === 'boolean' ? settings.useReplaceRule : true
   localReSegment.value = typeof settings.reSegment === 'boolean' ? settings.reSegment : readerStore.reSegment
@@ -222,14 +249,14 @@ watch(useGlobal, (newVal) => {
 })
 
 watch(
-  [localTheme, localFontSize, localConverterType, localUseReplaceRule, localReSegment, localReverseToc, localSplitLongChapter, localImageStyle, localDelTag],
+  [localTheme, localFontSize, localParagraphSpacing, localConverterType, localUseReplaceRule, localReSegment, localReverseToc, localSplitLongChapter, localImageStyle, localDelTag],
   () => {
     if (visible.value) scheduleApplyToStore()
   }
 )
 
 watch(
-  () => [readerStore.readerTheme, readerStore.fontSize, readerStore.reSegment, readerStore.chineseConverterType],
+  () => [readerStore.readerTheme, readerStore.fontSize, readerStore.paragraphSpacing, readerStore.reSegment, readerStore.chineseConverterType],
   () => {
     if (visible.value && useGlobal.value) loadGlobalSettings()
   }

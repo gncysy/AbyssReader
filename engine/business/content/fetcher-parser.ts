@@ -72,6 +72,22 @@ export function stripHtml(html: string): string {
 
 const CONTENT_MIN_LENGTH = 50
 
+/**
+ * 归一化 URL 用于比较：去掉 hash 和末尾斜杠，避免同一章因写法不同而漏判。
+ */
+export function normalizeUrlKey(raw: string): string {
+  const trimmed = raw.trim()
+  if (!trimmed) return ''
+  try {
+    const url = new URL(trimmed)
+    url.hash = ''
+    return url.toString().replace(/\/+$/, '')
+  } catch {
+    return trimmed.replace(/#.*$/, '').replace(/\/+$/, '')
+  }
+}
+
+
 interface ContentRuleLike {
   content?: string | null
   sourceRegex?: string | null
@@ -94,7 +110,11 @@ export async function parseContentPage(
 ): Promise<{ content: string; nextUrls: string[] }> {
   const ctx: ParseContext = {
     source: bookSource,
-    baseUrl: bookSource.bookSourceUrl || baseUrl,
+    // 解析相对链接必须以「当前正文页的真实地址」为基准（Legado 的 contentUrl）。
+    // 用 bookSourceUrl 会在书源域名与正文域名不一致时解析到错误域名：
+    // 例如书源 www.shudugu.org、正文 www.suduguu.com，相对链接会落到
+    // shudugu.org，随后被站点重定向，导致分页链串到别的章节。
+    baseUrl: redirectUrl || baseUrl,
     book: book || {},
     chapter: chapter || {},
     nextChapterUrl: nextChapterUrl || '',
@@ -149,8 +169,15 @@ export async function parseContentPage(
     try {
       const r = await evaluator.getStringList(workingBody, nextContentUrlRule, { ...ctx, isUrl: true })
       if (Array.isArray(r)) {
+        const nextChapterKey = nextChapterUrl ? normalizeUrlKey(nextChapterUrl) : ''
         for (const u of r) {
-          if (u && typeof u === 'string' && u.trim()) nextUrls.push(u.trim())
+          if (!u || typeof u !== 'string') continue
+          const val = u.trim()
+          if (!val) continue
+          // 很多书源最后一页的「下一页」实际指向下一章（如「下一章」按钮），
+          // 这里必须排除，否则会把下一章开头拼进本章。
+          if (nextChapterKey && normalizeUrlKey(val) === nextChapterKey) continue
+          nextUrls.push(val)
         }
       }
     } catch {

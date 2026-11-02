@@ -7,7 +7,8 @@
 // 3. textToHtml
 // ============================================
 
-import { ref, computed, nextTick, watch } from 'vue'
+import { ref, computed, nextTick, watch, onUnmounted } from 'vue'
+import { useMessage } from 'naive-ui'
 import DOMPurify from 'isomorphic-dompurify'
 import { useReaderStore, useBookshelfStore } from '@/stores'
 import { useReplaceRuleStore } from '@/stores/replace-rules.js'
@@ -15,6 +16,7 @@ import { useChapterContent } from '@/composables/useChapterContent.js'
 import { useDict } from '@/composables/useDict.js'
 import { useReader } from '@/composables/useReader.js'
 import { preprocessContent, applyReplaceRules, textToHtml } from '@engine/business/content/purify.js'
+import { MIN_RESTORE_PERCENT, clampScrollPercent } from '@/utils/reading-position.js'
 import { loadSingleImage } from '@/services/comic.js'
 import { engine } from '@/services/engine.js'
 import { getRegexWorkerPool } from '@/services/regex-worker.js'
@@ -23,6 +25,9 @@ import type TocPopup from '@/components/reader/TocPopup.vue'
 import type ReaderSettings from '@/components/reader/ReaderSettings.vue'
 
 const SELECTION_DELAY_MS = 300
+// 恢复位置后继续校正的时长：正文图片异步加载会改变内容高度，
+// 超时后不再接管滚动，避免和用户操作冲突。
+const RESTORE_TIMEOUT_MS = 6000
 
 interface ReaderContextMenuLike {
   open: (items: unknown[], x: number, y: number) => void
@@ -30,6 +35,7 @@ interface ReaderContextMenuLike {
 }
 
 export function useReaderContent(book: Book | null, source: BookSource | null, _initialChapters?: Chapter[]) {
+  const message = useMessage()
   const readerStore = useReaderStore()
   const bookshelfStore = useBookshelfStore()
   const replaceRuleStore = useReplaceRuleStore()
@@ -44,8 +50,14 @@ export function useReaderContent(book: Book | null, source: BookSource | null, _
   const contentRef = ref<HTMLElement | null>(null)
 
   const isSelecting = ref(false)
+  const refreshingChapter = ref(false)
   let selectionTimeout: ReturnType<typeof setTimeout> | null = null
   let textSelectPending = false
+
+  // 滚动位置恢复期间，用 ResizeObserver 校正异步内容（如封面/插图）造成的高度变化。
+  let cancelScrollRestore: (() => void) | null = null
+  // 章节内容与位置就绪前，不把中间态的 scrollPercent 写进阅读进度。
+  let progressTrackingReady = false
 
   const rawTextContent = ref('')
 
@@ -76,6 +88,15 @@ export function useReaderContent(book: Book | null, source: BookSource | null, _
   })
 
   const effectiveLineHeight = computed(() => lineHeight.value)
+
+  // 段落间距以 em 存储，随字号缩放；本书独立配置优先于全局。
+  const effectiveParagraphSpacing = computed(() => {
+    const cfg = currentBook.value?.readConfig
+    if (cfg && cfg._useGlobal === false && typeof cfg._paragraphSpacing === 'number') {
+      return cfg._paragraphSpacing
+    }
+    return readerStore.paragraphSpacing
+  })
 
   const effectiveReSegment = computed(() => {
     const cfg = currentBook.value?.readConfig
@@ -180,6 +201,102 @@ export function useReaderContent(book: Book | null, source: BookSource | null, _
     scrollPercent.value = Math.min(1, Math.max(0, el.scrollTop / max))
   }
 
+  function stopScrollRestore(): void {
+    const cancel = cancelScrollRestore
+    cancelScrollRestore = null
+    if (cancel) cancel()
+  }
+
+  function applyScrollPercent(el: HTMLElement, percent: number): boolean {
+    const max = el.scrollHeight - el.clientHeight
+    if (max <= 0) return false
+    el.scrollTop = percent * max
+    scrollPercent.value = clampScrollPercent(el.scrollTop / max)
+    return true
+  }
+
+  /**
+   * 把正文滚动容器定位到 percent（0~1）。
+   *
+   * 首次下一帧内容可能还没排版完（max <= 0），这里逐帧等待；
+   * 恢复期间图片加载会撑高内容，用 ResizeObserver 持续校正。
+   * 用户一旦滚动、按键或点击就停止校正，避免和用户抢滚动条。
+   */
+  async function restoreScrollPosition(percent: number): Promise<void> {
+    stopScrollRestore()
+
+    const target = clampScrollPercent(percent)
+    let el = contentRef.value
+    // 正常情况下 nextTick 后引用已经就绪；这里再兜底等两帧。
+    for (let frame = 0; !el && frame < 2; frame++) {
+      await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()))
+      el = contentRef.value
+    }
+    if (!el) {
+      scrollPercent.value = 0
+      return
+    }
+    if (target < MIN_RESTORE_PERCENT) {
+      el.scrollTop = 0
+      scrollPercent.value = 0
+      return
+    }
+
+    scrollPercent.value = target
+
+    let stopped = false
+    let timeoutId: ReturnType<typeof setTimeout> | null = null
+    let observer: ResizeObserver | null = null
+
+    const cleanup = (): void => {
+      if (stopped) return
+      stopped = true
+      if (timeoutId) { clearTimeout(timeoutId); timeoutId = null }
+      window.removeEventListener('wheel', onUserIntent, true)
+      window.removeEventListener('touchstart', onUserIntent, true)
+      window.removeEventListener('keydown', onUserIntent, true)
+      window.removeEventListener('pointerdown', onUserIntent, true)
+      observer?.disconnect()
+      observer = null
+      if (cancelScrollRestore === cleanup) cancelScrollRestore = null
+    }
+
+    function onUserIntent(): void { cleanup() }
+
+    const sync = (): void => {
+      if (stopped) return
+      applyScrollPercent(el, target)
+    }
+
+    cancelScrollRestore = cleanup
+
+    if (typeof ResizeObserver !== 'undefined') {
+      const contentEl = el.firstElementChild
+      if (contentEl) {
+        observer = new ResizeObserver(sync)
+        observer.observe(contentEl)
+      }
+    }
+
+    // pointerdown 挂在 window 上，右侧自定义滚动条的拖动也能停止恢复。
+    window.addEventListener('wheel', onUserIntent, { capture: true, passive: true })
+    window.addEventListener('touchstart', onUserIntent, { capture: true, passive: true })
+    window.addEventListener('keydown', onUserIntent, true)
+    window.addEventListener('pointerdown', onUserIntent, true)
+
+    // 等最多两帧让正文完成排版。若内容暂时不足一屏（max <= 0），
+    // 不在这里阻塞，后续图片撑高内容时由 ResizeObserver 再定位。
+    for (let frame = 0; frame < 2 && !stopped; frame++) {
+      await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()))
+      if (applyScrollPercent(el, target)) break
+    }
+
+    if (!stopped) {
+      applyScrollPercent(el, target)
+      timeoutId = setTimeout(cleanup, RESTORE_TIMEOUT_MS)
+    }
+  }
+
   function handleTextSelect(): void {
     if (textSelectPending) return
     const sel = window.getSelection()
@@ -230,8 +347,14 @@ export function useReaderContent(book: Book | null, source: BookSource | null, _
     clearSelectionState()
   }
 
-  async function loadChapter(forceRefresh = false): Promise<void> {
+  /**
+   * 加载当前章节正文。
+   * @param forceRefresh 是否忽略缓存重新抓取
+   * @param restorePercent 章节内需要恢复的位置（0~1），默认从章节开头显示
+   */
+  async function loadChapter(forceRefresh = false, restorePercent = 0): Promise<void> {
     if (!book || !source) return
+    progressTrackingReady = false
     await loadContent(book, source, purifyEnabled.value, effectiveReSegment.value, currentBook.value?.name || '', replaceRuleStore.rules, forceRefresh)
     rawTextContent.value = content.value || ''
     await reprocessCurrentContent()
@@ -241,9 +364,30 @@ export function useReaderContent(book: Book | null, source: BookSource | null, _
       startPreload(book, source, purifyEnabled.value, effectiveReSegment.value, currentBook.value?.name || '', replaceRuleStore.rules)
     }
     await nextTick()
-    const el = contentRef.value
-    if (el) el.scrollTop = 0
-    scrollPercent.value = 0
+    await restoreScrollPosition(restorePercent)
+    progressTrackingReady = true
+  }
+
+  /**
+   * 重新抓取当前章节：清缓存 + 重新走网络，用于正文残缺、
+   * 加载失败或站点内容更新后手动刷新。
+   */
+  async function refreshChapter(): Promise<void> {
+    if (!book || !source) return
+    if (loadingContent.value || refreshingChapter.value) return
+    if (!currentChapter.value) return
+
+    refreshingChapter.value = true
+    try {
+      await loadChapter(true)
+      if (content.value && !content.value.includes('加载章节失败')) {
+        message.success('本章已刷新')
+      }
+    } catch {
+      message.error('刷新失败，请稍后重试')
+    } finally {
+      refreshingChapter.value = false
+    }
   }
 
   async function prevChapter(): Promise<void> {
@@ -267,7 +411,12 @@ export function useReaderContent(book: Book | null, source: BookSource | null, _
   }
 
   async function handleClose(): Promise<void> {
-    await saveProgress(currentChapter.value?.id ?? 0, scrollPercent.value, currentChapter.value?.title || '')
+    // 章节还没加载/定位完成就关闭时，不要用临时的 0 覆盖已有进度。
+    const canSave = progressTrackingReady
+    stopScrollRestore()
+    if (canSave) {
+      await saveProgress(currentChapter.value?.id ?? 0, scrollPercent.value, currentChapter.value?.title || '')
+    }
     dispose()
     clearSelectionState()
     readerCtxRef.value?.close()
@@ -279,6 +428,15 @@ export function useReaderContent(book: Book | null, source: BookSource | null, _
     if (e.key === 'ArrowRight') { e.preventDefault(); nextChapter() }
     if (e.key === 'Escape') { e.preventDefault(); handleClose() }
   }
+
+  // 滚动过程中也持续落盘（useReader 内 800ms debounce）。
+  // 这样即使用户直接关闭窗口、没有触发 handleClose，也能恢复到最近位置。
+  watch(scrollPercent, (percent) => {
+    if (!progressTrackingReady || loadingContent.value) return
+    const ch = currentChapter.value
+    if (!ch) return
+    saveProgress(ch.id, percent, ch.title || '')
+  })
 
   watch(
     () => readerStore.chineseConverterType,
@@ -298,12 +456,18 @@ export function useReaderContent(book: Book | null, source: BookSource | null, _
     }
   )
 
+  onUnmounted(() => {
+    stopScrollRestore()
+    if (selectionTimeout) { clearTimeout(selectionTimeout); selectionTimeout = null }
+  })
+
   return {
     content, loadingContent, chapterIndex, chapters, isComic, comicImages, scrollPercent, currentChapter,
     dictVisible, dictRules, dictActiveTab, dictLoading, dictContents, showControls,
-    effectiveTheme, effectiveFontSize, effectiveLineHeight, sanitizedContent,
+    effectiveTheme, effectiveFontSize, effectiveLineHeight, effectiveParagraphSpacing, sanitizedContent,
     tocPopupRef, settingsRef, readerCtxRef, contentRef,
     loadChaptersForBook, loadChapter, startPreload,
+    refreshChapter, refreshingChapter,
     prevChapter, nextChapter, retryComicImage, handleClose, handleKeydown,
     openToc, openSettings, onTocSelect, handleContentClick, handleScroll, handleTextSelect,
     copySelectionFromCtx, openDictFromCtx, switchDictTab,

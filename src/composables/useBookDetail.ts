@@ -191,7 +191,12 @@ export function useBookDetail(book: Book | null, source: BookSource | null) {
     currentChapterId.value = ch.id
     bookshelfStore.closeDetail()
     bookshelfStore.openReader(
-      { ...book, _forceChapterIndex: chapters.value.findIndex((c) => c.id === ch.id) },
+      {
+        ...book,
+        _forceChapterIndex: chapters.value.findIndex((c) => c.id === ch.id),
+        // 用户明确点选章节：从头开始读，不恢复该书上次的滚动位置。
+        _restoreReadingPosition: false,
+      },
       source,
       chapters.value
     )
@@ -203,7 +208,11 @@ export function useBookDetail(book: Book | null, source: BookSource | null) {
     if (hasReadingProgress.value && lastChapterId.value !== null && chapters.value.length > 0) {
       const idx = chapters.value.findIndex((c) => c.id === lastChapterId.value)
       if (idx !== -1) {
-        bookshelfStore.openReader({ ...book, _forceChapterIndex: idx }, source, chapters.value)
+        bookshelfStore.openReader(
+          { ...book, _forceChapterIndex: idx, _restoreReadingPosition: true },
+          source,
+          chapters.value
+        )
         return
       }
     }
